@@ -40,14 +40,14 @@
 
 ## Change detection
 
-- [ ] Реализовать `Scanner` с рекурсивным обходом
-- [ ] Игнорировать `.git/`, `.gradle/`, `build/`, `target/`, `temp/`, `tmp/`, `ConfigDumpInfo.xml`, `.yaxunit/`
-- [ ] Реализовать отбор кандидатов по `lastModified`
-- [ ] Реализовать hashing содержимого для кандидатов
-- [ ] Реализовать JSON storage в `workPath/hash-storages/*.json`
-- [ ] Реализовать fallback на "все изменено" при ошибке сканирования
-- [ ] Реализовать группировку изменений по `source-set`
-- [ ] Реализовать `SourceSetsService`: выдавать `SourceSetContext` для EDT и Designer, прикреплять отдельное hash storage к каждому логическому источнику; в EDT-режиме — два независимых контекста (исходный EDT и временный Designer в `workPath`)
+- [x] Реализовать `Scanner` с рекурсивным обходом
+- [x] Игнорировать `.git/`, `.gradle/`, `build/`, `target/`, `temp/`, `tmp/`, `ConfigDumpInfo.xml`, `.yaxunit/`
+- [x] Реализовать отбор кандидатов по `lastModified`
+- [x] Реализовать hashing содержимого для кандидатов
+- [x] Реализовать `redb` storage в `workPath/hash-storages/*.redb` (tables: `FILES_MTIME`, `FILES_HASH`, `META`)
+- [x] Реализовать fallback на "все изменено" при recoverable проблемах хранения/сканирования
+- [x] Реализовать группировку изменений по `source-set`
+- [x] Реализовать `SourceSetsService`: выдавать `SourceSetContext` для EDT и Designer, прикреплять отдельное hash storage к каждому логическому источнику; в EDT-режиме — два независимых контекста (исходный EDT и временный Designer в `workPath`)
 
 ## Волна 1: Designer MVP
 

@@ -8,7 +8,7 @@ pub struct SourceSetContext {
     pub name: String,
     /// Absolute root directory of the sources.
     pub path: PathBuf,
-    /// Key used to name the JSON hash-storage file (`workPath/hash-storages/<key>.json`).
+    /// Key used to name the redb hash-storage file (`workPath/hash-storages/<key>.redb`).
     pub storage_key: String,
 }
 
@@ -21,10 +21,10 @@ impl SourceSetContext {
         }
     }
 
-    /// Absolute path to the JSON hash-storage file for this context.
+    /// Absolute path to the redb hash-storage file for this context.
     pub fn storage_path(&self, work_path: &std::path::Path) -> PathBuf {
         work_path
             .join("hash-storages")
-            .join(format!("{}.json", self.storage_key))
+            .join(format!("{}.redb", self.storage_key))
     }
 }

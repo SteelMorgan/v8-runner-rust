@@ -16,6 +16,7 @@
 
 # IDE and local tooling
 .claude/
+.codex/
 .idea/
 .mcp.json
 .tmp/

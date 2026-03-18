@@ -300,12 +300,12 @@ METR (`mcp-onec-test-runner`) это MCP-сервер, который дает A
 
 Путь хранения:
 
-- `${java.io.tmpdir}/mcp-yaxunit-runner/<app.id или hash(basePath)>/hash-storages/*.json`
+- `${java.io.tmpdir}/mcp-yaxunit-runner/<app.id или hash(basePath)>/hash-storages/*.redb`
 
 Важно:
 
-- в коде хранилище фактически JSON-based;
-- старые документы все еще могут называть это MapDB.
+- в коде хранилище фактически `redb`-based;
+- старые документы все еще могут называть это MapDB/JSON.
 
 ### 5.3. Для EDT есть рабочая копия Designer-исходников
 
@@ -369,7 +369,7 @@ METR (`mcp-onec-test-runner`) это MCP-сервер, который дает A
 
 - нет `list_modules`, `get_configuration`, `check_platform`;
 - нет отдельной конфигурационной опции `interactive-mode`, хотя она описана в docs;
-- хранилище изменений уже не MapDB, а JSON;
+- хранилище изменений уже не MapDB/JSON, а `redb`;
 - `docker-compose.yml` описывает функциональность, которой в приложении сейчас нет.
 
 Для переписывания источником истины нужно считать `src/main/kotlin`, а не старые документы.

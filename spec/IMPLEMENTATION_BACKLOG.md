@@ -289,7 +289,7 @@ Definition of done:
 
 1. Реализовать `Scanner` с игнорированием служебных путей.
 2. Реализовать двухфазный алгоритм `mtime -> hash`.
-3. Реализовать JSON storage для hashes и timestamps.
+3. Реализовать `redb` storage для hashes/timestamps и метаданных watermark/generation.
 4. Реализовать группировку изменений по `source-set`.
 5. Реализовать safe fallback: при ошибке сканирования считать все измененным.
 6. Реализовать `SourceSetsService`: выдавать `SourceSetContext` для EDT и Designer, прикреплять отдельное hash storage к каждому логическому источнику. В режиме `DESIGNER` — один контекст; в режиме `EDT` — два независимых контекста (исходный EDT source-set и временный Designer source-set в `workPath`).
@@ -304,7 +304,7 @@ Definition of done:
 
 Definition of done:
 
-- state хранится в `workPath/hash-storages/*.json`, изолированно по имени логического source-set;
+- state хранится в `workPath/hash-storages/*.redb`, изолированно по имени логического source-set;
 - после успешного build state обновляется;
 - если изменений нет, build pipeline может быть пропущен;
 - `SourceSetsService` корректно разделяет EDT и Designer контексты в EDT-режиме.

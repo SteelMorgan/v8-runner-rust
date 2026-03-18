@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::change_detection::analyzer::{self, ContextAnalysis};
 use crate::config::model::{AppConfig, SourceFormat};
 use crate::domain::source_set::SourceSetContext;
 
@@ -72,5 +73,10 @@ impl<'a> SourceSetsService<'a> {
     /// Absolute path to the hash-storages directory.
     pub fn storage_dir(&self) -> PathBuf {
         self.config.work_path.join("hash-storages")
+    }
+
+    /// Analyze all provided contexts and return context-tagged outcomes.
+    pub fn analyze_contexts(&self, contexts: &[SourceSetContext]) -> Vec<ContextAnalysis> {
+        analyzer::analyze_contexts(contexts, &self.config.work_path)
     }
 }

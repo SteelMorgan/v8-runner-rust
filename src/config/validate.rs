@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 use thiserror::Error;
 
@@ -18,6 +19,15 @@ pub enum ConfigValidationError {
     #[error("source-set entry '{name}' path does not exist: {path}")]
     SourceSetPathInvalid { name: String, path: String },
 
+    #[error("source-set name must be unique, duplicate: {0}")]
+    DuplicateSourceSetName(String),
+
+    #[error("source-set name contains unsafe path or filename characters: {0}")]
+    InvalidSourceSetName(String),
+
+    #[error("source-set resolved path must be unique, duplicate: {0}")]
+    DuplicateSourceSetPath(String),
+
     #[error("connection string is empty")]
     EmptyConnection,
 
@@ -31,6 +41,7 @@ pub enum ConfigValidationError {
     InvalidPlatformVersion(String),
 }
 
+/// Validate high-level application configuration consistency and filesystem references.
 pub fn validate(config: &AppConfig) -> Result<(), ConfigValidationError> {
     validate_base_path(&config.base_path)?;
     validate_work_path(&config.work_path)?;
@@ -68,7 +79,17 @@ fn validate_source_sets(config: &AppConfig) -> Result<(), ConfigValidationError>
         return Err(ConfigValidationError::NoConfigurationSourceSet);
     }
 
+    let mut names = HashSet::<String>::new();
+    let mut resolved_paths = HashSet::<String>::new();
     for ss in &config.source_sets {
+        validate_source_set_name(&ss.name)?;
+
+        if !names.insert(ss.name.clone()) {
+            return Err(ConfigValidationError::DuplicateSourceSetName(
+                ss.name.clone(),
+            ));
+        }
+
         let full_path = if ss.path.is_absolute() {
             ss.path.clone()
         } else {
@@ -81,6 +102,40 @@ fn validate_source_sets(config: &AppConfig) -> Result<(), ConfigValidationError>
                 path: full_path.display().to_string(),
             });
         }
+
+        let normalized = std::fs::canonicalize(&full_path).unwrap_or(full_path.clone());
+        let normalized_key = normalized.display().to_string();
+        if !resolved_paths.insert(normalized_key.clone()) {
+            return Err(ConfigValidationError::DuplicateSourceSetPath(
+                normalized_key,
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_source_set_name(name: &str) -> Result<(), ConfigValidationError> {
+    if name.is_empty() {
+        return Err(ConfigValidationError::InvalidSourceSetName(name.to_owned()));
+    }
+
+    let mut components = Path::new(name).components();
+    let is_single_normal_component =
+        matches!(components.next(), Some(std::path::Component::Normal(_)))
+            && components.next().is_none();
+
+    if !is_single_normal_component {
+        return Err(ConfigValidationError::InvalidSourceSetName(name.to_owned()));
+    }
+
+    if name.chars().any(|ch| {
+        matches!(
+            ch,
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '\0'
+        )
+    }) {
+        return Err(ConfigValidationError::InvalidSourceSetName(name.to_owned()));
     }
 
     Ok(())
@@ -157,5 +212,94 @@ mod tests {
             err,
             ConfigValidationError::InvalidPlatformVersion(_)
         ));
+    }
+
+    #[test]
+    fn rejects_source_set_name_with_parent_traversal() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let source_dir = base.path().join("src");
+        std::fs::create_dir_all(&source_dir).expect("source dir");
+
+        let config = AppConfig {
+            base_path: base.path().to_path_buf(),
+            work_path: work.path().to_path_buf(),
+            format: SourceFormat::Designer,
+            builder: BuilderBackend::Designer,
+            connection: "File=/tmp/ib".to_owned(),
+            source_sets: vec![SourceSetConfig {
+                name: "../outside".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: source_dir
+                    .strip_prefix(base.path())
+                    .expect("relative")
+                    .to_path_buf(),
+            }],
+            tools: ToolsConfig::default(),
+        };
+
+        let err = validate(&config).expect_err("expected invalid source-set name");
+        assert!(matches!(
+            err,
+            ConfigValidationError::InvalidSourceSetName(name) if name == "../outside"
+        ));
+    }
+
+    #[test]
+    fn rejects_source_set_name_with_path_separator() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let source_dir = base.path().join("src");
+        std::fs::create_dir_all(&source_dir).expect("source dir");
+
+        let config = AppConfig {
+            base_path: base.path().to_path_buf(),
+            work_path: work.path().to_path_buf(),
+            format: SourceFormat::Designer,
+            builder: BuilderBackend::Designer,
+            connection: "File=/tmp/ib".to_owned(),
+            source_sets: vec![SourceSetConfig {
+                name: "bad/name".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: source_dir
+                    .strip_prefix(base.path())
+                    .expect("relative")
+                    .to_path_buf(),
+            }],
+            tools: ToolsConfig::default(),
+        };
+
+        let err = validate(&config).expect_err("expected invalid source-set name");
+        assert!(matches!(
+            err,
+            ConfigValidationError::InvalidSourceSetName(name) if name == "bad/name"
+        ));
+    }
+
+    #[test]
+    fn accepts_safe_source_set_name() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let source_dir = base.path().join("src");
+        std::fs::create_dir_all(&source_dir).expect("source dir");
+
+        let config = AppConfig {
+            base_path: base.path().to_path_buf(),
+            work_path: work.path().to_path_buf(),
+            format: SourceFormat::Designer,
+            builder: BuilderBackend::Designer,
+            connection: "File=/tmp/ib".to_owned(),
+            source_sets: vec![SourceSetConfig {
+                name: "main-config_01".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: source_dir
+                    .strip_prefix(base.path())
+                    .expect("relative")
+                    .to_path_buf(),
+            }],
+            tools: ToolsConfig::default(),
+        };
+
+        validate(&config).expect("safe source-set name should pass");
     }
 }
