@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::change_detection::analyzer::{self, ContextAnalysis};
 use crate::config::model::{AppConfig, SourceFormat};
@@ -23,6 +23,9 @@ impl<'a> SourceSetsService<'a> {
     /// In `DESIGNER` mode this is simply each source-set resolved against `basePath`.
     /// In `EDT` mode (Wave 2) this returns the generated Designer copies in `workPath`.
     pub fn designer_contexts(&self) -> Vec<SourceSetContext> {
+        let base_path = absolutize_path(&self.config.base_path);
+        let work_path = absolutize_path(&self.config.work_path);
+
         match self.config.format {
             SourceFormat::Designer => self
                 .config
@@ -32,7 +35,7 @@ impl<'a> SourceSetsService<'a> {
                     let path = if ss.path.is_absolute() {
                         ss.path.clone()
                     } else {
-                        self.config.base_path.join(&ss.path)
+                        base_path.join(&ss.path)
                     };
                     SourceSetContext::new(&ss.name, path, format!("designer-{}", ss.name))
                 })
@@ -44,7 +47,7 @@ impl<'a> SourceSetsService<'a> {
                 .iter()
                 .map(|ss| {
                     // Generated Designer copy lives at workPath/<name>/
-                    let path = self.config.work_path.join(&ss.name);
+                    let path = work_path.join(&ss.name);
                     SourceSetContext::new(&ss.name, path, format!("designer-{}", ss.name))
                 })
                 .collect(),
@@ -56,6 +59,7 @@ impl<'a> SourceSetsService<'a> {
         if self.config.format != SourceFormat::Edt {
             return vec![];
         }
+        let base_path = absolutize_path(&self.config.base_path);
         self.config
             .source_sets
             .iter()
@@ -63,7 +67,7 @@ impl<'a> SourceSetsService<'a> {
                 let path = if ss.path.is_absolute() {
                     ss.path.clone()
                 } else {
-                    self.config.base_path.join(&ss.path)
+                    base_path.join(&ss.path)
                 };
                 SourceSetContext::new(&ss.name, path, format!("edt-{}", ss.name))
             })
@@ -78,5 +82,48 @@ impl<'a> SourceSetsService<'a> {
     /// Analyze all provided contexts and return context-tagged outcomes.
     pub fn analyze_contexts(&self, contexts: &[SourceSetContext]) -> Vec<ContextAnalysis> {
         analyzer::analyze_contexts(contexts, &self.config.work_path)
+    }
+}
+
+fn absolutize_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+
+    std::env::current_dir()
+        .expect("failed to resolve current working directory")
+        .join(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SourceSetsService;
+    use crate::config::model::{
+        AppConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose, ToolsConfig,
+    };
+    use std::path::Path;
+
+    #[test]
+    fn designer_contexts_absolutize_relative_base_path() {
+        let config = AppConfig {
+            base_path: std::path::PathBuf::from("."),
+            work_path: std::path::PathBuf::from("target/tmp-work"),
+            format: SourceFormat::Designer,
+            builder: BuilderBackend::Designer,
+            connection: "File=/tmp/ib".to_owned(),
+            source_sets: vec![SourceSetConfig {
+                name: "main".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: std::path::PathBuf::from("src"),
+            }],
+            tools: ToolsConfig::default(),
+        };
+
+        let service = SourceSetsService::new(&config);
+        let contexts = service.designer_contexts();
+
+        assert_eq!(contexts.len(), 1);
+        assert!(contexts[0].path().is_absolute());
+        assert!(contexts[0].path().ends_with(Path::new("src")));
     }
 }
