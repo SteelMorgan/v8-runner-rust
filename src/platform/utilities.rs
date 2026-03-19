@@ -1,6 +1,7 @@
 use crate::config::model::AppConfig;
 use crate::platform::locator::{Locator, PlatformVersion, UtilityLocation, UtilityType};
 use crate::platform::process::{ProcessExecutor, ProcessRunner};
+use tracing::info;
 
 /// Facade over utility discovery and standard executor selection.
 pub struct PlatformUtilities {
@@ -31,7 +32,10 @@ impl PlatformUtilities {
         &mut self,
         utility: UtilityType,
     ) -> Result<UtilityLocation, crate::platform::locator::LocatorError> {
-        self.locator.locate(utility)
+        info!(utility = ?utility, "locating platform utility");
+        let location = self.locator.locate(utility)?;
+        info!(utility = ?utility, path = %location.path.display(), "platform utility resolved");
+        Ok(location)
     }
 
     /// Return the standard runner path for the requested utility.

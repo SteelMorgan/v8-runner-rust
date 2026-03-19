@@ -10,8 +10,7 @@ use uuid::Uuid;
 use crate::cli::args::{BuildArgs, TestArgs, TestScope};
 use crate::config::model::AppConfig;
 use crate::domain::test::{
-    RetainedPaths, TestErrorKind, TestOutputMode, TestReport, TestRunResult, TestStatus,
-    TestTarget,
+    RetainedPaths, TestErrorKind, TestOutputMode, TestReport, TestRunResult, TestStatus, TestTarget,
 };
 use crate::output::json::{Envelope, StepResult};
 use crate::output::presenter::Presenter;
@@ -24,15 +23,12 @@ use crate::platform::process::ProcessError;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::use_cases::build_project;
+use tracing::info;
 
 const TEST_COMMAND: &str = "test";
 const STACK_TRACE_LIMIT: usize = 500;
 
-pub fn execute(
-    config: &AppConfig,
-    args: &TestArgs,
-    presenter: &Presenter,
-) -> Result<(), AppError> {
+pub fn execute(config: &AppConfig, args: &TestArgs, presenter: &Presenter) -> Result<(), AppError> {
     let result = match run_tests(config, args) {
         Ok(result) => result,
         Err((error, result)) => {
@@ -92,8 +88,12 @@ struct RunArtifacts {
     sentinel: PathBuf,
 }
 
-fn run_tests(config: &AppConfig, args: &TestArgs) -> Result<TestRunResult, (AppError, TestRunResult)> {
+fn run_tests(
+    config: &AppConfig,
+    args: &TestArgs,
+) -> Result<TestRunResult, (AppError, TestRunResult)> {
     let started = Instant::now();
+    info!(full = args.full, scope = ?args.scope, "starting test run");
     let mode = if args.full {
         TestOutputMode::Full
     } else {
@@ -104,12 +104,11 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> Result<TestRunResult, (AppE
         TestScope::Module { name } => {
             let trimmed = name.trim();
             if trimmed.is_empty() || trimmed.chars().any(char::is_control) {
-                let error = AppError::Validation("test module requires a non-empty module name".to_owned());
+                let error =
+                    AppError::Validation("test module requires a non-empty module name".to_owned());
                 let result = TestRunResult {
                     ok: false,
-                    target: TestTarget::Module {
-                        name: name.clone(),
-                    },
+                    target: TestTarget::Module { name: name.clone() },
                     mode,
                     error_kind: None,
                     diagnostics: vec![error.to_string()],
@@ -130,6 +129,7 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> Result<TestRunResult, (AppE
     let mut steps = Vec::new();
     let mut warnings = Vec::new();
 
+    info!("running build prerequisite for tests");
     let build_started = Instant::now();
     let build_result = match build_project::run_build(
         config,
@@ -167,10 +167,12 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> Result<TestRunResult, (AppE
         message: Some(build_summary(&build_result)),
     });
 
+    info!("preparing test run artifacts");
     let artifacts = match create_run_artifacts(config) {
         Ok(artifacts) => artifacts,
         Err(error) => {
-            let app_error = AppError::Runtime(format!("failed to prepare test run directory: {error}"));
+            let app_error =
+                AppError::Runtime(format!("failed to prepare test run directory: {error}"));
             let result = TestRunResult {
                 ok: false,
                 target,
@@ -187,6 +189,7 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> Result<TestRunResult, (AppE
         }
     };
 
+    info!(path = %artifacts.config_json.display(), "writing YaXUnit configuration");
     let config_payload = build_yaxunit_config(&target, &artifacts);
     if let Err(error) = write_json_file(&artifacts.config_json, &config_payload) {
         let app_error = AppError::Runtime(format!("failed to write YaXUnit config: {error}"));
@@ -206,6 +209,7 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> Result<TestRunResult, (AppE
         return Err((app_error, result));
     }
 
+    info!(path = %artifacts.run_dir.display(), "launching enterprise test run");
     let run_started = Instant::now();
     let enterprise_runner = crate::platform::process::ProcessExecutor;
     let enterprise = match build_enterprise_dsl(config, &artifacts, &enterprise_runner) {
@@ -263,6 +267,7 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> Result<TestRunResult, (AppE
         }
     };
 
+    info!(path = %artifacts.junit_xml.display(), "parsing JUnit report");
     let parse_junit_started = Instant::now();
     let mut report = match parse_junit_report(&artifacts) {
         Ok(report) => {
@@ -299,6 +304,7 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> Result<TestRunResult, (AppE
         }
     };
 
+    info!(path = %artifacts.yaxunit_log.display(), "parsing YaXUnit log");
     let parse_log_started = Instant::now();
     match yaxunit_log::parse_file(&artifacts.yaxunit_log) {
         Ok(errors) => {
@@ -338,6 +344,10 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> Result<TestRunResult, (AppE
     let diagnostics = collect_diagnostics(&platform_result, Vec::new(), config);
 
     if process_failed || has_test_failures {
+        info!(
+            process_failed,
+            has_test_failures, "retaining failed test artifacts"
+        );
         let retained_paths = retain_run_artifacts(config, &artifacts).ok();
         let result = TestRunResult {
             ok: false,
@@ -368,6 +378,7 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> Result<TestRunResult, (AppE
         ));
     }
 
+    info!(path = %artifacts.run_dir.display(), "cleaning successful test run directory");
     cleanup_run_dir(&artifacts);
     Ok(TestRunResult {
         ok: true,
@@ -414,11 +425,7 @@ fn render_text_result(result: &TestRunResult, presenter: &Presenter) {
         for suite in &report.suites {
             presenter.print_info(&format!("Suite: {}", suite.name));
             for case in &suite.cases {
-                presenter.print_info(&format!(
-                    "  {} {}",
-                    status_label(&case.status),
-                    case.name
-                ));
+                presenter.print_info(&format!("  {} {}", status_label(&case.status), case.name));
                 if let Some(message) = &case.failure_message {
                     presenter.print_info(&format!("    {message}"));
                 }
@@ -523,6 +530,7 @@ fn create_run_artifacts(config: &AppConfig) -> std::io::Result<RunArtifacts> {
         .join("yaxunit")
         .join("runs")
         .join(&run_id);
+    info!(path = %run_dir.display(), "creating test artifact directory");
     fs::create_dir_all(&run_dir)?;
     set_dir_permissions(&run_dir)?;
 
@@ -557,7 +565,10 @@ fn parse_junit_report(artifacts: &RunArtifacts) -> Result<TestReport, (TestError
         .map(|meta| meta.len() == 0)
         .unwrap_or(false)
     {
-        return Err((TestErrorKind::JunitEmpty, "JUnit report is empty".to_owned()));
+        return Err((
+            TestErrorKind::JunitEmpty,
+            "JUnit report is empty".to_owned(),
+        ));
     }
     let file = fs::File::open(&artifacts.junit_xml)
         .map_err(|error| (TestErrorKind::JunitNotProduced, error.to_string()))?;
@@ -635,7 +646,10 @@ fn enterprise_error_kind(error: EnterpriseError) -> (TestErrorKind, AppError) {
     }
 }
 
-fn retain_run_artifacts(config: &AppConfig, artifacts: &RunArtifacts) -> std::io::Result<RetainedPaths> {
+fn retain_run_artifacts(
+    config: &AppConfig,
+    artifacts: &RunArtifacts,
+) -> std::io::Result<RetainedPaths> {
     if let Err(error) = sanitize_file_in_place(&artifacts.config_json, config)
         .and_then(|()| sanitize_file_in_place(&artifacts.junit_xml, config))
         .and_then(|()| sanitize_file_in_place(&artifacts.yaxunit_log, config))
@@ -709,7 +723,10 @@ fn redact_unix_paths(text: &str, work_path: &Path) -> String {
     Regex::new(r#"(/[^\s;,:"']+)"#)
         .expect("regex")
         .replace_all(text, |captures: &regex::Captures<'_>| {
-            let candidate = captures.get(1).map(|value| value.as_str()).unwrap_or_default();
+            let candidate = captures
+                .get(1)
+                .map(|value| value.as_str())
+                .unwrap_or_default();
             if candidate.starts_with("/tmp/ib") {
                 candidate.to_owned()
             } else if candidate.starts_with(work_path.as_ref()) {

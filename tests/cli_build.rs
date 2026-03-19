@@ -49,7 +49,7 @@ fn write_config(path: &Path, base_path: &Path, work_path: &Path, platform_path: 
     fs::write(path, config).expect("config");
 }
 
-fn setup_project() -> (tempfile::TempDir, PathBuf, PathBuf) {
+fn setup_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     let dir = tempdir().expect("tempdir");
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
@@ -87,12 +87,12 @@ fn setup_project() -> (tempfile::TempDir, PathBuf, PathBuf) {
     write_build_script(&binary_path, None);
     write_config(&config_path, &base_path, &work_path, &binary_path);
 
-    (dir, config_path, binary_path)
+    (dir, config_path, binary_path, work_path)
 }
 
 #[test]
 fn build_json_failure_returns_step_payload() {
-    let (_dir, config_path, binary_path) = setup_project();
+    let (_dir, config_path, binary_path, _work_path) = setup_project();
     write_build_script(&binary_path, Some("/UpdateDBCfg -Extension ext"));
 
     let output = std::process::Command::cargo_bin("v8-test-runner")
@@ -127,7 +127,7 @@ fn build_json_failure_returns_step_payload() {
 
 #[test]
 fn build_text_failure_does_not_print_success_footer() {
-    let (_dir, config_path, binary_path) = setup_project();
+    let (_dir, config_path, binary_path, _work_path) = setup_project();
     write_build_script(&binary_path, Some("/UpdateDBCfg -Extension ext"));
 
     let output = std::process::Command::cargo_bin("v8-test-runner")
@@ -145,4 +145,46 @@ fn build_text_failure_does_not_print_success_footer() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Build failed"));
     assert!(!stdout.contains("Build completed successfully"));
+}
+
+#[test]
+fn build_text_stdout_includes_action_logs() {
+    let (_dir, config_path, _binary_path, _work_path) = setup_project();
+
+    let output = std::process::Command::cargo_bin("v8-test-runner")
+        .expect("binary")
+        .args(["--config", &config_path.display().to_string(), "build"])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("starting command"));
+    assert!(stdout.contains("executing build step"));
+    assert!(stdout.contains("running process"));
+}
+
+#[test]
+fn build_json_writes_action_log_file_without_polluting_stdout() {
+    let (_dir, config_path, _binary_path, work_path) = setup_project();
+
+    let output = std::process::Command::cargo_bin("v8-test-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "build",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let _payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+
+    let action_log = work_path.join("logs").join("mcp").join("actions.log");
+    let contents = fs::read_to_string(action_log).expect("action log");
+    assert!(contents.contains("starting command"));
+    assert!(contents.contains("running process"));
 }

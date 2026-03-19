@@ -18,6 +18,7 @@ use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::support::temp::platform_logs_dir;
+use tracing::info;
 
 const SYNTAX_COMMAND: &str = "syntax";
 const SUPPORTED_SYNTAX_ERROR: &str =
@@ -48,11 +49,7 @@ pub fn execute(
     };
 
     if presenter.is_json() {
-        presenter.print_envelope(&Envelope::ok(
-            SYNTAX_COMMAND,
-            result.duration_ms,
-            result,
-        ));
+        presenter.print_envelope(&Envelope::ok(SYNTAX_COMMAND, result.duration_ms, result));
     } else {
         render_text_result(&result, presenter);
     }
@@ -130,6 +127,11 @@ fn run_syntax(
         });
     }
 
+    info!(
+        check = invocation.kind.check_name(),
+        flags = ?invocation.flags,
+        "starting syntax check"
+    );
     let log_dir = match platform_logs_dir(&config.work_path) {
         Ok(dir) => dir,
         Err(error) => {
@@ -154,6 +156,7 @@ fn run_syntax(
     };
 
     let log_path = unique_log_path(&log_dir, invocation.kind.check_name());
+    info!(path = %log_path.display(), "syntax platform log reserved");
 
     let mut utilities = PlatformUtilities::from_config(config);
     let location = match utilities.locate(UtilityType::V8) {
@@ -216,13 +219,15 @@ fn run_syntax(
     let result = build_result(invocation.kind.check_name(), platform_result, started);
     match result.status {
         SyntaxCheckStatus::Clean => Ok(result),
-        SyntaxCheckStatus::IssuesFound | SyntaxCheckStatus::ToolFailed => Err(SyntaxExecutionFailure {
-            error: AppError::Runtime(format!(
-                "syntax check '{}' finished with status {:?} (designer exit code {})",
-                result.check_name, result.status, result.exit_code
-            )),
-            result,
-        }),
+        SyntaxCheckStatus::IssuesFound | SyntaxCheckStatus::ToolFailed => {
+            Err(SyntaxExecutionFailure {
+                error: AppError::Runtime(format!(
+                    "syntax check '{}' finished with status {:?} (designer exit code {})",
+                    result.check_name, result.status, result.exit_code
+                )),
+                result,
+            })
+        }
     }
 }
 
@@ -259,7 +264,11 @@ fn normalize_invocation(
 fn normalize_config_flags(args: &DesignerConfigSyntaxArgs) -> Vec<String> {
     let mut flags = Vec::new();
     push_flag(&mut flags, args.config_log_integrity, "-ConfigLogIntegrity");
-    push_flag(&mut flags, args.incorrect_references, "-IncorrectReferences");
+    push_flag(
+        &mut flags,
+        args.incorrect_references,
+        "-IncorrectReferences",
+    );
     push_flag(&mut flags, args.thin_client, "-ThinClient");
     push_flag(&mut flags, args.web_client, "-WebClient");
     push_flag(&mut flags, args.mobile_client, "-MobileClient");
@@ -292,12 +301,28 @@ fn normalize_config_flags(args: &DesignerConfigSyntaxArgs) -> Vec<String> {
         args.thick_client_server_ordinary_application,
         "-ThickClientServerOrdinaryApplication",
     );
-    push_flag(&mut flags, args.mobile_client_digi_sign, "-MobileClientDigiSign");
-    push_flag(&mut flags, args.distributive_modules, "-DistributiveModules");
-    push_flag(&mut flags, args.unreference_procedures, "-UnreferenceProcedures");
+    push_flag(
+        &mut flags,
+        args.mobile_client_digi_sign,
+        "-MobileClientDigiSign",
+    );
+    push_flag(
+        &mut flags,
+        args.distributive_modules,
+        "-DistributiveModules",
+    );
+    push_flag(
+        &mut flags,
+        args.unreference_procedures,
+        "-UnreferenceProcedures",
+    );
     push_flag(&mut flags, args.handlers_existence, "-HandlersExistence");
     push_flag(&mut flags, args.empty_handlers, "-EmptyHandlers");
-    push_flag(&mut flags, args.extended_modules_check, "-ExtendedModulesCheck");
+    push_flag(
+        &mut flags,
+        args.extended_modules_check,
+        "-ExtendedModulesCheck",
+    );
     push_flag(
         &mut flags,
         args.check_use_synchronous_calls,
@@ -327,7 +352,11 @@ fn normalize_modules_flags(args: &DesignerModulesSyntaxArgs) -> Vec<String> {
     push_flag(&mut flags, args.mobile_app_client, "-MobileAppClient");
     push_flag(&mut flags, args.mobile_app_server, "-MobileAppServer");
     push_flag(&mut flags, args.mobile_client, "-MobileClient");
-    push_flag(&mut flags, args.extended_modules_check, "-ExtendedModulesCheck");
+    push_flag(
+        &mut flags,
+        args.extended_modules_check,
+        "-ExtendedModulesCheck",
+    );
     push_extension_scope(&mut flags, args.extension.as_deref(), args.all_extensions);
     flags
 }
@@ -627,12 +656,15 @@ mod tests {
         make_executable(path);
     }
 
-    fn write_designer_script(path: &Path, log_body: Option<&str>, stderr: Option<&str>, exit_code: i32) {
-        let log_branch = log_body.map(|body| {
-            format!(
-                "if [ -n \"$out\" ]; then cat <<'LOG' > \"$out\"\n{body}\nLOG\nfi"
-            )
-        }).unwrap_or_default();
+    fn write_designer_script(
+        path: &Path,
+        log_body: Option<&str>,
+        stderr: Option<&str>,
+        exit_code: i32,
+    ) {
+        let log_branch = log_body
+            .map(|body| format!("if [ -n \"$out\" ]; then cat <<'LOG' > \"$out\"\n{body}\nLOG\nfi"))
+            .unwrap_or_default();
         let stderr_branch = stderr
             .map(|stderr| format!("printf '%s\\n' '{}' >&2", stderr.replace('\'', "'\\''")))
             .unwrap_or_default();
@@ -707,7 +739,10 @@ mod tests {
 
         let error = run_syntax(&config, &args).expect_err("expected failure");
 
-        assert!(error.error.to_string().contains("requires at least one mode"));
+        assert!(error
+            .error
+            .to_string()
+            .contains("requires at least one mode"));
         assert!(error.result.issues.is_empty());
     }
 

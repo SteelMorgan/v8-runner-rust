@@ -25,6 +25,7 @@ use crate::support::fs::{
     remove_path_if_exists, replace_dir_atomically, write_temp_dir_metadata, TempDirKind,
 };
 use crate::support::temp::platform_logs_dir;
+use tracing::info;
 
 const DUMP_COMMAND: &str = "dump";
 const SUPPORTED_DUMP_ERROR: &str =
@@ -81,6 +82,12 @@ struct ResolvedDumpTarget {
 fn run_dump(config: &AppConfig, args: &DumpArgs) -> Result<DumpResult, DumpExecutionFailure> {
     let started = Instant::now();
     let mode = parse_mode(&args.mode);
+    info!(
+        mode = ?mode,
+        source_set = args.source_set.as_deref().unwrap_or("<auto>"),
+        extension = args.extension.as_deref().unwrap_or("<none>"),
+        "starting dump"
+    );
 
     if let Some(error) = validate_supported_matrix(config) {
         return Err(DumpExecutionFailure {
@@ -268,6 +275,11 @@ fn run_incremental_dump(
     binary: &Path,
     runner: &dyn ProcessRunner,
 ) -> Result<(PlatformCommandResult, Option<String>), AppError> {
+    info!(
+        source_set = resolved.source_set_name.as_str(),
+        target = %resolved.target_path.display(),
+        "running incremental dump"
+    );
     ensure_dir(&resolved.target_path)
         .map_err(|error| AppError::Runtime(format!("failed to create target dir: {error}")))?;
 
@@ -290,6 +302,11 @@ fn run_full_dump(
     binary: &Path,
     runner: &dyn ProcessRunner,
 ) -> Result<(PlatformCommandResult, Option<String>), AppError> {
+    info!(
+        source_set = resolved.source_set_name.as_str(),
+        target = %resolved.target_path.display(),
+        "running full dump via staging directory"
+    );
     let target_parent = resolved.target_path.parent().ok_or_else(|| {
         AppError::Runtime(format!(
             "target path has no parent: {}",
@@ -310,6 +327,7 @@ fn run_full_dump(
     }
     std::fs::create_dir(&staging_dir)
         .map_err(|error| AppError::Runtime(format!("failed to create staging dir: {error}")))?;
+    info!(path = %staging_dir.display(), "created dump staging directory");
     write_temp_dir_metadata(
         &staging_dir,
         TempDirKind::Stage,
@@ -339,6 +357,7 @@ fn run_full_dump(
         &resolved.target_identity,
     )
     .map_err(|error| AppError::Runtime(format!("failed to publish staged dump: {error}")))?;
+    info!(target = %resolved.target_path.display(), "published staged dump");
 
     Ok((dump_result, publish_outcome.cleanup_warning))
 }

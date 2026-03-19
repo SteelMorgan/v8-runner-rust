@@ -1,9 +1,10 @@
-use std::path::PathBuf;
 use std::io::Read;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use thiserror::Error;
+use tracing::{debug, info, warn};
 
 /// Request for launching an external utility.
 #[derive(Debug, Clone)]
@@ -108,6 +109,7 @@ impl ProcessRunner for ProcessExecutor {
 
     fn spawn(&self, request: &ProcessRequest) -> Result<SpawnResult, ProcessError> {
         let rendered_command = render_command(request);
+        info!(command = rendered_command.as_str(), "spawning process");
         let mut cmd = Command::new(&request.program);
         cmd.args(&request.args);
         cmd.stdin(Stdio::null());
@@ -134,6 +136,11 @@ impl ProcessRunner for ProcessExecutor {
                         source,
                     })?
             {
+                warn!(
+                    command = rendered_command.as_str(),
+                    exit_code = status.code().unwrap_or(-1),
+                    "process exited during startup probe"
+                );
                 return Err(ProcessError::ExitedEarly {
                     cmd: rendered_command,
                     exit_code: status.code().unwrap_or(-1),
@@ -141,6 +148,7 @@ impl ProcessRunner for ProcessExecutor {
             }
         }
 
+        info!(command = rendered_command.as_str(), pid, "process started");
         Ok(SpawnResult {
             pid,
             binary: request.program.clone(),
@@ -176,11 +184,23 @@ impl ProcessExecutor {
         }
 
         let rendered_command = render_command(request);
+        info!(
+            command = rendered_command.as_str(),
+            timeout_ms = timeout.map(|value| value.as_millis() as u64),
+            "running process"
+        );
         let child = cmd.spawn().map_err(|source| ProcessError::SpawnFailed {
             cmd: rendered_command.clone(),
             source,
         })?;
         let output = wait_for_output(child, &rendered_command, timeout)?;
+        debug!(
+            command = rendered_command.as_str(),
+            exit_code = output.status.code().unwrap_or(-1),
+            stdout_bytes = output.stdout.len(),
+            stderr_bytes = output.stderr.len(),
+            "process finished"
+        );
 
         if let Some(path) = &request.stdout_log_path {
             std::fs::write(path, &output.stdout).map_err(|source| ProcessError::StdoutLogIo {
@@ -220,14 +240,20 @@ fn wait_for_output(
             });
     }
 
-    let mut stdout = child.stdout.take().ok_or_else(|| ProcessError::StartupCheckFailed {
-        cmd: rendered_command.to_owned(),
-        source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stdout pipe missing"),
-    })?;
-    let mut stderr = child.stderr.take().ok_or_else(|| ProcessError::StartupCheckFailed {
-        cmd: rendered_command.to_owned(),
-        source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stderr pipe missing"),
-    })?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| ProcessError::StartupCheckFailed {
+            cmd: rendered_command.to_owned(),
+            source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stdout pipe missing"),
+        })?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| ProcessError::StartupCheckFailed {
+            cmd: rendered_command.to_owned(),
+            source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stderr pipe missing"),
+        })?;
     let stdout_reader = std::thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = stdout.read_to_end(&mut buf);
@@ -241,12 +267,13 @@ fn wait_for_output(
 
     let start = std::time::Instant::now();
     loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|source| ProcessError::StartupCheckFailed {
-                cmd: rendered_command.to_owned(),
-                source,
-            })?
+        if let Some(status) =
+            child
+                .try_wait()
+                .map_err(|source| ProcessError::StartupCheckFailed {
+                    cmd: rendered_command.to_owned(),
+                    source,
+                })?
         {
             return Ok(std::process::Output {
                 status,
@@ -261,6 +288,11 @@ fn wait_for_output(
             let _ = child.wait();
             let _ = stdout_reader.join();
             let _ = stderr_reader.join();
+            warn!(
+                command = rendered_command,
+                timeout_ms = limit.as_millis() as u64,
+                "process timed out"
+            );
             return Err(ProcessError::TimedOut {
                 cmd: rendered_command.to_owned(),
                 timeout_ms: limit.as_millis() as u64,

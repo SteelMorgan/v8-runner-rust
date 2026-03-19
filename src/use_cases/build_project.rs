@@ -22,6 +22,7 @@ use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::support::temp::{partial_list_file, platform_logs_dir};
+use tracing::info;
 
 const BUILD_COMMAND: &str = "build";
 const SUPPORTED_BUILD_ERROR: &str =
@@ -86,6 +87,7 @@ pub(crate) fn run_build(
     config: &AppConfig,
     args: &BuildArgs,
 ) -> Result<BuildResult, BuildExecutionFailure> {
+    info!(full_rebuild = args.full_rebuild, "preparing build plan");
     if let Some(error) = validate_supported_matrix(config) {
         return Err(BuildExecutionFailure {
             error,
@@ -197,19 +199,32 @@ pub(crate) fn run_build(
         };
 
         match plan {
-            StepPlan::Skip { message, ok } => steps.push(BuildStep {
-                source_set: source_set.name.clone(),
-                mode: BuildMode::Skipped,
-                ok,
-                message: Some(message),
-                duration_ms: 0,
-            }),
+            StepPlan::Skip { message, ok } => {
+                info!(
+                    source_set = source_set.name.as_str(),
+                    message = message.as_str(),
+                    "skipping build step"
+                );
+                steps.push(BuildStep {
+                    source_set: source_set.name.clone(),
+                    mode: BuildMode::Skipped,
+                    ok,
+                    message: Some(message),
+                    duration_ms: 0,
+                })
+            }
             StepPlan::Execute {
                 mode,
                 message,
                 partial_paths,
                 commit,
             } => {
+                info!(
+                    source_set = source_set.name.as_str(),
+                    mode = ?mode,
+                    message = message.as_str(),
+                    "executing build step"
+                );
                 let binary = match designer_binary.clone() {
                     Some(path) => path,
                     None => {
@@ -328,6 +343,11 @@ fn execute_source_set_step(
     partial_paths: Option<&[PathBuf]>,
     commit: &StepCommit,
 ) -> Result<(), AppError> {
+    info!(
+        source_set = source_set.name.as_str(),
+        partial = partial_paths.is_some(),
+        "loading source-set into designer"
+    );
     let load_result = if let Some(paths) = partial_paths {
         let list_file = partial_list_file(&config.work_path).map_err(|error| {
             AppError::Runtime(format!("failed to create partial list file: {error}"))
@@ -349,6 +369,10 @@ fn execute_source_set_step(
     };
     ensure_platform_success("load", source_set, &load_result)?;
 
+    info!(
+        source_set = source_set.name.as_str(),
+        "updating database configuration after load"
+    );
     let update_result = build_designer_dsl(
         config,
         binary,
@@ -363,10 +387,18 @@ fn execute_source_set_step(
 
     match commit {
         StepCommit::Prepared(prepared) => {
+            info!(
+                source_set = source_set.name.as_str(),
+                "committing prepared change-detection state"
+            );
             analyzer::commit_success(context, &config.work_path, prepared)
                 .map_err(|error| AppError::Runtime(error.to_string()))
         }
         StepCommit::RescanFull { recover_storage } => {
+            info!(
+                source_set = source_set.name.as_str(),
+                recover_storage, "rescanning source-set state after full build"
+            );
             commit_full_rescan(context, &config.work_path, *recover_storage)
         }
     }
