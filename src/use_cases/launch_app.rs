@@ -5,7 +5,6 @@ use crate::config::model::AppConfig;
 use crate::domain::launch::{LaunchMode, LaunchResult};
 use crate::output::json::Envelope;
 use crate::output::presenter::Presenter;
-use crate::platform::connection::V8Connection;
 use crate::platform::locator::UtilityType;
 use crate::platform::process::ProcessRequest;
 use crate::platform::utilities::PlatformUtilities;
@@ -36,7 +35,7 @@ pub fn execute(
         .map_err(|e| AppError::Platform(e.to_string()))?;
 
     let mut process_args = vec![command_mode.to_owned()];
-    process_args.extend(V8Connection::from_connection_string(&config.connection).args());
+    process_args.extend(config.v8_connection().args());
 
     let spawned = utilities
         .runner_for(utility)
