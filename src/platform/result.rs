@@ -16,4 +16,6 @@ pub struct PlatformCommandResult {
     pub platform_log_path: Option<PathBuf>,
     /// Contents of the `/Out` log, if the command requested and successfully read it.
     pub platform_log: Option<String>,
+    /// Error captured while reading the `/Out` log, without failing the process result itself.
+    pub platform_log_read_error: Option<String>,
 }

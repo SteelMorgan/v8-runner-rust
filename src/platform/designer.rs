@@ -13,12 +13,6 @@ pub enum DesignerError {
 
     #[error("failed to execute designer process: {0}")]
     Spawn(ProcessError),
-
-    #[error("failed to read designer /Out log '{path}': {source}")]
-    LogRead {
-        path: PathBuf,
-        source: std::io::Error,
-    },
 }
 
 /// Low-level DSL for invoking `1cv8` in `DESIGNER` mode.
@@ -158,21 +152,28 @@ impl<'a> DesignerDsl<'a> {
             })
             .map_err(DesignerError::Spawn)?;
 
-        let (platform_log_path, platform_log) = if let Some(path) = &self.log_file {
-            let contents =
-                std::fs::read_to_string(path).map_err(|source| DesignerError::LogRead {
-                    path: path.clone(),
-                    source,
-                })?;
-            (Some(path.clone()), Some(contents))
-        } else {
-            (None, None)
-        };
+        let (platform_log_path, platform_log, platform_log_read_error) =
+            if let Some(path) = &self.log_file {
+                match std::fs::read_to_string(path) {
+                    Ok(contents) => (Some(path.clone()), Some(contents), None),
+                    Err(error) => (
+                        Some(path.clone()),
+                        None,
+                        Some(format!(
+                            "failed to read designer /Out log '{}': {error}",
+                            path.display()
+                        )),
+                    ),
+                }
+            } else {
+                (None, None, None)
+            };
 
         Ok(PlatformCommandResult {
             process,
             platform_log_path,
             platform_log,
+            platform_log_read_error,
         })
     }
 }
@@ -224,6 +225,7 @@ mod tests {
 
         assert!(result.platform_log_path.is_none());
         assert!(result.platform_log.is_none());
+        assert!(result.platform_log_read_error.is_none());
     }
 
     #[cfg(unix)]
@@ -249,5 +251,33 @@ mod tests {
         assert_eq!(result.process.exit_code, 1);
         assert_eq!(result.platform_log_path, Some(log_path));
         assert_eq!(result.platform_log.as_deref(), Some("designer log\n"));
+        assert!(result.platform_log_read_error.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preserves_process_result_when_platform_log_is_unreadable() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("1cv8");
+        let log_path = dir.path().join("missing").join("designer.log");
+        write_script(&script, "exit 101");
+        let runner = ProcessExecutor;
+        let dsl = DesignerDsl::new(
+            script,
+            V8Connection::from_connection_string("File=/tmp/ib"),
+            &runner as &dyn ProcessRunner,
+            Some(log_path.clone()),
+        );
+
+        let result = dsl.check_modules(&["-Server"]).expect("check modules");
+
+        assert_eq!(result.process.exit_code, 101);
+        assert_eq!(result.platform_log_path, Some(log_path));
+        assert!(result.platform_log.is_none());
+        assert!(result
+            .platform_log_read_error
+            .as_deref()
+            .expect("read error")
+            .contains("failed to read designer /Out log"));
     }
 }

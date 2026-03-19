@@ -939,6 +939,7 @@ dependencies = [
  "predicates",
  "quick-xml",
  "redb",
+ "regex",
  "serde",
  "serde_json",
  "serde_yaml",

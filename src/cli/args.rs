@@ -98,9 +98,9 @@ pub struct SyntaxArgs {
 #[derive(Subcommand, Debug)]
 pub enum SyntaxTarget {
     /// Check configuration via Designer CheckConfig
-    DesignerConfig,
+    DesignerConfig(DesignerConfigSyntaxArgs),
     /// Check modules via Designer CheckModules
-    DesignerModules,
+    DesignerModules(DesignerModulesSyntaxArgs),
     /// Check via EDT validate
     Edt {
         /// EDT project names
@@ -114,4 +114,148 @@ pub struct LaunchArgs {
     /// Launch mode
     #[arg(long, value_parser = ["designer", "thin", "thick"])]
     pub mode: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DesignerConfigSyntaxArgs {
+    #[arg(long)]
+    pub config_log_integrity: bool,
+    #[arg(long)]
+    pub incorrect_references: bool,
+    #[arg(long)]
+    pub thin_client: bool,
+    #[arg(long)]
+    pub web_client: bool,
+    #[arg(long)]
+    pub mobile_client: bool,
+    #[arg(long)]
+    pub server: bool,
+    #[arg(long)]
+    pub external_connection: bool,
+    #[arg(long)]
+    pub external_connection_server: bool,
+    #[arg(long)]
+    pub mobile_app_client: bool,
+    #[arg(long)]
+    pub mobile_app_server: bool,
+    #[arg(long)]
+    pub thick_client_managed_application: bool,
+    #[arg(long)]
+    pub thick_client_server_managed_application: bool,
+    #[arg(long)]
+    pub thick_client_ordinary_application: bool,
+    #[arg(long)]
+    pub thick_client_server_ordinary_application: bool,
+    #[arg(long)]
+    pub mobile_client_digi_sign: bool,
+    #[arg(long)]
+    pub distributive_modules: bool,
+    #[arg(long)]
+    pub unreference_procedures: bool,
+    #[arg(long)]
+    pub handlers_existence: bool,
+    #[arg(long)]
+    pub empty_handlers: bool,
+    #[arg(long)]
+    pub extended_modules_check: bool,
+    #[arg(long, requires = "extended_modules_check")]
+    pub check_use_synchronous_calls: bool,
+    #[arg(long, requires = "extended_modules_check")]
+    pub check_use_modality: bool,
+    #[arg(long)]
+    pub unsupported_functional: bool,
+    #[arg(long, conflicts_with = "all_extensions")]
+    pub extension: Option<String>,
+    #[arg(long)]
+    pub all_extensions: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DesignerModulesSyntaxArgs {
+    #[arg(long)]
+    pub thin_client: bool,
+    #[arg(long)]
+    pub web_client: bool,
+    #[arg(long)]
+    pub server: bool,
+    #[arg(long)]
+    pub external_connection: bool,
+    #[arg(long)]
+    pub thick_client_ordinary_application: bool,
+    #[arg(long)]
+    pub mobile_app_client: bool,
+    #[arg(long)]
+    pub mobile_app_server: bool,
+    #[arg(long)]
+    pub mobile_client: bool,
+    #[arg(long)]
+    pub extended_modules_check: bool,
+    #[arg(long, conflicts_with = "all_extensions")]
+    pub extension: Option<String>,
+    #[arg(long)]
+    pub all_extensions: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Command, SyntaxTarget};
+    use clap::Parser;
+
+    #[test]
+    fn syntax_config_extension_conflicts_with_all_extensions() {
+        let result = Cli::try_parse_from([
+            "v8-test-runner",
+            "syntax",
+            "designer-config",
+            "--extension",
+            "Ext",
+            "--all-extensions",
+        ]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn syntax_config_sync_calls_require_extended_modules_check() {
+        let result = Cli::try_parse_from([
+            "v8-test-runner",
+            "syntax",
+            "designer-config",
+            "--check-use-synchronous-calls",
+        ]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn syntax_modules_all_extensions_conflicts_with_extension() {
+        let result = Cli::try_parse_from([
+            "v8-test-runner",
+            "syntax",
+            "designer-modules",
+            "--server",
+            "--extension",
+            "Ext",
+            "--all-extensions",
+        ]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn syntax_config_accepts_zero_mode_flags() {
+        let cli = Cli::try_parse_from(["v8-test-runner", "syntax", "designer-config"])
+            .expect("parse syntax config");
+
+        match cli.command {
+            Command::Syntax(args) => match args.target {
+                SyntaxTarget::DesignerConfig(config) => {
+                    assert!(!config.server);
+                    assert!(!config.all_extensions);
+                }
+                _ => panic!("unexpected syntax target"),
+            },
+            _ => panic!("unexpected command"),
+        }
+    }
 }
