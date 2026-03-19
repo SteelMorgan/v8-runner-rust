@@ -127,13 +127,13 @@
 
 ## Волна 2: IBCMD
 
-- [ ] Реализовать `IbcmdDsl`
-- [ ] Реализовать build через `config import` и `config apply`
-- [ ] Реализовать dump `FULL` через `--force`
-- [ ] Реализовать dump `INCREMENTAL` через `--sync`
-- [ ] Явно задокументировать: partial dump по объектам в IBCMD backend не поддерживается
-- [ ] Валидировать ограничения IBCMD для connection type (только файловая ИБ)
-- [ ] Задокументировать ограничения IBCMD backend
+- [x] Реализовать `IbcmdDsl`
+- [x] Реализовать build через `config import` и `config apply`
+- [x] Реализовать dump `FULL` через `--force`
+- [x] Реализовать dump `INCREMENTAL` через `--sync`
+- [x] Явно задокументировать: partial dump по объектам в IBCMD backend не поддерживается
+- [x] Валидировать ограничения IBCMD для connection type (только файловая ИБ)
+- [x] Задокументировать ограничения IBCMD backend
 
 ## Подготовка к следующему этапу
 

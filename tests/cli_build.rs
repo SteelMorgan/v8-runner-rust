@@ -38,11 +38,41 @@ fn write_build_script(path: &Path, fail_pattern: Option<&str>) {
     write_script(path, &body);
 }
 
+fn write_ibcmd_script(path: &Path, calls_log: &Path, fail_pattern: Option<&str>) {
+    let pattern_branch = fail_pattern
+        .map(|pattern| {
+            format!(
+                "if printf '%s' \"$args\" | grep -F -q -- '{}'; then exit 17; fi",
+                pattern
+            )
+        })
+        .unwrap_or_default();
+    let body = format!(
+        "args=\"$*\"\nprintf '%s\\n' \"$args\" >> \"{}\"\n{}\nexit 0",
+        calls_log.display(),
+        pattern_branch
+    );
+    write_script(path, &body);
+}
+
 fn write_config(path: &Path, base_path: &Path, work_path: &Path, platform_path: &Path) {
+    write_config_with_builder(path, base_path, work_path, platform_path, "DESIGNER", "File=/tmp/ib");
+}
+
+fn write_config_with_builder(
+    path: &Path,
+    base_path: &Path,
+    work_path: &Path,
+    platform_path: &Path,
+    builder: &str,
+    connection: &str,
+) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: main\n  - name: ext\n    purpose: EXTENSION\n    path: ext\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: {}\nconnection: '{}'\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: main\n  - name: ext\n    purpose: EXTENSION\n    path: ext\ntools:\n  platform:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
+        builder,
+        connection,
         platform_path.display(),
     );
 
@@ -88,6 +118,62 @@ fn setup_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     write_config(&config_path, &base_path, &work_path, &binary_path);
 
     (dir, config_path, binary_path, work_path)
+}
+
+fn setup_ibcmd_project() -> (
+    tempfile::TempDir,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+) {
+    let dir = tempdir().expect("tempdir");
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    let config_path = dir.path().join("application.yaml");
+    let binary_path = dir.path().join("ibcmd");
+    let calls_log = dir.path().join("calls.log");
+
+    fs::create_dir_all(base_path.join("main").join("Catalogs.Items")).expect("main");
+    fs::create_dir_all(base_path.join("ext").join("CommonModules")).expect("ext");
+    fs::create_dir_all(&work_path).expect("work");
+    fs::write(
+        base_path
+            .join("main")
+            .join("Catalogs.Items")
+            .join("ObjectModule.bsl"),
+        "procedure Test() endprocedure",
+    )
+    .expect("main bsl");
+    fs::write(
+        base_path
+            .join("main")
+            .join("Catalogs.Items")
+            .join("ObjectModule.xml"),
+        "<MetaDataObject />",
+    )
+    .expect("main xml");
+    fs::write(
+        base_path
+            .join("ext")
+            .join("CommonModules")
+            .join("Module.bsl"),
+        "procedure Test() endprocedure",
+    )
+    .expect("ext bsl");
+
+    write_ibcmd_script(&binary_path, &calls_log, None);
+    write_config_with_builder(
+        &config_path,
+        &base_path,
+        &work_path,
+        &binary_path,
+        "IBCMD",
+        "File=/tmp/ib",
+    );
+
+    (dir, config_path, binary_path, work_path, base_path, calls_log)
 }
 
 #[test]
@@ -189,4 +275,86 @@ fn build_json_writes_action_log_file_without_polluting_stdout() {
     let contents = fs::read_to_string(action_log).expect("action log");
     assert!(contents.contains("starting command"));
     assert!(contents.contains("running process"));
+}
+
+#[test]
+fn build_ibcmd_full_rebuild_invokes_import_and_apply() {
+    let (_dir, config_path, _binary_path, _work_path, _base_path, calls_log) =
+        setup_ibcmd_project();
+
+    let output = std::process::Command::cargo_bin("v8-test-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "build",
+            "--full-rebuild",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let calls = fs::read_to_string(calls_log).expect("calls");
+    assert!(calls.contains("config import"));
+    assert!(calls.contains("config apply"));
+}
+
+#[test]
+fn build_ibcmd_partial_uses_relative_positional_args_and_base_dir() {
+    let (_dir, config_path, _binary_path, _work_path, base_path, calls_log) =
+        setup_ibcmd_project();
+
+    let output = std::process::Command::cargo_bin("v8-test-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "build",
+            "--full-rebuild",
+        ])
+        .output()
+        .expect("run command");
+    assert!(output.status.success());
+
+    let changed_file = base_path
+        .join("main")
+        .join("Catalogs.Items")
+        .join("ObjectModule.bsl");
+    fs::write(&changed_file, "procedure Test() // changed endprocedure").expect("change");
+
+    let output = std::process::Command::cargo_bin("v8-test-runner")
+        .expect("binary")
+        .args(["--config", &config_path.display().to_string(), "build"])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let calls = fs::read_to_string(calls_log).expect("calls");
+    assert!(calls.contains("config import files"));
+    assert!(calls.contains("--partial"));
+    assert!(calls.contains("--base-dir="));
+    assert!(calls.contains("Catalogs.Items/ObjectModule.bsl"));
+}
+
+#[test]
+fn build_ibcmd_server_connection_fails_at_config_load() {
+    let (dir, config_path, binary_path, _work_path, _base_path, _calls_log) =
+        setup_ibcmd_project();
+    write_config_with_builder(
+        &config_path,
+        &dir.path().join("project"),
+        &dir.path().join("work"),
+        &binary_path,
+        "IBCMD",
+        "Srvr=server;Ref=main",
+    );
+
+    let output = std::process::Command::cargo_bin("v8-test-runner")
+        .expect("binary")
+        .args(["--config", &config_path.display().to_string(), "build"])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
 }

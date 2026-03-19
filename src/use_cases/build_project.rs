@@ -16,6 +16,7 @@ use crate::output::json::Envelope;
 use crate::output::presenter::Presenter;
 use crate::platform::designer::DesignerDsl;
 use crate::platform::edt::EdtDsl;
+use crate::platform::ibcmd::{DynamicUpdateMode, IbcmdConnection, IbcmdDsl, IbcmdError};
 use crate::platform::locator::UtilityType;
 use crate::platform::process::ProcessRunner;
 use crate::platform::result::PlatformCommandResult;
@@ -26,7 +27,7 @@ use tracing::info;
 
 const BUILD_COMMAND: &str = "build";
 const SUPPORTED_DESIGNER_BUILD_ERROR: &str =
-    "build currently supports only builder=DESIGNER and format=DESIGNER";
+    "build currently supports only builder=DESIGNER or IBCMD with format=DESIGNER";
 const SUPPORTED_EDT_BUILD_ERROR: &str =
     "build with format=EDT currently supports only builder=DESIGNER";
 
@@ -93,7 +94,6 @@ pub(crate) fn run_build(
         return run_build_edt(config, args);
     }
 
-    info!(full_rebuild = args.full_rebuild, "preparing build plan");
     if let Some(error) = validate_designer_supported_matrix(config) {
         return Err(BuildExecutionFailure {
             error,
@@ -104,6 +104,18 @@ pub(crate) fn run_build(
             },
         });
     }
+
+    match config.builder {
+        BuilderBackend::Designer => run_build_designer(config, args),
+        BuilderBackend::Ibcmd => run_build_ibcmd(config, args),
+    }
+}
+
+fn run_build_designer(
+    config: &AppConfig,
+    args: &BuildArgs,
+) -> Result<BuildResult, BuildExecutionFailure> {
+    info!(full_rebuild = args.full_rebuild, "preparing build plan");
 
     let started = Instant::now();
     let service = SourceSetsService::new(config);
@@ -359,8 +371,247 @@ fn log_change_analysis(source_set_name: &str, changes: &[analyzer::FileChange]) 
     );
 }
 
+fn run_build_ibcmd(
+    config: &AppConfig,
+    args: &BuildArgs,
+) -> Result<BuildResult, BuildExecutionFailure> {
+    info!(full_rebuild = args.full_rebuild, "preparing ibcmd build plan");
+
+    let started = Instant::now();
+    let service = SourceSetsService::new(config);
+    let contexts = service.designer_contexts();
+    let contexts_by_name: HashMap<String, SourceSetContext> = contexts
+        .into_iter()
+        .map(|context| (context.name().to_owned(), context))
+        .collect();
+    let ordered_source_sets = ordered_source_sets(config);
+
+    let analysis_by_name = if args.full_rebuild {
+        None
+    } else {
+        Some(analyze_contexts_by_name(
+            &service,
+            &contexts_by_name.values().cloned().collect::<Vec<_>>(),
+        ))
+    };
+
+    let mut utilities = PlatformUtilities::from_config(config);
+    let mut ibcmd_binary: Option<PathBuf> = None;
+    let mut steps = Vec::new();
+
+    for (index, source_set) in ordered_source_sets.iter().enumerate() {
+        let Some(context) = contexts_by_name.get(&source_set.name).cloned() else {
+            continue;
+        };
+
+        let plan = if args.full_rebuild {
+            StepPlan::Execute {
+                mode: BuildMode::Full,
+                message: "forced full rebuild".to_owned(),
+                partial_paths: None,
+                commit: StepCommit::RescanFull {
+                    recover_storage: true,
+                },
+            }
+        } else {
+            match analysis_by_name
+                .as_ref()
+                .and_then(|analysis| analysis.get(&source_set.name))
+                .cloned()
+                .expect("every source-set must have an analysis result")
+            {
+                Ok(AnalysisOutcome::NoChanges { .. }) => {
+                    info!(
+                        source_set = source_set.name.as_str(),
+                        found_changes = 0,
+                        "change analysis result: found 0 change(s)"
+                    );
+                    StepPlan::Skip {
+                        message: "no changes".to_owned(),
+                        ok: true,
+                    }
+                }
+                Ok(AnalysisOutcome::Fallback) => {
+                    info!(
+                        source_set = source_set.name.as_str(),
+                        "change analysis result: fallback to full load after recoverable issue"
+                    );
+                    StepPlan::Execute {
+                        mode: BuildMode::Full,
+                        message: "fallback to full load after recoverable change-detection issue"
+                            .to_owned(),
+                        partial_paths: None,
+                        commit: StepCommit::RescanFull {
+                            recover_storage: false,
+                        },
+                    }
+                }
+                Ok(AnalysisOutcome::Changes { changes, prepared }) => {
+                    log_change_analysis(source_set.name.as_str(), &changes);
+                    match partial_load::decide(
+                        &changes,
+                        context.path(),
+                        config.build.partial_load_threshold,
+                    ) {
+                        LoadDecision::Partial(paths) => {
+                            info!(
+                                source_set = source_set.name.as_str(),
+                                partial_file_count = paths.len(),
+                                threshold = config.build.partial_load_threshold,
+                                "change analysis decision: partial load"
+                            );
+                            StepPlan::Execute {
+                                mode: BuildMode::Partial {
+                                    file_count: paths.len(),
+                                },
+                                message: format!("partial load of {} files", paths.len()),
+                                partial_paths: Some(paths),
+                                commit: StepCommit::Prepared(prepared),
+                            }
+                        }
+                        LoadDecision::Full => {
+                            info!(
+                                source_set = source_set.name.as_str(),
+                                threshold = config.build.partial_load_threshold,
+                                "change analysis decision: full load"
+                            );
+                            StepPlan::Execute {
+                                mode: BuildMode::Full,
+                                message: "full load selected by partial-load rules".to_owned(),
+                                partial_paths: None,
+                                commit: StepCommit::Prepared(prepared),
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    let result = fail_with_remaining_steps(
+                        started,
+                        steps,
+                        ordered_source_sets
+                            .iter()
+                            .skip(index)
+                            .copied()
+                            .collect::<Vec<_>>(),
+                        source_set,
+                        BuildMode::Skipped,
+                        error.to_string(),
+                    );
+                    return Err(BuildExecutionFailure {
+                        error: AppError::Runtime(error.to_string()),
+                        result,
+                    });
+                }
+            }
+        };
+
+        match plan {
+            StepPlan::Skip { message, ok } => {
+                info!(
+                    source_set = source_set.name.as_str(),
+                    message = message.as_str(),
+                    "skipping build step"
+                );
+                steps.push(BuildStep {
+                    source_set: source_set.name.clone(),
+                    mode: BuildMode::Skipped,
+                    ok,
+                    message: Some(message),
+                    duration_ms: 0,
+                })
+            }
+            StepPlan::Execute {
+                mode,
+                message,
+                partial_paths,
+                commit,
+            } => {
+                info!(
+                    source_set = source_set.name.as_str(),
+                    mode = ?mode,
+                    message = message.as_str(),
+                    "executing ibcmd build step"
+                );
+                let binary = match ibcmd_binary.clone() {
+                    Some(path) => path,
+                    None => {
+                        let location = match utilities.locate(UtilityType::Ibcmd) {
+                            Ok(location) => location,
+                            Err(error) => {
+                                let result = fail_with_remaining_steps(
+                                    started,
+                                    steps,
+                                    ordered_source_sets
+                                        .iter()
+                                        .skip(index)
+                                        .copied()
+                                        .collect::<Vec<_>>(),
+                                    source_set,
+                                    mode.clone(),
+                                    error.to_string(),
+                                );
+                                return Err(BuildExecutionFailure {
+                                    error: AppError::Platform(error.to_string()),
+                                    result,
+                                });
+                            }
+                        };
+                        ibcmd_binary = Some(location.path.clone());
+                        location.path
+                    }
+                };
+
+                let step_started = Instant::now();
+                match execute_source_set_step_ibcmd(
+                    config,
+                    &binary,
+                    utilities.runner_for(UtilityType::Ibcmd),
+                    source_set,
+                    &context,
+                    partial_paths.as_deref(),
+                    &commit,
+                ) {
+                    Ok(()) => steps.push(BuildStep {
+                        source_set: source_set.name.clone(),
+                        mode,
+                        ok: true,
+                        message: Some(message),
+                        duration_ms: step_started.elapsed().as_millis() as u64,
+                    }),
+                    Err(error) => {
+                        let result = fail_with_remaining_steps(
+                            started,
+                            steps,
+                            ordered_source_sets
+                                .iter()
+                                .skip(index)
+                                .copied()
+                                .collect::<Vec<_>>(),
+                            source_set,
+                            mode,
+                            error.to_string(),
+                        );
+                        return Err(BuildExecutionFailure { error, result });
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(BuildResult {
+        ok: true,
+        steps,
+        duration_ms: started.elapsed().as_millis() as u64,
+    })
+}
+
 fn validate_designer_supported_matrix(config: &AppConfig) -> Option<AppError> {
-    if config.builder == BuilderBackend::Designer && config.format == SourceFormat::Designer {
+    if config.format == SourceFormat::Designer
+        && matches!(
+            config.builder,
+            BuilderBackend::Designer | BuilderBackend::Ibcmd
+        )
+    {
         None
     } else {
         Some(AppError::Validation(
@@ -784,6 +1035,64 @@ fn execute_source_set_step(
     }
 }
 
+fn execute_source_set_step_ibcmd(
+    config: &AppConfig,
+    binary: &Path,
+    runner: &dyn ProcessRunner,
+    source_set: &SourceSetConfig,
+    context: &SourceSetContext,
+    partial_paths: Option<&[PathBuf]>,
+    commit: &StepCommit,
+) -> Result<(), AppError> {
+    info!(
+        source_set = source_set.name.as_str(),
+        partial = partial_paths.is_some(),
+        "loading source-set into ibcmd"
+    );
+
+    let dsl = build_ibcmd_dsl(config, binary, runner)?;
+    let extension = extension_name(source_set);
+    let load_result = if let Some(paths) = partial_paths {
+        let rel_paths =
+            partial_load::relative_paths(paths, context.path()).map_err(|error| {
+                AppError::Runtime(format!("failed to convert partial paths: {error}"))
+            })?;
+        dsl.config_import_partial(context.path(), &rel_paths, extension)
+            .map_err(map_ibcmd_error)?
+    } else {
+        dsl.config_import_full(context.path(), extension)
+            .map_err(map_ibcmd_error)?
+    };
+    ensure_platform_success("load", source_set, &load_result)?;
+
+    info!(
+        source_set = source_set.name.as_str(),
+        "applying database configuration after ibcmd load"
+    );
+    let apply_result = dsl
+        .config_apply(extension, DynamicUpdateMode::Auto)
+        .map_err(map_ibcmd_error)?;
+    ensure_platform_success("apply", source_set, &apply_result)?;
+
+    match commit {
+        StepCommit::Prepared(prepared) => {
+            info!(
+                source_set = source_set.name.as_str(),
+                "committing prepared change-detection state"
+            );
+            analyzer::commit_success(context, &config.work_path, prepared)
+                .map_err(|error| AppError::Runtime(error.to_string()))
+        }
+        StepCommit::RescanFull { recover_storage } => {
+            info!(
+                source_set = source_set.name.as_str(),
+                recover_storage, "rescanning source-set state after full build"
+            );
+            commit_full_rescan(context, &config.work_path, *recover_storage)
+        }
+    }
+}
+
 fn commit_full_rescan(
     context: &SourceSetContext,
     work_path: &Path,
@@ -851,6 +1160,26 @@ fn build_designer_dsl<'a>(
         runner,
         Some(log_file),
     ))
+}
+
+fn build_ibcmd_dsl<'a>(
+    config: &AppConfig,
+    binary: &Path,
+    runner: &'a dyn ProcessRunner,
+) -> Result<IbcmdDsl<'a>, AppError> {
+    let connection = IbcmdConnection::from_v8_connection(&config.v8_connection())
+        .map_err(map_ibcmd_error)?;
+
+    Ok(IbcmdDsl::new(binary.to_path_buf(), connection, runner))
+}
+
+fn map_ibcmd_error(error: IbcmdError) -> AppError {
+    match error {
+        IbcmdError::ServerConnectionNotSupported => {
+            AppError::Validation(error.to_string())
+        }
+        IbcmdError::Spawn(_) => AppError::Platform(error.to_string()),
+    }
 }
 
 fn extension_name(source_set: &SourceSetConfig) -> Option<&str> {
@@ -964,7 +1293,7 @@ fn render_text_result(result: &BuildResult, presenter: &Presenter, succeeded: bo
 
 #[cfg(test)]
 mod tests {
-    use super::{run_build, BUILD_COMMAND, SUPPORTED_DESIGNER_BUILD_ERROR};
+    use super::{run_build, BUILD_COMMAND, SUPPORTED_EDT_BUILD_ERROR};
     use crate::change_detection::hash_storage::HashStorage;
     use crate::change_detection::source_sets::SourceSetsService;
     use crate::cli::args::BuildArgs;
@@ -1004,6 +1333,28 @@ mod tests {
             pattern_branch
         );
 
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create dirs");
+        }
+        fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write script");
+        make_executable(path);
+    }
+
+    #[cfg(unix)]
+    fn write_ibcmd_script(path: &Path, calls_log: &Path, fail_pattern: Option<&str>) {
+        let pattern_branch = fail_pattern
+            .map(|pattern| {
+                format!(
+                    "if printf '%s' \"$args\" | grep -F -q -- '{}'; then exit 17; fi",
+                    pattern
+                )
+            })
+            .unwrap_or_default();
+        let body = format!(
+            "args=\"$*\"\nprintf '%s\\n' \"$args\" >> \"{}\"\n{}\nexit 0",
+            calls_log.display(),
+            pattern_branch
+        );
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create dirs");
         }
@@ -1200,7 +1551,7 @@ mod tests {
             dir.path().join("work").as_path(),
             &script,
             20,
-            SourceFormat::Designer,
+            SourceFormat::Edt,
             BuilderBackend::Ibcmd,
         );
 
@@ -1211,10 +1562,81 @@ mod tests {
             },
         )
         .expect_err("failure");
-        assert!(
-            matches!(failure.error, AppError::Validation(ref msg) if msg == SUPPORTED_DESIGNER_BUILD_ERROR)
-        );
+        assert!(matches!(failure.error, AppError::Validation(ref msg) if msg == SUPPORTED_EDT_BUILD_ERROR));
         assert!(!calls.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ibcmd_build_dispatch_uses_ibcmd_utility() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let script = dir.path().join("ibcmd");
+        let calls = dir.path().join("calls.log");
+        create_source_tree(&base);
+        write_ibcmd_script(&script, &calls, None);
+        let config = build_config(
+            &base,
+            &work,
+            &script,
+            20,
+            SourceFormat::Designer,
+            BuilderBackend::Ibcmd,
+        );
+        let result = run_build(
+            &config,
+            &BuildArgs {
+                full_rebuild: true,
+            },
+        )
+        .expect("build");
+
+        assert!(result.ok);
+        let calls_text = fs::read_to_string(&calls).expect("calls");
+        assert!(calls_text.contains("config import"));
+        assert!(calls_text.contains("config apply"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ibcmd_apply_failure_does_not_commit_state() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let script = dir.path().join("ibcmd");
+        let calls = dir.path().join("calls.log");
+        create_source_tree(&base);
+        write_ibcmd_script(&script, &calls, Some("config apply"));
+        let config = build_config(
+            &base,
+            &work,
+            &script,
+            20,
+            SourceFormat::Designer,
+            BuilderBackend::Ibcmd,
+        );
+        prime_snapshots(&config);
+        let generation_before = storage_generation(&config, "main");
+
+        fs::write(
+            base.join("main")
+                .join("Catalogs.Items")
+                .join("ObjectModule.bsl"),
+            "procedure Test()\n  // changed\nendprocedure",
+        )
+        .expect("modify main");
+
+        let failure = run_build(
+            &config,
+            &BuildArgs {
+                full_rebuild: false,
+            },
+        )
+        .expect_err("expected failure");
+
+        assert!(!failure.result.ok);
+        assert_eq!(generation_before, storage_generation(&config, "main"));
     }
 
     #[cfg(unix)]

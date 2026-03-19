@@ -13,8 +13,8 @@ use crate::domain::dump::{DumpMode, DumpResult};
 use crate::domain::source_set::SourceSetContext;
 use crate::output::json::Envelope;
 use crate::output::presenter::Presenter;
-use crate::platform::connection::V8Connection;
 use crate::platform::designer::DesignerDsl;
+use crate::platform::ibcmd::{IbcmdConnection, IbcmdDsl, IbcmdError};
 use crate::platform::locator::UtilityType;
 use crate::platform::process::ProcessRunner;
 use crate::platform::result::PlatformCommandResult;
@@ -29,7 +29,7 @@ use tracing::info;
 
 const DUMP_COMMAND: &str = "dump";
 const SUPPORTED_DUMP_ERROR: &str =
-    "dump currently supports only builder=DESIGNER and format=DESIGNER";
+    "dump currently supports only builder=DESIGNER or IBCMD with format=DESIGNER";
 const PARTIAL_DEFERRED_ERROR: &str =
     "dump mode 'partial' is deferred to a later stage and is not implemented yet";
 const ORPHAN_TTL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -150,7 +150,11 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> Result<DumpResult, DumpExecu
     };
 
     let mut utilities = PlatformUtilities::from_config(config);
-    let location = match utilities.locate(UtilityType::V8) {
+    let utility = match config.builder {
+        BuilderBackend::Designer => UtilityType::V8,
+        BuilderBackend::Ibcmd => UtilityType::Ibcmd,
+    };
+    let location = match utilities.locate(utility) {
         Ok(location) => location,
         Err(error) => {
             let message = error.to_string();
@@ -222,18 +226,30 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> Result<DumpResult, DumpExecu
         });
     }
 
-    let result = match mode {
-        DumpMode::Incremental => run_incremental_dump(
+    let result = match (mode, config.builder) {
+        (DumpMode::Incremental, BuilderBackend::Designer) => run_incremental_dump_designer(
             config,
             &resolved,
             location.path.as_path(),
             utilities.runner_for(UtilityType::V8),
         ),
-        DumpMode::Full => run_full_dump(
+        (DumpMode::Incremental, BuilderBackend::Ibcmd) => run_incremental_dump_ibcmd(
+            config,
+            &resolved,
+            location.path.as_path(),
+            utilities.runner_for(UtilityType::Ibcmd),
+        ),
+        (DumpMode::Full, BuilderBackend::Designer) => run_full_dump_designer(
             config,
             &resolved,
             location.path.as_path(),
             utilities.runner_for(UtilityType::V8),
+        ),
+        (DumpMode::Full, BuilderBackend::Ibcmd) => run_full_dump_ibcmd(
+            config,
+            &resolved,
+            location.path.as_path(),
+            utilities.runner_for(UtilityType::Ibcmd),
         ),
         DumpMode::Partial => unreachable!("partial is handled earlier"),
     };
@@ -269,7 +285,7 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> Result<DumpResult, DumpExecu
     }
 }
 
-fn run_incremental_dump(
+fn run_incremental_dump_designer(
     config: &AppConfig,
     resolved: &ResolvedDumpTarget,
     binary: &Path,
@@ -296,7 +312,7 @@ fn run_incremental_dump(
     Ok((dump_result, None))
 }
 
-fn run_full_dump(
+fn run_full_dump_designer(
     config: &AppConfig,
     resolved: &ResolvedDumpTarget,
     binary: &Path,
@@ -341,6 +357,93 @@ fn run_full_dump(
         match build_designer_dsl(config, binary, runner, &resolved.source_set_name, "full")?
             .dump_config_to_files(&staging_dir, resolved.extension.as_deref())
             .map_err(|error| AppError::Platform(error.to_string()))
+        {
+            Ok(result) => result,
+            Err(error) => return Err(cleanup_staging_on_platform_failure(&staging_dir, error)),
+        };
+    ensure_platform_success("dump", resolved, &dump_result)
+        .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
+
+    validate_publish_target(resolved)?;
+
+    let publish_outcome = replace_dir_atomically(
+        &staging_dir,
+        &resolved.target_path,
+        &run_id,
+        &resolved.target_identity,
+    )
+    .map_err(|error| AppError::Runtime(format!("failed to publish staged dump: {error}")))?;
+    info!(target = %resolved.target_path.display(), "published staged dump");
+
+    Ok((dump_result, publish_outcome.cleanup_warning))
+}
+
+fn run_incremental_dump_ibcmd(
+    config: &AppConfig,
+    resolved: &ResolvedDumpTarget,
+    binary: &Path,
+    runner: &dyn ProcessRunner,
+) -> Result<(PlatformCommandResult, Option<String>), AppError> {
+    info!(
+        source_set = resolved.source_set_name.as_str(),
+        target = %resolved.target_path.display(),
+        "running incremental ibcmd dump"
+    );
+    ensure_dir(&resolved.target_path)
+        .map_err(|error| AppError::Runtime(format!("failed to create target dir: {error}")))?;
+
+    let dump_result = build_ibcmd_dsl(config, binary, runner)?
+        .config_export_incremental(&resolved.target_path, resolved.extension.as_deref())
+        .map_err(map_ibcmd_error)?;
+    ensure_platform_success("dump", resolved, &dump_result)?;
+    Ok((dump_result, None))
+}
+
+fn run_full_dump_ibcmd(
+    config: &AppConfig,
+    resolved: &ResolvedDumpTarget,
+    binary: &Path,
+    runner: &dyn ProcessRunner,
+) -> Result<(PlatformCommandResult, Option<String>), AppError> {
+    info!(
+        source_set = resolved.source_set_name.as_str(),
+        target = %resolved.target_path.display(),
+        "running full ibcmd dump via staging directory"
+    );
+    let target_parent = resolved.target_path.parent().ok_or_else(|| {
+        AppError::Runtime(format!(
+            "target path has no parent: {}",
+            resolved.target_path.display()
+        ))
+    })?;
+    ensure_dir(target_parent).map_err(|error| {
+        AppError::Runtime(format!("failed to create target parent dir: {error}"))
+    })?;
+
+    let run_id = make_run_id();
+    let staging_dir = target_parent.join(format!(".dump-stage-{run_id}"));
+    if staging_dir.exists() {
+        return Err(AppError::Runtime(format!(
+            "staging dir already exists unexpectedly: {}",
+            staging_dir.display()
+        )));
+    }
+    std::fs::create_dir(&staging_dir)
+        .map_err(|error| AppError::Runtime(format!("failed to create staging dir: {error}")))?;
+    info!(path = %staging_dir.display(), "created dump staging directory");
+    write_temp_dir_metadata(
+        &staging_dir,
+        TempDirKind::Stage,
+        &run_id,
+        &resolved.target_path,
+        &resolved.target_identity,
+    )
+    .map_err(|error| AppError::Runtime(format!("failed to write stage metadata: {error}")))?;
+
+    let dump_result =
+        match build_ibcmd_dsl(config, binary, runner)?
+            .config_export_full(&staging_dir, resolved.extension.as_deref())
+            .map_err(map_ibcmd_error)
         {
             Ok(result) => result,
             Err(error) => return Err(cleanup_staging_on_platform_failure(&staging_dir, error)),
@@ -492,7 +595,12 @@ fn resolve_target(config: &AppConfig, args: &DumpArgs) -> Result<ResolvedDumpTar
 }
 
 fn validate_supported_matrix(config: &AppConfig) -> Option<AppError> {
-    if config.builder == BuilderBackend::Designer && config.format == SourceFormat::Designer {
+    if config.format == SourceFormat::Designer
+        && matches!(
+            config.builder,
+            BuilderBackend::Designer | BuilderBackend::Ibcmd
+        )
+    {
         None
     } else {
         Some(AppError::Validation(SUPPORTED_DUMP_ERROR.to_owned()))
@@ -677,6 +785,26 @@ fn build_designer_dsl<'a>(
     ))
 }
 
+fn build_ibcmd_dsl<'a>(
+    config: &AppConfig,
+    binary: &Path,
+    runner: &'a dyn ProcessRunner,
+) -> Result<IbcmdDsl<'a>, AppError> {
+    let connection = IbcmdConnection::from_v8_connection(&config.v8_connection())
+        .map_err(map_ibcmd_error)?;
+
+    Ok(IbcmdDsl::new(binary.to_path_buf(), connection, runner))
+}
+
+fn map_ibcmd_error(error: IbcmdError) -> AppError {
+    match error {
+        IbcmdError::ServerConnectionNotSupported => {
+            AppError::Validation(error.to_string())
+        }
+        IbcmdError::Spawn(_) => AppError::Platform(error.to_string()),
+    }
+}
+
 fn ensure_platform_success(
     action: &str,
     resolved: &ResolvedDumpTarget,
@@ -762,7 +890,8 @@ mod tests {
     use super::{
         build_designer_dsl, cleanup_orphan_dirs, hash_path, metadata_sidecar_path,
         nearest_existing_canonical_path, resolve_target, run_dump, validate_publish_target,
-        DUMP_COMMAND, ORPHAN_TTL, PARTIAL_DEFERRED_ERROR, SUPPORTED_DUMP_ERROR,
+        validate_supported_matrix, DUMP_COMMAND, ORPHAN_TTL, PARTIAL_DEFERRED_ERROR,
+        SUPPORTED_DUMP_ERROR,
     };
     use crate::cli::args::DumpArgs;
     use crate::config::model::{
@@ -820,12 +949,49 @@ mod tests {
         write_script(path, &body);
     }
 
+    fn write_ibcmd_dump_script(
+        path: &Path,
+        calls_log: &Path,
+        fail_pattern: Option<&str>,
+        sleep_ms: u64,
+    ) {
+        let pattern_branch = fail_pattern
+            .map(|pattern| {
+                format!(
+                    "if printf '%s' \"$args\" | grep -F -q -- '{}'; then exit 17; fi",
+                    pattern
+                )
+            })
+            .unwrap_or_default();
+        let sleep_branch = if sleep_ms == 0 {
+            String::new()
+        } else {
+            format!("sleep {}", sleep_ms as f64 / 1000.0)
+        };
+        let body = format!(
+            "args=\"$*\"\nprintf '%s\\n' \"$args\" >> \"{}\"\n{}\n{}\nmkdir -p \"$(printf '%s' \"$args\" | awk '{{print $NF}}')\"\nexit 0",
+            calls_log.display(),
+            sleep_branch,
+            pattern_branch
+        );
+        write_script(path, &body);
+    }
+
     fn build_config(base_path: &Path, work_path: &Path, platform_path: &Path) -> AppConfig {
+        build_config_with_builder(base_path, work_path, platform_path, BuilderBackend::Designer)
+    }
+
+    fn build_config_with_builder(
+        base_path: &Path,
+        work_path: &Path,
+        platform_path: &Path,
+        builder: BuilderBackend,
+    ) -> AppConfig {
         AppConfig {
             base_path: base_path.to_path_buf(),
             work_path: work_path.to_path_buf(),
             format: SourceFormat::Designer,
-            builder: BuilderBackend::Designer,
+            builder,
             connection: "File=/tmp/ib".to_owned(),
             credentials: Default::default(),
             source_sets: vec![
@@ -896,6 +1062,16 @@ mod tests {
         assert!(
             matches!(failure.error, AppError::Validation(ref msg) if msg == SUPPORTED_DUMP_ERROR)
         );
+    }
+
+    #[test]
+    fn ibcmd_dump_support_matrix_accepts_designer_format_with_ibcmd_builder() {
+        let dir = tempdir().expect("tempdir");
+        let config = build_config_with_builder(dir.path(), dir.path(), dir.path(), BuilderBackend::Ibcmd);
+
+        let error = validate_supported_matrix(&config);
+
+        assert!(error.is_none());
     }
 
     #[test]
@@ -1205,6 +1381,95 @@ mod tests {
 
         assert!(result.ok);
         assert!(!base.join("main").join("old.txt").exists());
+    }
+
+    #[test]
+    fn ibcmd_dump_full_uses_staging_dir_and_atomic_publish() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let script = dir.path().join("ibcmd");
+        let calls = dir.path().join("calls.log");
+        create_source_tree(&base);
+        write_ibcmd_dump_script(&script, &calls, None, 0);
+        let config = build_config_with_builder(&base, &work, &script, BuilderBackend::Ibcmd);
+        fs::write(base.join("main").join("old.txt"), "old").expect("old");
+
+        let result = run_dump(
+            &config,
+            &DumpArgs {
+                mode: "full".to_owned(),
+                source_set: Some("main".to_owned()),
+                extension: None,
+                objects: vec![],
+            },
+        )
+        .expect("dump");
+
+        let calls = fs::read_to_string(calls).expect("calls");
+        assert!(result.ok);
+        assert!(calls.contains("--force"));
+        assert!(calls.contains(".dump-stage-"));
+        assert!(!base.join("main").join("old.txt").exists());
+    }
+
+    #[test]
+    fn ibcmd_dump_full_preserves_old_target_on_platform_failure() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let script = dir.path().join("ibcmd");
+        let calls = dir.path().join("calls.log");
+        create_source_tree(&base);
+        write_ibcmd_dump_script(&script, &calls, Some("--force"), 0);
+        let config = build_config_with_builder(&base, &work, &script, BuilderBackend::Ibcmd);
+        fs::write(base.join("main").join("old.txt"), "keep me").expect("old");
+
+        let failure = run_dump(
+            &config,
+            &DumpArgs {
+                mode: "full".to_owned(),
+                source_set: Some("main".to_owned()),
+                extension: None,
+                objects: vec![],
+            },
+        )
+        .expect_err("failure");
+
+        assert!(matches!(failure.error, AppError::Platform(_)));
+        assert_eq!(
+            fs::read_to_string(base.join("main").join("old.txt")).expect("old"),
+            "keep me"
+        );
+    }
+
+    #[test]
+    fn ibcmd_dump_incremental_uses_sync_against_resolved_target() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let script = dir.path().join("ibcmd");
+        let calls = dir.path().join("calls.log");
+        create_source_tree(&base);
+        write_ibcmd_dump_script(&script, &calls, None, 0);
+        let config = build_config_with_builder(&base, &work, &script, BuilderBackend::Ibcmd);
+        fs::remove_dir_all(base.join("main")).expect("remove target");
+
+        let result = run_dump(
+            &config,
+            &DumpArgs {
+                mode: "incremental".to_owned(),
+                source_set: Some("main".to_owned()),
+                extension: None,
+                objects: vec![],
+            },
+        )
+        .expect("dump");
+
+        assert!(result.ok);
+        let calls = fs::read_to_string(calls).expect("calls");
+        assert!(calls.contains("--sync"));
+        assert!(calls.contains(base.join("main").display().to_string().as_str()));
     }
 
     #[test]

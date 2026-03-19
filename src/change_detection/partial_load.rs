@@ -53,6 +53,16 @@ pub fn decide(changes: &[FileChange], source_root: &Path, threshold: usize) -> L
 /// Paths are written relative to `source_root` as required by Designer's
 /// `-listFile` parameter when running in agent mode.
 pub fn write_list_file(paths: &[PathBuf], source_root: &Path, dest: &Path) -> std::io::Result<()> {
+    let rel_paths = relative_paths(paths, source_root)?;
+    let lines = rel_paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    std::fs::write(dest, lines.join("\r\n"))
+}
+
+/// Convert safe absolute paths into relative paths under `source_root`.
+pub fn relative_paths(paths: &[PathBuf], source_root: &Path) -> std::io::Result<Vec<PathBuf>> {
     let root_real = canonicalize_existing(source_root).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -62,7 +72,7 @@ pub fn write_list_file(paths: &[PathBuf], source_root: &Path, dest: &Path) -> st
             ),
         )
     })?;
-    let mut lines = Vec::new();
+    let mut rel_paths = Vec::new();
 
     for path in paths {
         let rel = safe_relative_path(path, source_root, &root_real).ok_or_else(|| {
@@ -75,11 +85,11 @@ pub fn write_list_file(paths: &[PathBuf], source_root: &Path, dest: &Path) -> st
             )
         })?;
         if !rel.as_os_str().is_empty() {
-            lines.push(rel.display().to_string());
+            rel_paths.push(rel);
         }
     }
 
-    std::fs::write(dest, lines.join("\r\n"))
+    Ok(rel_paths)
 }
 
 fn expand_files(changes: &[FileChange], source_root: &Path) -> Option<Vec<PathBuf>> {
@@ -197,7 +207,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        decide, object_dir, write_list_file, LoadDecision, DEFAULT_PARTIAL_LOAD_THRESHOLD,
+        decide, object_dir, relative_paths, write_list_file, LoadDecision,
+        DEFAULT_PARTIAL_LOAD_THRESHOLD,
     };
     use crate::change_detection::analyzer::{ChangeKind, FileChange};
 
@@ -230,6 +241,42 @@ mod tests {
         write_list_file(&[root.to_path_buf()], root, &list_file).expect("write list");
 
         assert_eq!(std::fs::read_to_string(list_file).expect("read list"), "");
+    }
+
+    #[test]
+    fn relative_paths_returns_relative_entries_for_safe_paths() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+        let nested = root.join("Catalogs.Items");
+        std::fs::create_dir_all(&nested).expect("mkdir");
+        let file = nested.join("ObjectModule.bsl");
+        std::fs::write(&file, "module").expect("write");
+
+        let rels = relative_paths(&[file.clone()], root).expect("relative paths");
+
+        assert_eq!(rels, vec![PathBuf::from("Catalogs.Items/ObjectModule.bsl")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relative_paths_rejects_path_outside_root() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("src");
+        let outside = temp.path().join("outside");
+        let link = root.join("Catalogs.Items");
+        let escaped = outside.join("ObjectModule.bsl");
+
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::create_dir_all(&outside).expect("outside");
+        std::fs::write(&escaped, "module").expect("escaped");
+        symlink(&outside, &link).expect("link");
+
+        let err =
+            relative_paths(&[link.join("ObjectModule.bsl")], &root).expect_err("expected error");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[cfg(unix)]

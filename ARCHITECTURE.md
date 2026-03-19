@@ -20,8 +20,21 @@ The platform layer is intentionally split so responsibilities do not bleed into 
 - `platform::connection` builds reusable V8 connection/auth arguments from the raw config connection string.
 - `platform::utilities` is the current facade used by use cases. It owns the stateful `Locator` and exposes the standard execution path.
 - `platform::designer` is the low-level batch DSL for `1cv8 DESIGNER`, returning `PlatformCommandResult` so `/Out` logs stay separate from runner-captured stdio.
+- `platform::ibcmd` is the low-level DSL for `ibcmd`, returning `PlatformCommandResult` with stdout/stderr diagnostics (no `/Out` log).
 
 This boundary is designed so Wave 2 can add an EDT-specific interactive runner without replacing the locator API or the standard execution path.
+
+## Backend Dispatch
+
+`build` and `dump` use cases dispatch by `builder`:
+
+- `builder=DESIGNER` uses the existing `DesignerDsl`.
+- `builder=IBCMD` uses `IbcmdDsl` with `config import/apply` for build and `config export` for dump.
+
+Constraints to keep in mind:
+
+- IBCMD requires file-based infobase connections.
+- Object-level partial dump is not supported for the IBCMD backend.
 
 ## Output Flow
 
