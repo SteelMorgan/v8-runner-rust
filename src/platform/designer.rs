@@ -141,6 +141,9 @@ impl<'a> DesignerDsl<'a> {
     }
 
     fn run(&self, args: &[String]) -> Result<PlatformCommandResult, DesignerError> {
+        if let Some(log_file) = &self.log_file {
+            let _ = std::fs::remove_file(log_file);
+        }
         let process = self
             .runner
             .run(&ProcessRequest {
