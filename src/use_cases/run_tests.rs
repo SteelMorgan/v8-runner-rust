@@ -7,48 +7,39 @@ use regex::Regex;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::cli::args::{BuildArgs, TestArgs, TestScope};
 use crate::config::model::AppConfig;
 use crate::domain::test::{
     RetainedPaths, TestErrorKind, TestOutputMode, TestReport, TestRunResult, TestStatus, TestTarget,
 };
-use crate::output::json::{Envelope, StepResult};
-use crate::output::presenter::Presenter;
+use crate::domain::execution::StepResult;
 use crate::parsers::junit::{self, JunitError};
 use crate::parsers::yaxunit_log;
-use crate::platform::connection::V8Connection;
 use crate::platform::enterprise::{EnterpriseDsl, EnterpriseError};
 use crate::platform::locator::UtilityType;
 use crate::platform::process::ProcessError;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::use_cases::build_project;
+use crate::use_cases::context::ExecutionContext;
+use crate::use_cases::request::{
+    BuildRequest as BuildArgs, TestRequest as TestArgs, TestScopeRequest as TestScope,
+};
+use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
 use tracing::info;
 
-const TEST_COMMAND: &str = "test";
 const STACK_TRACE_LIMIT: usize = 500;
 
-pub fn execute(config: &AppConfig, args: &TestArgs, presenter: &Presenter) -> Result<(), AppError> {
-    let result = match run_tests(config, args) {
-        Ok(result) => result,
-        Err((error, result)) => {
-            if presenter.is_json() {
-                presenter.print_envelope(&build_envelope(result.clone(), false));
-            } else {
-                render_text_result(&result, presenter);
-                presenter.print_error(&error.to_string());
-            }
-            return Err(error);
-        }
-    };
-
-    if presenter.is_json() {
-        presenter.print_envelope(&build_envelope(result.clone(), true));
-    } else {
-        render_text_result(&result, presenter);
-    }
-
-    Ok(())
+pub fn execute(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    args: &TestArgs,
+) -> UseCaseResult<TestRunResult> {
+    info!(
+        command = context.command().as_str(),
+        transport = ?context.transport(),
+        "executing test use case"
+    );
+    run_tests(config, args)
 }
 
 #[derive(Debug, Serialize)]
@@ -88,10 +79,12 @@ struct RunArtifacts {
     sentinel: PathBuf,
 }
 
+type TestExecutionFailure = UseCaseFailure<TestRunResult>;
+
 fn run_tests(
     config: &AppConfig,
     args: &TestArgs,
-) -> Result<TestRunResult, (AppError, TestRunResult)> {
+) -> UseCaseResult<TestRunResult> {
     let started = Instant::now();
     info!(full = args.full, scope = ?args.scope, "starting test run");
     let mode = if args.full {
@@ -118,7 +111,7 @@ fn run_tests(
                     steps: Vec::new(),
                     duration_ms: started.elapsed().as_millis() as u64,
                 };
-                return Err((error, result));
+                return Err(TestExecutionFailure::with_payload(error, result));
             }
             TestTarget::Module {
                 name: trimmed.to_owned(),
@@ -157,7 +150,7 @@ fn run_tests(
                 steps,
                 duration_ms: started.elapsed().as_millis() as u64,
             };
-            return Err((failure.error, result));
+            return Err(TestExecutionFailure::with_payload(failure.error, result));
         }
     };
     steps.push(StepResult {
@@ -185,7 +178,7 @@ fn run_tests(
                 steps,
                 duration_ms: started.elapsed().as_millis() as u64,
             };
-            return Err((app_error, result));
+            return Err(TestExecutionFailure::with_payload(app_error, result));
         }
     };
 
@@ -206,7 +199,7 @@ fn run_tests(
             steps,
             duration_ms: started.elapsed().as_millis() as u64,
         };
-        return Err((app_error, result));
+        return Err(TestExecutionFailure::with_payload(app_error, result));
     }
 
     info!(path = %artifacts.run_dir.display(), "launching enterprise test run");
@@ -228,7 +221,7 @@ fn run_tests(
                 steps,
                 duration_ms: started.elapsed().as_millis() as u64,
             };
-            return Err((error, result));
+            return Err(TestExecutionFailure::with_payload(error, result));
         }
     };
 
@@ -263,7 +256,7 @@ fn run_tests(
                 steps,
                 duration_ms: started.elapsed().as_millis() as u64,
             };
-            return Err((app_error, result));
+            return Err(TestExecutionFailure::with_payload(app_error, result));
         }
     };
 
@@ -300,7 +293,7 @@ fn run_tests(
                 steps,
                 duration_ms: started.elapsed().as_millis() as u64,
             };
-            return Err((AppError::Runtime(message), result));
+            return Err(TestExecutionFailure::with_payload(AppError::Runtime(message), result));
         }
     };
 
@@ -365,7 +358,7 @@ fn run_tests(
             steps,
             duration_ms: started.elapsed().as_millis() as u64,
         };
-        return Err((
+        return Err(TestExecutionFailure::with_payload(
             AppError::Runtime(if process_failed {
                 format!(
                     "enterprise test run exited with code {}",
@@ -392,71 +385,6 @@ fn run_tests(
         steps,
         duration_ms: started.elapsed().as_millis() as u64,
     })
-}
-
-fn build_envelope(result: TestRunResult, ok: bool) -> Envelope<TestRunResult> {
-    Envelope {
-        ok,
-        command: TEST_COMMAND.to_owned(),
-        duration_ms: result.duration_ms,
-        warnings: result.warnings.clone(),
-        steps: result.steps.clone(),
-        data: result,
-    }
-}
-
-fn render_text_result(result: &TestRunResult, presenter: &Presenter) {
-    let target = match &result.target {
-        TestTarget::All => "all".to_owned(),
-        TestTarget::Module { name } => format!("module {name}"),
-    };
-    presenter.print_info(&format!("Test target: {target}"));
-
-    if let Some(report) = &result.report {
-        presenter.print_info(&format!(
-            "Summary: total={}, passed={}, failed={}, skipped={}, errors={}",
-            report.summary.total,
-            report.summary.passed,
-            report.summary.failed,
-            report.summary.skipped,
-            report.summary.errors
-        ));
-
-        for suite in &report.suites {
-            presenter.print_info(&format!("Suite: {}", suite.name));
-            for case in &suite.cases {
-                presenter.print_info(&format!("  {} {}", status_label(&case.status), case.name));
-                if let Some(message) = &case.failure_message {
-                    presenter.print_info(&format!("    {message}"));
-                }
-                if let Some(trace) = &case.stack_trace {
-                    presenter.print_info(&format!("    {trace}"));
-                }
-            }
-        }
-    }
-
-    for diagnostic in &result.diagnostics {
-        presenter.print_info(&format!("Diagnostic: {diagnostic}"));
-    }
-    for warning in &result.warnings {
-        presenter.print_info(&format!("Warning: {warning}"));
-    }
-
-    if result.ok {
-        presenter.print_ok("Tests completed successfully");
-    } else {
-        presenter.print_info("Tests failed");
-    }
-}
-
-fn status_label(status: &TestStatus) -> &'static str {
-    match status {
-        TestStatus::Passed => "PASSED",
-        TestStatus::Failed => "FAILED",
-        TestStatus::Skipped => "SKIPPED",
-        TestStatus::Error => "ERROR",
-    }
 }
 
 fn build_summary(result: &crate::domain::build::BuildResult) -> String {
@@ -771,8 +699,8 @@ fn set_file_permissions(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_yaxunit_config, compact_report, create_run_artifacts, retain_run_artifacts,
-        sanitize_text, sanitize_text_full, truncate_stack_trace, RunArtifacts,
+        build_yaxunit_config, compact_report, create_run_artifacts, sanitize_text,
+        sanitize_text_full, truncate_stack_trace, RunArtifacts,
     };
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, PlatformToolConfig, SourceFormat, SourceSetConfig,
@@ -781,7 +709,6 @@ mod tests {
     use crate::domain::test::{
         TestCase, TestReport, TestStatus, TestSuite, TestSummary, TestTarget,
     };
-    use std::fs;
     use std::path::PathBuf;
     use tempfile::tempdir;
 

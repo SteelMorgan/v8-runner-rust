@@ -1,38 +1,51 @@
 use std::time::{Duration, Instant};
 
-use crate::cli::args::LaunchArgs;
 use crate::config::model::AppConfig;
 use crate::domain::launch::{LaunchMode, LaunchResult};
-use crate::output::json::Envelope;
-use crate::output::presenter::Presenter;
 use crate::platform::locator::UtilityType;
 use crate::platform::process::ProcessRequest;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
+use crate::use_cases::context::ExecutionContext;
+use crate::use_cases::request::LaunchRequest as LaunchArgs;
+use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
+use tracing::info;
 
 const LAUNCH_STARTUP_PROBE: Duration = Duration::from_millis(250);
 
 pub fn execute(
+    context: &ExecutionContext,
     config: &AppConfig,
     args: &LaunchArgs,
-    presenter: &Presenter,
-) -> Result<(), AppError> {
+) -> UseCaseResult<LaunchResult> {
+    info!(
+        command = context.command().as_str(),
+        transport = ?context.transport(),
+        mode = args.mode.as_str(),
+        "executing launch use case"
+    );
     let started = Instant::now();
     let (mode, utility, command_mode) = match args.mode.as_str() {
         "designer" => (LaunchMode::Designer, UtilityType::V8, "DESIGNER"),
         "thin" => (LaunchMode::Thin, UtilityType::V8C, "ENTERPRISE"),
         "thick" => (LaunchMode::Thick, UtilityType::V8, "ENTERPRISE"),
         other => {
-            return Err(AppError::Validation(format!(
-                "unsupported launch mode: {other}"
-            )));
+            return Err(UseCaseFailure::without_payload(
+                AppError::Validation(format!("unsupported launch mode: {other}")),
+                failure_result(other, started, None, None),
+            ));
         }
     };
 
     let mut utilities = PlatformUtilities::from_config(config);
     let location = utilities
         .locate(utility)
-        .map_err(|e| AppError::Platform(e.to_string()))?;
+        .map_err(|e| {
+            UseCaseFailure::without_payload(
+                AppError::Platform(e.to_string()),
+                failure_result(args.mode.as_str(), started, None, None),
+            )
+        })?;
 
     let mut process_args = vec![command_mode.to_owned()];
     process_args.extend(config.v8_connection().args());
@@ -47,7 +60,12 @@ pub fn execute(
             stderr_log_path: None,
             startup_probe: Some(LAUNCH_STARTUP_PROBE),
         })
-        .map_err(|e| AppError::Platform(e.to_string()))?;
+        .map_err(|e| {
+            UseCaseFailure::without_payload(
+                AppError::Platform(e.to_string()),
+                failure_result(args.mode.as_str(), started, Some(location.path.clone()), None),
+            )
+        })?;
 
     let result = LaunchResult {
         ok: true,
@@ -60,19 +78,28 @@ pub fn execute(
             spawned.binary.display(),
             spawned.pid
         )),
+        duration_ms: started.elapsed().as_millis() as u64,
     };
+    Ok(result)
+}
 
-    let duration_ms = started.elapsed().as_millis() as u64;
-    if presenter.is_json() {
-        presenter.print_envelope(&Envelope::ok("launch", duration_ms, result));
-    } else {
-        presenter.print_ok(
-            result
-                .message
-                .as_deref()
-                .unwrap_or("Launched application successfully"),
-        );
+fn failure_result(
+    mode: &str,
+    started: Instant,
+    binary: Option<std::path::PathBuf>,
+    message: Option<String>,
+) -> LaunchResult {
+    let mode = match mode {
+        "thin" => LaunchMode::Thin,
+        "thick" => LaunchMode::Thick,
+        _ => LaunchMode::Designer,
+    };
+    LaunchResult {
+        ok: false,
+        mode,
+        pid: None,
+        binary: binary.unwrap_or_default(),
+        message,
+        duration_ms: started.elapsed().as_millis() as u64,
     }
-
-    Ok(())
 }

@@ -2,14 +2,15 @@
 
 ## Overview
 
-`v8-test-runner` is a Rust CLI for orchestrating local 1C platform operations. The current codebase is organized into six main layers:
+`v8-test-runner` is a Rust CLI for orchestrating local 1C platform operations. The current codebase is organized into seven main layers:
 
-1. `cli` parses arguments and defines the public command surface.
+1. `cli` parses arguments, maps them into transport-neutral requests, and owns command-level text/json rendering.
 2. `config` loads and validates YAML configuration.
-3. `domain` defines structured result types for commands.
-4. `platform` contains process execution, utility discovery, connection argument building, and low-level 1C adapters.
-5. `use_cases` coordinates command execution and presentation.
-6. `change_detection`, `parsers`, and `support` provide shared subsystems and utilities.
+3. `domain` defines structured result types for commands plus shared execution step structs.
+4. `use_cases` owns transport-neutral requests, `ExecutionContext`, structured failures, and business orchestration.
+5. `platform` contains process execution, utility discovery, connection argument building, and low-level 1C adapters.
+6. `output` contains CLI presentation primitives such as `Presenter` and `Envelope`.
+7. `change_detection`, `parsers`, and `support` provide shared subsystems and utilities.
 
 ## Current Platform Layer
 
@@ -23,6 +24,17 @@ The platform layer is intentionally split so responsibilities do not bleed into 
 - `platform::ibcmd` is the low-level DSL for `ibcmd`, returning `PlatformCommandResult` with stdout/stderr diagnostics (no `/Out` log).
 
 This boundary is designed so Wave 2 can add an EDT-specific interactive runner without replacing the locator API or the standard execution path.
+
+## Command Boundary
+
+The CLI/runtime boundary is now split explicitly:
+
+- `app.rs` owns bootstrap concerns only: config loading, logging setup, log cleanup, and top-level error envelopes for pre-command failures.
+- `cli::execute` converts `clap` args into transport-neutral request structs and renders command success/failure output.
+- `use_cases::{request,context,result}` define the transport-neutral contract that both CLI and future MCP adapters can consume.
+- `use_cases/*.rs` no longer depend on `clap`, `Presenter`, or `Envelope`.
+
+This keeps current CLI behavior intact while reserving a stable internal API for MCP stdio/HTTP adapters.
 
 ## Backend Dispatch
 
@@ -38,10 +50,11 @@ Constraints to keep in mind:
 
 ## Output Flow
 
-Use cases produce structured domain results and hand them to the presenter:
+Use cases now return transport-neutral payloads or structured failures.
 
-- JSON mode emits the common `Envelope<T>`.
-- Text mode stays command-specific and is currently formatted directly in the use case when richer human-readable output is needed, such as `launch`.
+- `cli::execute` converts successful command payloads into `Envelope<T>` for JSON mode.
+- `cli::execute` preserves command-specific text formatting for build, test, dump, syntax, and launch.
+- Failure payload emission is also decided at the adapter boundary, which keeps `launch --output json` failure semantics unchanged while allowing other commands to keep structured JSON failures.
 
 ## Working Directories
 

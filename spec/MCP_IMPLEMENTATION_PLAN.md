@@ -1,0 +1,115 @@
+# Поэтапный план реализации MCP
+
+## Summary
+
+- Добавить в текущий бинарь отдельные режимы `v8-test-runner mcp serve stdio` и `v8-test-runner mcp serve http`.
+- Реализовать MCP поверх `rmcp`, сохранив 8 tool-методов и входную семантику из `kotlin-example/.../McpServer.kt`.
+- Не переиспользовать CLI `Envelope` и `clap`-типы в MCP. Ввести transport-neutral request/service слой и отдельные MCP result structs.
+- Включить в MCP-этап недостающий функциональный gap: `dump_config` в режиме `PARTIAL`.
+- Для MCP path добавить shared EDT interactive session как bounded actor; CLI path оставить на текущем one-shot поведении.
+
+## Stage 1. Foundation And Contract Layer
+
+- [x] 2026-03-20: Ввести transport-neutral request/result слой и `ExecutionContext`, чтобы use case-ы не зависели от `clap`, `Presenter` и `Envelope`.
+  - Добавлены transport-neutral request DTO, `ExecutionContext`, shared use-case failure contract и CLI adapter boundary.
+  - CLI rendering сохранен в `cli::execute`, а bootstrap error rendering оставлен в `app.rs`.
+- Добавить MCP-facing service layer с явными structured business failures.
+- Расширить config:
+  - `mcp.http.bind_address`
+  - `mcp.http.path`
+  - `mcp.http.stateful_sessions`
+  - `mcp.http.max_sessions`
+  - `mcp.http.idle_ttl_secs`
+  - `mcp.execution.max_concurrent_calls`
+  - `mcp.execution.shutdown_grace_period_secs`
+  - `tools.edt_cli.startup_timeout_ms`
+  - `tools.edt_cli.command_timeout_ms`
+- Реализовать contract normalization:
+  - tri-state для `allExtensions`
+  - pre-validation для `checkUseSynchronousCalls` и `checkUseModality`
+  - полный alias set для `launch_app`, включая `тонкий` и `толстый`
+  - явное product-расхождение: `dump_config(mode=null)` в MCP трактуется как `INCREMENTAL`
+- Закрыть functional gap: `dump_config(PARTIAL)` для `DESIGNER`; для `IBCMD` сделать degraded fallback с warning и сохранением requested mode `PARTIAL`.
+
+## Stage 2. MCP stdio MVP
+
+- Добавить `v8-test-runner mcp serve stdio`.
+- Поднять `rmcp` tool server только с tools-capability, без resources и prompts.
+- Опубликовать все 8 tools через MCP adapter поверх нового service layer.
+- Зафиксировать правило `stdout reserved for MCP`:
+  - никакого tracing/stdout логирования
+  - panic hook в stderr
+  - subprocess stdout/stderr только captured или null
+- Добавить bounded execution через semaphore и per-call timeout/cancel semantics для MCP path.
+- На этом этапе EDT tools могут работать через текущий one-shot path, но уже через новый MCP adapter.
+
+## Stage 3. Shared EDT Session For MCP
+
+- Реализовать `InteractiveProcessExecutor` для `1cedtcli`.
+- Добавить `EdtSessionManager` как single shared actor для MCP mode:
+  - single-flight startup
+  - FIFO queue
+  - bounded admission
+  - per-command deadline
+  - restart-on-timeout или hang
+  - explicit error model для queued и cancelled requests
+- Перед каждой EDT-командой делать baseline/reset check, чтобы не было межсессионной утечки интерактивного состояния.
+- Во время shutdown или restart queued jobs отменять сразу единым business error.
+- MCP path переключить на shared EDT actor; CLI path оставить без изменений.
+
+## Stage 4. HTTP Transport
+
+- Добавить `v8-test-runner mcp serve http`.
+- Поднять `axum` + `rmcp` streamable HTTP transport.
+- Явно зафиксировать HTTP defaults:
+  - `bind_address=127.0.0.1:3000`
+  - `path=/mcp`
+  - `stateful_sessions=true`
+  - `max_sessions=64`
+  - `idle_ttl_secs=900`
+- Проверить session semantics:
+  - reuse `Mcp-Session-Id`
+  - sticky shared app context
+  - deterministic behavior for missing или expired session
+- Shared EDT actor используется и для HTTP, без создания отдельных EDT processes per MCP session.
+
+## Stage 5. Hardening And Docs
+
+- Добавить stress и regression suite:
+  - contract tests на `list_tools`
+  - integration tests на все 8 tools
+  - stdio cleanliness tests
+  - HTTP session lifecycle tests
+  - EDT timeout/restart/isolation tests
+  - `dump PARTIAL` matrix for `DESIGNER` and `IBCMD`
+- Добавить runtime metrics и tracing:
+  - semaphore wait time
+  - EDT queue depth
+  - restart count
+  - shutdown drain stats
+- Оформить migration note для расхождения `dump_config(mode=null)` с текущим Kotlin code path.
+- Сохранять этот документ как основной staged plan для MCP-работ.
+
+## Public Changes
+
+- Новый CLI surface:
+  - `v8-test-runner mcp serve stdio`
+  - `v8-test-runner mcp serve http`
+- Новые config keys в `mcp.*` и `tools.edt_cli.*`.
+- Новый внутренний transport-neutral API между CLI/MCP и use case-слоем.
+- Новый shared EDT actor только для MCP path.
+
+## Test Plan
+
+- Stage 1: unit tests на use-case boundary, CLI request mapping, bootstrap error parity, launch JSON failure parity, normalization, validation, alias matrix, partial dump semantics.
+- Stage 2: MCP stdio integration tests, protocol-clean stdout tests, business-vs-transport error boundary tests.
+- Stage 3: EDT actor tests, timeout/restart tests, queue cancellation tests, A->B isolation tests.
+- Stage 4: HTTP session tests, TTL/eviction tests, stateful behavior tests.
+- Stage 5: full regression and stress suite.
+
+## Assumptions
+
+- Сохраняется Kotlin tool surface, но не byte-for-byte DTO parity.
+- `dump_config(mode=null -> INCREMENTAL)` остается осознанным продуктовым решением, а не случайной несовместимостью.
+- HTTP transport локально-ориентирован; remote auth layer в этот этап не входит.
+- Если baseline test suite остается частично красным из-за уже существующего unrelated дефекта, MCP acceptance не блокируется на нем.

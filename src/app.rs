@@ -2,6 +2,7 @@ use clap::Parser;
 use tracing::{error, info};
 
 use crate::cli::args::{Cli, Command};
+use crate::cli::execute;
 use crate::config::loader::load_config;
 use crate::output::presenter::Presenter;
 
@@ -57,11 +58,8 @@ pub fn run() -> i32 {
     }
 
     let result = match &cli.command {
-        Command::Build(args) => crate::use_cases::build_project::execute(&config, args, &presenter),
-        Command::Test(args) => crate::use_cases::run_tests::execute(&config, args, &presenter),
-        Command::Dump(args) => crate::use_cases::dump_config::execute(&config, args, &presenter),
-        Command::Syntax(args) => crate::use_cases::check_syntax::execute(&config, args, &presenter),
-        Command::Launch(args) => crate::use_cases::launch_app::execute(&config, args, &presenter),
+        Command::Build(_) | Command::Test(_) | Command::Dump(_) | Command::Syntax(_)
+        | Command::Launch(_) => execute::execute_command(&config, &cli.command, &presenter),
     };
 
     match result {
@@ -73,9 +71,6 @@ pub fn run() -> i32 {
             0
         }
         Err(e) => {
-            if !presenter.is_json() {
-                presenter.print_error(&e.to_string());
-            }
             error!("{e}");
             e.exit_code()
         }
@@ -83,11 +78,5 @@ pub fn run() -> i32 {
 }
 
 fn command_name(command: &Command) -> &'static str {
-    match command {
-        Command::Build(_) => "build",
-        Command::Test(_) => "test",
-        Command::Dump(_) => "dump",
-        Command::Syntax(_) => "syntax",
-        Command::Launch(_) => "launch",
-    }
+    execute::command_name(command).as_str()
 }

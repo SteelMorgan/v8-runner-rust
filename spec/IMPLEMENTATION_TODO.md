@@ -140,5 +140,5 @@
 - [ ] Нормализовать result types для build/test/dump/syntax/launch
 - [x] Добавить `steps` в output envelope
 - [x] Добавить `warnings` в output envelope
-- [ ] Убедиться, что use cases не зависят от CLI parsing
-- [ ] Оставить место для будущего transport adapter слоя
+- [x] Убедиться, что use cases не зависят от CLI parsing
+- [x] Оставить место для будущего transport adapter слоя

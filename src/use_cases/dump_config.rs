@@ -5,14 +5,11 @@ use std::time::{Duration, Instant};
 use sha2::{Digest, Sha256};
 
 use crate::change_detection::source_sets::SourceSetsService;
-use crate::cli::args::DumpArgs;
 use crate::config::model::{
     AppConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
 };
 use crate::domain::dump::{DumpMode, DumpResult};
 use crate::domain::source_set::SourceSetContext;
-use crate::output::json::Envelope;
-use crate::output::presenter::Presenter;
 use crate::platform::designer::DesignerDsl;
 use crate::platform::ibcmd::{IbcmdConnection, IbcmdDsl, IbcmdError};
 use crate::platform::locator::UtilityType;
@@ -25,47 +22,33 @@ use crate::support::fs::{
     remove_path_if_exists, replace_dir_atomically, write_temp_dir_metadata, TempDirKind,
 };
 use crate::support::temp::platform_logs_dir;
+use crate::use_cases::context::ExecutionContext;
+use crate::use_cases::request::DumpRequest as DumpArgs;
+use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
 use tracing::info;
 
-const DUMP_COMMAND: &str = "dump";
+#[cfg(test)]
+const DUMP_COMMAND: &str = crate::use_cases::context::CommandName::Dump.as_str();
 const SUPPORTED_DUMP_ERROR: &str =
     "dump currently supports only builder=DESIGNER or IBCMD with format=DESIGNER";
 const PARTIAL_DEFERRED_ERROR: &str =
     "dump mode 'partial' is deferred to a later stage and is not implemented yet";
 const ORPHAN_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
-pub fn execute(config: &AppConfig, args: &DumpArgs, presenter: &Presenter) -> Result<(), AppError> {
-    let result = match run_dump(config, args) {
-        Ok(result) => result,
-        Err(failure) => {
-            if presenter.is_json() {
-                presenter.print_envelope(&Envelope::err(
-                    DUMP_COMMAND,
-                    failure.result.duration_ms,
-                    failure.result.clone(),
-                ));
-            } else {
-                render_text_result(&failure.result, presenter, false);
-                presenter.print_error(&failure.error.to_string());
-            }
-            return Err(failure.error);
-        }
-    };
-
-    if presenter.is_json() {
-        presenter.print_envelope(&Envelope::ok(DUMP_COMMAND, result.duration_ms, result));
-    } else {
-        render_text_result(&result, presenter, true);
-    }
-
-    Ok(())
+pub fn execute(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    args: &DumpArgs,
+) -> UseCaseResult<DumpResult> {
+    info!(
+        command = context.command().as_str(),
+        transport = ?context.transport(),
+        "executing dump use case"
+    );
+    run_dump(config, args)
 }
 
-#[derive(Debug)]
-struct DumpExecutionFailure {
-    error: AppError,
-    result: DumpResult,
-}
+type DumpExecutionFailure = UseCaseFailure<DumpResult>;
 
 #[derive(Debug, Clone)]
 struct ResolvedDumpTarget {
@@ -79,7 +62,7 @@ struct ResolvedDumpTarget {
     lock_path: PathBuf,
 }
 
-fn run_dump(config: &AppConfig, args: &DumpArgs) -> Result<DumpResult, DumpExecutionFailure> {
+fn run_dump(config: &AppConfig, args: &DumpArgs) -> UseCaseResult<DumpResult> {
     let started = Instant::now();
     let mode = parse_mode(&args.mode);
     info!(
@@ -90,9 +73,9 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> Result<DumpResult, DumpExecu
     );
 
     if let Some(error) = validate_supported_matrix(config) {
-        return Err(DumpExecutionFailure {
+        return Err(DumpExecutionFailure::with_payload(
             error,
-            result: empty_result(
+            empty_result(
                 mode,
                 started,
                 None,
@@ -100,13 +83,13 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> Result<DumpResult, DumpExecu
                 None,
                 Some(SUPPORTED_DUMP_ERROR.to_owned()),
             ),
-        });
+        ));
     }
 
     if !args.objects.is_empty() {
-        return Err(DumpExecutionFailure {
-            error: AppError::Validation("dump objects are not supported in this stage".to_owned()),
-            result: empty_result(
+        return Err(DumpExecutionFailure::with_payload(
+            AppError::Validation("dump objects are not supported in this stage".to_owned()),
+            empty_result(
                 mode,
                 started,
                 None,
@@ -114,13 +97,13 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> Result<DumpResult, DumpExecu
                 None,
                 Some("objects are not supported for dump in this stage".to_owned()),
             ),
-        });
+        ));
     }
 
     if mode == DumpMode::Partial {
-        return Err(DumpExecutionFailure {
-            error: AppError::Validation(PARTIAL_DEFERRED_ERROR.to_owned()),
-            result: empty_result(
+        return Err(DumpExecutionFailure::with_payload(
+            AppError::Validation(PARTIAL_DEFERRED_ERROR.to_owned()),
+            empty_result(
                 mode,
                 started,
                 args.source_set.clone(),
@@ -128,16 +111,16 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> Result<DumpResult, DumpExecu
                 None,
                 Some(PARTIAL_DEFERRED_ERROR.to_owned()),
             ),
-        });
+        ));
     }
 
     let resolved = match resolve_target(config, args) {
         Ok(resolved) => resolved,
         Err(error) => {
             let message = error.to_string();
-            return Err(DumpExecutionFailure {
+            return Err(DumpExecutionFailure::with_payload(
                 error,
-                result: empty_result(
+                empty_result(
                     mode,
                     started,
                     args.source_set.clone(),
@@ -145,7 +128,7 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> Result<DumpResult, DumpExecu
                     None,
                     Some(message),
                 ),
-            });
+            ));
         }
     };
 
@@ -159,9 +142,9 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> Result<DumpResult, DumpExecu
         Err(error) => {
             let message = error.to_string();
             let app_error = AppError::Platform(message.clone());
-            return Err(DumpExecutionFailure {
-                error: app_error,
-                result: empty_result(
+            return Err(DumpExecutionFailure::with_payload(
+                app_error,
+                empty_result(
                     mode,
                     started,
                     Some(resolved.source_set_name.clone()),
@@ -169,7 +152,7 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> Result<DumpResult, DumpExecu
                     Some(resolved.target_path.clone()),
                     Some(message),
                 ),
-            });
+            ));
         }
     };
 
@@ -181,9 +164,9 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> Result<DumpResult, DumpExecu
                 resolved.lock_path.display()
             );
             let app_error = AppError::Runtime(message.clone());
-            return Err(DumpExecutionFailure {
-                error: app_error,
-                result: empty_result(
+            return Err(DumpExecutionFailure::with_payload(
+                app_error,
+                empty_result(
                     mode,
                     started,
                     Some(resolved.source_set_name.clone()),
@@ -191,16 +174,16 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> Result<DumpResult, DumpExecu
                     Some(resolved.target_path.clone()),
                     Some(message),
                 ),
-            });
+            ));
         }
     };
 
     if let Err(error) = cleanup_orphan_dirs(&resolved) {
         let message = format!("failed to cleanup stale dump temp dirs: {error}");
         let app_error = AppError::Runtime(message.clone());
-        return Err(DumpExecutionFailure {
-            error: app_error,
-            result: empty_result(
+        return Err(DumpExecutionFailure::with_payload(
+            app_error,
+            empty_result(
                 mode,
                 started,
                 Some(resolved.source_set_name.clone()),
@@ -208,14 +191,14 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> Result<DumpResult, DumpExecu
                 Some(resolved.target_path.clone()),
                 Some(message),
             ),
-        });
+        ));
     }
 
     if let Err(error) = validate_publish_target(&resolved) {
         let message = error.to_string();
-        return Err(DumpExecutionFailure {
+        return Err(DumpExecutionFailure::with_payload(
             error,
-            result: empty_result(
+            empty_result(
                 mode,
                 started,
                 Some(resolved.source_set_name.clone()),
@@ -223,7 +206,7 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> Result<DumpResult, DumpExecu
                 Some(resolved.target_path.clone()),
                 Some(message),
             ),
-        });
+        ));
     }
 
     let result = match (&mode, &config.builder) {
@@ -268,9 +251,9 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> Result<DumpResult, DumpExecu
         }),
         Err(error) => {
             let message = error.to_string();
-            Err(DumpExecutionFailure {
+            Err(DumpExecutionFailure::with_payload(
                 error,
-                result: DumpResult {
+                DumpResult {
                     ok: false,
                     source_set: Some(resolved.source_set_name),
                     extension: resolved.extension,
@@ -280,7 +263,7 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> Result<DumpResult, DumpExecu
                     duration_ms: started.elapsed().as_millis() as u64,
                     message: Some(message),
                 },
-            })
+            ))
         }
     }
 }
@@ -835,28 +818,6 @@ fn ensure_platform_success(
     Err(AppError::Platform(details.join("; ")))
 }
 
-fn render_text_result(result: &DumpResult, presenter: &Presenter, succeeded: bool) {
-    let mode = match result.mode {
-        DumpMode::Full => "full",
-        DumpMode::Incremental => "incremental",
-        DumpMode::Partial => "partial",
-    };
-    let source_set = result.source_set.as_deref().unwrap_or("<unresolved>");
-    presenter.print_info(&format!(
-        "{source_set}: {mode} -> {}",
-        result.target_path.display()
-    ));
-    if let Some(message) = result.message.as_deref() {
-        presenter.print_info(message);
-    }
-
-    if succeeded {
-        presenter.print_ok("Dump completed successfully");
-    } else {
-        presenter.print_info("Dump failed");
-    }
-}
-
 fn empty_result(
     mode: DumpMode,
     started: Instant,
@@ -890,7 +851,6 @@ mod tests {
         validate_supported_matrix, DUMP_COMMAND, ORPHAN_TTL, PARTIAL_DEFERRED_ERROR,
         SUPPORTED_DUMP_ERROR,
     };
-    use crate::cli::args::DumpArgs;
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, PlatformToolConfig, SourceFormat, SourceSetConfig,
         SourceSetPurpose, TestsConfig, ToolsConfig,
@@ -901,6 +861,8 @@ mod tests {
     use crate::support::fs::{
         acquire_advisory_lock, read_temp_dir_metadata, write_temp_dir_metadata, TempDirKind,
     };
+    use crate::use_cases::request::DumpRequest as DumpArgs;
+    use crate::use_cases::result::UseCaseErrorKind;
     use std::fs;
     use std::os::unix::fs::{symlink, PermissionsExt};
     use std::path::{Path, PathBuf};
@@ -1061,9 +1023,8 @@ mod tests {
         )
         .expect_err("failure");
 
-        assert!(
-            matches!(failure.error, AppError::Validation(ref msg) if msg == SUPPORTED_DUMP_ERROR)
-        );
+        assert_eq!(failure.error.kind(), UseCaseErrorKind::Validation);
+        assert_eq!(failure.error.message(), SUPPORTED_DUMP_ERROR);
     }
 
     #[test]
@@ -1096,9 +1057,8 @@ mod tests {
         )
         .expect_err("failure");
 
-        assert!(
-            matches!(failure.error, AppError::Validation(ref msg) if msg == PARTIAL_DEFERRED_ERROR)
-        );
+        assert_eq!(failure.error.kind(), UseCaseErrorKind::Validation);
+        assert_eq!(failure.error.message(), PARTIAL_DEFERRED_ERROR);
     }
 
     #[test]
@@ -1120,7 +1080,7 @@ mod tests {
         )
         .expect_err("failure");
 
-        assert!(matches!(failure.error, AppError::Validation(_)));
+        assert_eq!(failure.error.kind(), UseCaseErrorKind::Validation);
     }
 
     #[test]
@@ -1352,7 +1312,7 @@ mod tests {
         )
         .expect_err("failure");
 
-        assert!(matches!(failure.error, AppError::Platform(_)));
+        assert_eq!(failure.error.kind(), UseCaseErrorKind::Platform);
         assert_eq!(
             fs::read_to_string(base.join("main").join("old.txt")).expect("old"),
             "keep me"
@@ -1439,7 +1399,7 @@ mod tests {
         )
         .expect_err("failure");
 
-        assert!(matches!(failure.error, AppError::Platform(_)));
+        assert_eq!(failure.error.kind(), UseCaseErrorKind::Platform);
         assert_eq!(
             fs::read_to_string(base.join("main").join("old.txt")).expect("old"),
             "keep me"

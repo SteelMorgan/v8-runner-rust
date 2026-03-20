@@ -40,3 +40,11 @@ tests:
 ```
 
 - `execution_timeout_seconds` controls the hard timeout for the Enterprise test run.
+
+## Internal Boundary
+
+The CLI now uses a transport-neutral use-case contract internally:
+
+- `cli::execute` maps parsed CLI args into request DTOs and renders the final text/json output.
+- `use_cases` no longer depend on `clap`, `Presenter`, or `Envelope`.
+- This is preparatory work for the upcoming MCP adapters without changing the public CLI surface.

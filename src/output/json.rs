@@ -1,6 +1,8 @@
 use chrono::Utc;
 use serde::Serialize;
 
+use crate::domain::execution::StepResult;
+
 #[derive(Debug, Serialize)]
 pub struct Envelope<T: Serialize> {
     pub ok: bool,
@@ -9,15 +11,6 @@ pub struct Envelope<T: Serialize> {
     pub data: T,
     pub warnings: Vec<String>,
     pub steps: Vec<StepResult>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct StepResult {
-    pub name: String,
-    pub ok: bool,
-    pub duration_ms: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
 }
 
 impl<T: Serialize> Envelope<T> {

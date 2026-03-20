@@ -15,6 +15,9 @@ pub struct LaunchResult {
     pub binary: PathBuf,
     /// Human-readable launch summary.
     pub message: Option<String>,
+    /// Internal envelope duration for CLI adapters.
+    #[serde(skip)]
+    pub duration_ms: u64,
 }
 
 /// Supported application launch modes.

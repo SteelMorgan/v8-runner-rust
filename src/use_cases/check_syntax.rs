@@ -3,14 +3,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::change_detection::source_sets::SourceSetsService;
-use crate::cli::args::{
-    DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs, SyntaxArgs, SyntaxTarget,
-};
 use crate::config::model::{AppConfig, BuilderBackend, SourceFormat, SourceSetConfig};
 use crate::domain::issue::{EdtIssue, Issue, IssueSeverity, ObjectIssue};
 use crate::domain::syntax::{SyntaxCheckResult, SyntaxCheckStatus, SyntaxIssueSummary};
-use crate::output::json::Envelope;
-use crate::output::presenter::Presenter;
 use crate::parsers::designer_validation;
 use crate::parsers::edt_validation;
 use crate::platform::designer::DesignerDsl;
@@ -20,9 +15,15 @@ use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::support::temp::platform_logs_dir;
+use crate::use_cases::context::ExecutionContext;
+use crate::use_cases::request::{
+    DesignerConfigSyntaxRequest as DesignerConfigSyntaxArgs,
+    DesignerModulesSyntaxRequest as DesignerModulesSyntaxArgs, SyntaxRequest as SyntaxArgs,
+    SyntaxTargetRequest as SyntaxTarget,
+};
+use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
 use tracing::info;
 
-const SYNTAX_COMMAND: &str = "syntax";
 const SUPPORTED_DESIGNER_SYNTAX_ERROR: &str =
     "syntax currently supports only builder=DESIGNER and format=DESIGNER";
 const SUPPORTED_EDT_SYNTAX_ERROR: &str =
@@ -30,41 +31,19 @@ const SUPPORTED_EDT_SYNTAX_ERROR: &str =
 static LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub fn execute(
+    context: &ExecutionContext,
     config: &AppConfig,
     args: &SyntaxArgs,
-    presenter: &Presenter,
-) -> Result<(), AppError> {
-    let result = match run_syntax(config, args) {
-        Ok(result) => result,
-        Err(failure) => {
-            if presenter.is_json() {
-                presenter.print_envelope(&Envelope::err(
-                    SYNTAX_COMMAND,
-                    failure.result.duration_ms,
-                    failure.result.clone(),
-                ));
-            } else {
-                render_text_result(&failure.result, presenter);
-                presenter.print_error(&failure.error.to_string());
-            }
-            return Err(failure.error);
-        }
-    };
-
-    if presenter.is_json() {
-        presenter.print_envelope(&Envelope::ok(SYNTAX_COMMAND, result.duration_ms, result));
-    } else {
-        render_text_result(&result, presenter);
-    }
-
-    Ok(())
+) -> UseCaseResult<SyntaxCheckResult> {
+    info!(
+        command = context.command().as_str(),
+        transport = ?context.transport(),
+        "executing syntax use case"
+    );
+    run_syntax(config, args)
 }
 
-#[derive(Debug)]
-struct SyntaxExecutionFailure {
-    error: AppError,
-    result: SyntaxCheckResult,
-}
+type SyntaxExecutionFailure = UseCaseFailure<SyntaxCheckResult>;
 
 #[derive(Debug)]
 struct DesignerInvocation {
@@ -90,7 +69,7 @@ impl DesignerCommandKind {
 fn run_syntax(
     config: &AppConfig,
     args: &SyntaxArgs,
-) -> Result<SyntaxCheckResult, SyntaxExecutionFailure> {
+) -> UseCaseResult<SyntaxCheckResult> {
     let started = Instant::now();
     if let SyntaxTarget::Edt { projects } = &args.target {
         return run_edt_syntax(config, projects, started);
@@ -100,8 +79,9 @@ fn run_syntax(
         Ok(invocation) => invocation,
         Err((kind, error)) => {
             let error_message = error.to_string();
-            return Err(SyntaxExecutionFailure {
-                result: failed_result(
+            return Err(SyntaxExecutionFailure::with_payload(
+                error,
+                failed_result(
                     kind.check_name(),
                     SyntaxCheckStatus::ToolFailed,
                     -1,
@@ -111,25 +91,25 @@ fn run_syntax(
                     Some(error_message),
                     None,
                 ),
-                error,
-            });
+            ));
         }
     };
 
     if let Some(error) = validate_designer_supported_matrix(config) {
-        return Err(SyntaxExecutionFailure {
-            result: failed_result(
+        let error_message = error.to_string();
+        return Err(SyntaxExecutionFailure::with_payload(
+            error,
+            failed_result(
                 invocation.kind.check_name(),
                 SyntaxCheckStatus::ToolFailed,
                 -1,
                 started,
                 vec![],
                 None,
-                Some(error.to_string()),
+                Some(error_message),
                 None,
             ),
-            error,
-        });
+        ));
     }
 
     info!(
@@ -144,19 +124,20 @@ fn run_syntax(
                 "failed to prepare syntax platform logs directory '{}': {error}",
                 config.work_path.display()
             ));
-            return Err(SyntaxExecutionFailure {
-                result: failed_result(
+            let error_message = app_error.to_string();
+            return Err(SyntaxExecutionFailure::with_payload(
+                app_error,
+                failed_result(
                     invocation.kind.check_name(),
                     SyntaxCheckStatus::ToolFailed,
                     -1,
                     started,
                     vec![],
                     None,
-                    Some(app_error.to_string()),
+                    Some(error_message),
                     None,
                 ),
-                error: app_error,
-            });
+            ));
         }
     };
 
@@ -169,8 +150,9 @@ fn run_syntax(
         Err(error) => {
             let message = error.to_string();
             let app_error = AppError::Platform(message.clone());
-            return Err(SyntaxExecutionFailure {
-                result: failed_result(
+            return Err(SyntaxExecutionFailure::with_payload(
+                app_error,
+                failed_result(
                     invocation.kind.check_name(),
                     SyntaxCheckStatus::ToolFailed,
                     -1,
@@ -180,8 +162,7 @@ fn run_syntax(
                     Some(message),
                     Some(log_path),
                 ),
-                error: app_error,
-            });
+            ));
         }
     };
 
@@ -204,8 +185,9 @@ fn run_syntax(
         Err(error) => {
             let message = error.to_string();
             let app_error = AppError::Platform(message.clone());
-            return Err(SyntaxExecutionFailure {
-                result: failed_result(
+            return Err(SyntaxExecutionFailure::with_payload(
+                app_error,
+                failed_result(
                     invocation.kind.check_name(),
                     SyntaxCheckStatus::ToolFailed,
                     -1,
@@ -215,8 +197,7 @@ fn run_syntax(
                     Some(message),
                     Some(log_path),
                 ),
-                error: app_error,
-            });
+            ));
         }
     };
 
@@ -224,13 +205,13 @@ fn run_syntax(
     match result.status {
         SyntaxCheckStatus::Clean => Ok(result),
         SyntaxCheckStatus::IssuesFound | SyntaxCheckStatus::ToolFailed => {
-            Err(SyntaxExecutionFailure {
-                error: AppError::Runtime(format!(
+            Err(SyntaxExecutionFailure::with_payload(
+                AppError::Runtime(format!(
                     "syntax check '{}' finished with status {:?} (exit code {})",
                     result.check_name, result.status, result.exit_code
                 )),
                 result,
-            })
+            ))
         }
     }
 }
@@ -412,39 +393,41 @@ fn run_edt_syntax(
     config: &AppConfig,
     projects: &[String],
     started: Instant,
-) -> Result<SyntaxCheckResult, SyntaxExecutionFailure> {
+) -> UseCaseResult<SyntaxCheckResult> {
     if let Some(error) = validate_edt_supported_matrix(config) {
-        return Err(SyntaxExecutionFailure {
-            result: failed_result(
+        let error_message = error.to_string();
+        return Err(SyntaxExecutionFailure::with_payload(
+            error,
+            failed_result(
                 "edt",
                 SyntaxCheckStatus::ToolFailed,
                 -1,
                 started,
                 vec![],
                 None,
-                Some(error.to_string()),
+                Some(error_message),
                 None,
             ),
-            error,
-        });
+        ));
     }
 
     let source_sets = match resolve_edt_source_sets(config, projects) {
         Ok(source_sets) => source_sets,
         Err(error) => {
-            return Err(SyntaxExecutionFailure {
-                result: failed_result(
+            let error_message = error.to_string();
+            return Err(SyntaxExecutionFailure::with_payload(
+                error,
+                failed_result(
                     "edt",
                     SyntaxCheckStatus::ToolFailed,
                     -1,
                     started,
                     vec![],
                     None,
-                    Some(error.to_string()),
+                    Some(error_message),
                     None,
                 ),
-                error,
-            });
+            ));
         }
     };
 
@@ -455,19 +438,20 @@ fn run_edt_syntax(
                 "failed to prepare syntax platform logs directory '{}': {error}",
                 config.work_path.display()
             ));
-            return Err(SyntaxExecutionFailure {
-                result: failed_result(
+            let error_message = app_error.to_string();
+            return Err(SyntaxExecutionFailure::with_payload(
+                app_error,
+                failed_result(
                     "edt",
                     SyntaxCheckStatus::ToolFailed,
                     -1,
                     started,
                     vec![],
                     None,
-                    Some(app_error.to_string()),
+                    Some(error_message),
                     None,
                 ),
-                error: app_error,
-            });
+            ));
         }
     };
 
@@ -477,8 +461,9 @@ fn run_edt_syntax(
         Err(error) => {
             let message = error.to_string();
             let app_error = AppError::Platform(message.clone());
-            return Err(SyntaxExecutionFailure {
-                result: failed_result(
+            return Err(SyntaxExecutionFailure::with_payload(
+                app_error,
+                failed_result(
                     "edt",
                     SyntaxCheckStatus::ToolFailed,
                     -1,
@@ -488,8 +473,7 @@ fn run_edt_syntax(
                     Some(message),
                     None,
                 ),
-                error: app_error,
-            });
+            ));
         }
     };
 
@@ -518,8 +502,9 @@ fn run_edt_syntax(
             Err(error) => {
                 let message = error.to_string();
                 let app_error = AppError::Platform(message.clone());
-                return Err(SyntaxExecutionFailure {
-                    result: failed_result(
+                return Err(SyntaxExecutionFailure::with_payload(
+                    app_error,
+                    failed_result(
                         "edt",
                         SyntaxCheckStatus::ToolFailed,
                         -1,
@@ -529,8 +514,7 @@ fn run_edt_syntax(
                         Some(message),
                         Some(log_path),
                     ),
-                    error: app_error,
-                });
+                ));
             }
         };
 
@@ -597,13 +581,13 @@ fn run_edt_syntax(
     match result.status {
         SyntaxCheckStatus::Clean => Ok(result),
         SyntaxCheckStatus::IssuesFound | SyntaxCheckStatus::ToolFailed => {
-            Err(SyntaxExecutionFailure {
-                error: AppError::Runtime(format!(
+            Err(SyntaxExecutionFailure::with_payload(
+                AppError::Runtime(format!(
                     "syntax check '{}' finished with status {:?} (exit code {})",
                     result.check_name, result.status, result.exit_code
                 )),
                 result,
-            })
+            ))
         }
     }
 }
@@ -857,93 +841,11 @@ fn fallback_edt_issue(
     })
 }
 
-fn render_text_result(result: &SyntaxCheckResult, presenter: &Presenter) {
-    let summary_line = format!(
-        "{}: {:?} (exit {}, errors {}, warnings {}, info {}, duration {} ms)",
-        result.check_name,
-        result.status,
-        result.exit_code,
-        result.summary.errors,
-        result.summary.warnings,
-        result.summary.info,
-        result.duration_ms
-    );
-
-    match result.status {
-        SyntaxCheckStatus::Clean => presenter.print_ok(&summary_line),
-        SyntaxCheckStatus::IssuesFound | SyntaxCheckStatus::ToolFailed => {
-            presenter.print_info(&summary_line)
-        }
-    }
-
-    for issue in &result.issues {
-        presenter.print_info(&render_issue(issue));
-    }
-
-    if let Some(log_read_warning) = &result.log_read_warning {
-        presenter.print_info(&format!("log warning: {log_read_warning}"));
-    }
-
-    if matches!(result.status, SyntaxCheckStatus::ToolFailed) {
-        if let Some(stderr) = &result.stderr {
-            presenter.print_info(&format!("stderr: {}", stderr.trim()));
-        }
-    }
-}
-
-fn render_issue(issue: &Issue) -> String {
-    match issue {
-        Issue::Module(issue) => {
-            let location = match (issue.line, issue.column) {
-                (Some(line), Some(column)) => format!("{}:{}:{}", issue.path, line, column),
-                (Some(line), None) => format!("{}:{}", issue.path, line),
-                _ => issue.path.clone(),
-            };
-            format!(
-                "{} {} {}",
-                render_severity(&issue.severity),
-                location,
-                issue.message
-            )
-        }
-        Issue::Object(issue) => format!(
-            "{} {} {}",
-            render_severity(&issue.severity),
-            issue.object,
-            issue.message
-        ),
-        Issue::Edt(issue) => {
-            let location = match (issue.line, issue.column) {
-                (Some(line), Some(column)) => format!("{}:{}:{}", issue.path, line, column),
-                (Some(line), None) => format!("{}:{}", issue.path, line),
-                _ => issue.path.clone(),
-            };
-            format!(
-                "{} {} {}",
-                render_severity(&issue.severity),
-                location,
-                issue.message
-            )
-        }
-    }
-}
-
-fn render_severity(severity: &IssueSeverity) -> &'static str {
-    match severity {
-        IssueSeverity::Error => "ERROR",
-        IssueSeverity::Warning => "WARNING",
-        IssueSeverity::Info => "INFO",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         modules_has_modes, normalize_config_flags, normalize_modules_flags, run_syntax,
         status_from_exit_code,
-    };
-    use crate::cli::args::{
-        DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs, SyntaxArgs, SyntaxTarget,
     };
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
@@ -951,7 +853,12 @@ mod tests {
     };
     use crate::domain::issue::Issue;
     use crate::domain::syntax::SyntaxCheckStatus;
-    use crate::support::error::AppError;
+    use crate::use_cases::request::{
+        DesignerConfigSyntaxRequest as DesignerConfigSyntaxArgs,
+        DesignerModulesSyntaxRequest as DesignerModulesSyntaxArgs, SyntaxRequest as SyntaxArgs,
+        SyntaxTargetRequest as SyntaxTarget,
+    };
+    use crate::use_cases::result::UseCaseErrorKind;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
@@ -1123,7 +1030,7 @@ mod tests {
 
         let error = run_syntax(&config, &args).expect_err("expected failure");
 
-        assert!(matches!(error.error, AppError::Validation(_)));
+        assert_eq!(error.error.kind(), UseCaseErrorKind::Validation);
         assert!(error.result.issues.is_empty());
     }
 
@@ -1285,7 +1192,7 @@ mod tests {
 
         let failure = run_syntax(&config, &args).expect_err("expected validation failure");
 
-        assert!(matches!(failure.error, AppError::Validation(_)));
+        assert_eq!(failure.error.kind(), UseCaseErrorKind::Validation);
         assert!(failure
             .error
             .to_string()

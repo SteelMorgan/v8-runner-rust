@@ -222,3 +222,32 @@ fn launch_fails_when_process_exits_during_startup_probe() {
     assert_eq!(output.status.code(), Some(4));
     assert!(String::from_utf8_lossy(&output.stderr).contains("exited before startup completed"));
 }
+
+#[test]
+fn launch_json_failure_keeps_stdout_empty_and_exit_code() {
+    let (_dir, config_path, install_dir, _work_path) = setup_project();
+    let thin = install_dir.join("bin").join("1cv8c");
+    let staged = thin.with_extension("tmp");
+    fs::write(&staged, "#!/bin/sh\nexit 9\n").expect("write");
+    make_executable(&staged);
+    fs::rename(&staged, &thin).expect("rename");
+
+    let output = std::process::Command::cargo_bin("v8-test-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "launch",
+            "--mode",
+            "thin",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(4));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}

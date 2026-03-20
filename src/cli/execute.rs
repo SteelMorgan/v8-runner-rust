@@ -1,0 +1,649 @@
+use crate::cli::args::{
+    BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs, DumpArgs, LaunchArgs,
+    SyntaxArgs, SyntaxTarget, TestArgs, TestScope,
+};
+use crate::config::model::AppConfig;
+use crate::domain::build::{BuildMode, BuildResult};
+use crate::domain::dump::{DumpMode, DumpResult};
+use crate::domain::issue::{Issue, IssueSeverity};
+use crate::domain::syntax::{SyntaxCheckResult, SyntaxCheckStatus};
+use crate::domain::test::{TestRunResult, TestStatus, TestTarget};
+use crate::output::json::Envelope;
+use crate::output::presenter::Presenter;
+use crate::use_cases::build_project;
+use crate::use_cases::check_syntax;
+use crate::use_cases::context::{CommandName, ExecutionContext};
+use crate::use_cases::dump_config;
+use crate::use_cases::launch_app;
+use crate::use_cases::request::{
+    BuildRequest, DesignerConfigSyntaxRequest, DesignerModulesSyntaxRequest, DumpRequest,
+    LaunchRequest, SyntaxRequest, SyntaxTargetRequest, TestRequest, TestScopeRequest,
+};
+use crate::use_cases::result::UseCaseError;
+use crate::use_cases::run_tests;
+
+/// Executes a parsed CLI command by mapping it into transport-neutral requests and
+/// rendering the resulting command output.
+pub fn execute_command(
+    config: &AppConfig,
+    command: &Command,
+    presenter: &Presenter,
+) -> Result<(), UseCaseError> {
+    match command {
+        Command::Build(args) => execute_build(config, args, presenter),
+        Command::Test(args) => execute_test(config, args, presenter),
+        Command::Dump(args) => execute_dump(config, args, presenter),
+        Command::Syntax(args) => execute_syntax(config, args, presenter),
+        Command::Launch(args) => execute_launch(config, args, presenter),
+    }
+}
+
+/// Returns the canonical command identifier for a parsed CLI command.
+pub fn command_name(command: &Command) -> CommandName {
+    match command {
+        Command::Build(_) => CommandName::Build,
+        Command::Test(_) => CommandName::Test,
+        Command::Dump(_) => CommandName::Dump,
+        Command::Syntax(_) => CommandName::Syntax,
+        Command::Launch(_) => CommandName::Launch,
+    }
+}
+
+fn execute_build(
+    config: &AppConfig,
+    args: &BuildArgs,
+    presenter: &Presenter,
+) -> Result<(), UseCaseError> {
+    let request = map_build_request(args);
+    let context = ExecutionContext::cli(CommandName::Build);
+    match build_project::execute(&context, config, &request) {
+        Ok(result) => {
+            if presenter.is_json() {
+                presenter.print_envelope(&Envelope::ok(CommandName::Build.as_str(), result.duration_ms, result));
+            } else {
+                render_build_text(&result, presenter, true);
+            }
+            Ok(())
+        }
+        Err(failure) => {
+            if presenter.is_json() {
+                if failure.emits_payload {
+                    presenter.print_envelope(&Envelope::err(
+                        CommandName::Build.as_str(),
+                        failure.result.duration_ms,
+                        failure.result.clone(),
+                    ));
+                }
+            } else {
+                if failure.emits_payload {
+                    render_build_text(&failure.result, presenter, false);
+                }
+                presenter.print_error(&failure.error.to_string());
+            }
+            Err(failure.error)
+        }
+    }
+}
+
+fn execute_test(
+    config: &AppConfig,
+    args: &TestArgs,
+    presenter: &Presenter,
+) -> Result<(), UseCaseError> {
+    let request = map_test_request(args);
+    let context = ExecutionContext::cli(CommandName::Test);
+    match run_tests::execute(&context, config, &request) {
+        Ok(result) => {
+            if presenter.is_json() {
+                presenter.print_envelope(&build_test_envelope(result.clone(), true));
+            } else {
+                render_test_text(&result, presenter);
+            }
+            Ok(())
+        }
+        Err(failure) => {
+            if presenter.is_json() {
+                if failure.emits_payload {
+                    presenter.print_envelope(&build_test_envelope(failure.result.clone(), false));
+                }
+            } else {
+                if failure.emits_payload {
+                    render_test_text(&failure.result, presenter);
+                }
+                presenter.print_error(&failure.error.to_string());
+            }
+            Err(failure.error)
+        }
+    }
+}
+
+fn execute_dump(
+    config: &AppConfig,
+    args: &DumpArgs,
+    presenter: &Presenter,
+) -> Result<(), UseCaseError> {
+    let request = map_dump_request(args);
+    let context = ExecutionContext::cli(CommandName::Dump);
+    match dump_config::execute(&context, config, &request) {
+        Ok(result) => {
+            if presenter.is_json() {
+                presenter.print_envelope(&Envelope::ok(CommandName::Dump.as_str(), result.duration_ms, result));
+            } else {
+                render_dump_text(&result, presenter, true);
+            }
+            Ok(())
+        }
+        Err(failure) => {
+            if presenter.is_json() {
+                if failure.emits_payload {
+                    presenter.print_envelope(&Envelope::err(
+                        CommandName::Dump.as_str(),
+                        failure.result.duration_ms,
+                        failure.result.clone(),
+                    ));
+                }
+            } else {
+                if failure.emits_payload {
+                    render_dump_text(&failure.result, presenter, false);
+                }
+                presenter.print_error(&failure.error.to_string());
+            }
+            Err(failure.error)
+        }
+    }
+}
+
+fn execute_syntax(
+    config: &AppConfig,
+    args: &SyntaxArgs,
+    presenter: &Presenter,
+) -> Result<(), UseCaseError> {
+    let request = map_syntax_request(args);
+    let context = ExecutionContext::cli(CommandName::Syntax);
+    match check_syntax::execute(&context, config, &request) {
+        Ok(result) => {
+            if presenter.is_json() {
+                presenter.print_envelope(&Envelope::ok(
+                    CommandName::Syntax.as_str(),
+                    result.duration_ms,
+                    result,
+                ));
+            } else {
+                render_syntax_text(&result, presenter);
+            }
+            Ok(())
+        }
+        Err(failure) => {
+            if presenter.is_json() {
+                if failure.emits_payload {
+                    presenter.print_envelope(&Envelope::err(
+                        CommandName::Syntax.as_str(),
+                        failure.result.duration_ms,
+                        failure.result.clone(),
+                    ));
+                }
+            } else {
+                if failure.emits_payload {
+                    render_syntax_text(&failure.result, presenter);
+                }
+                presenter.print_error(&failure.error.to_string());
+            }
+            Err(failure.error)
+        }
+    }
+}
+
+fn execute_launch(
+    config: &AppConfig,
+    args: &LaunchArgs,
+    presenter: &Presenter,
+) -> Result<(), UseCaseError> {
+    let request = map_launch_request(args);
+    let context = ExecutionContext::cli(CommandName::Launch);
+    match launch_app::execute(&context, config, &request) {
+        Ok(result) => {
+            if presenter.is_json() {
+                presenter.print_envelope(&Envelope::ok(
+                    CommandName::Launch.as_str(),
+                    result.duration_ms,
+                    result.clone(),
+                ));
+            } else {
+                presenter.print_ok(
+                    result
+                        .message
+                        .as_deref()
+                        .unwrap_or("Launched application successfully"),
+                );
+            }
+            Ok(())
+        }
+        Err(failure) => {
+            if !presenter.is_json() {
+                presenter.print_error(&failure.error.to_string());
+            }
+            Err(failure.error)
+        }
+    }
+}
+
+fn map_build_request(args: &BuildArgs) -> BuildRequest {
+    BuildRequest {
+        full_rebuild: args.full_rebuild,
+    }
+}
+
+fn map_test_request(args: &TestArgs) -> TestRequest {
+    TestRequest {
+        full: args.full,
+        scope: match &args.scope {
+            TestScope::All => TestScopeRequest::All,
+            TestScope::Module { name } => TestScopeRequest::Module { name: name.clone() },
+        },
+    }
+}
+
+fn map_dump_request(args: &DumpArgs) -> DumpRequest {
+    DumpRequest {
+        mode: args.mode.clone(),
+        source_set: args.source_set.clone(),
+        extension: args.extension.clone(),
+        objects: args.objects.clone(),
+    }
+}
+
+fn map_syntax_request(args: &SyntaxArgs) -> SyntaxRequest {
+    SyntaxRequest {
+        target: match &args.target {
+            SyntaxTarget::DesignerConfig(config) => {
+                SyntaxTargetRequest::DesignerConfig(map_designer_config_request(config))
+            }
+            SyntaxTarget::DesignerModules(modules) => {
+                SyntaxTargetRequest::DesignerModules(map_designer_modules_request(modules))
+            }
+            SyntaxTarget::Edt { projects } => SyntaxTargetRequest::Edt {
+                projects: projects.clone(),
+            },
+        },
+    }
+}
+
+fn map_designer_config_request(
+    args: &DesignerConfigSyntaxArgs,
+) -> DesignerConfigSyntaxRequest {
+    DesignerConfigSyntaxRequest {
+        config_log_integrity: args.config_log_integrity,
+        incorrect_references: args.incorrect_references,
+        thin_client: args.thin_client,
+        web_client: args.web_client,
+        mobile_client: args.mobile_client,
+        server: args.server,
+        external_connection: args.external_connection,
+        external_connection_server: args.external_connection_server,
+        mobile_app_client: args.mobile_app_client,
+        mobile_app_server: args.mobile_app_server,
+        thick_client_managed_application: args.thick_client_managed_application,
+        thick_client_server_managed_application: args.thick_client_server_managed_application,
+        thick_client_ordinary_application: args.thick_client_ordinary_application,
+        thick_client_server_ordinary_application: args.thick_client_server_ordinary_application,
+        mobile_client_digi_sign: args.mobile_client_digi_sign,
+        distributive_modules: args.distributive_modules,
+        unreference_procedures: args.unreference_procedures,
+        handlers_existence: args.handlers_existence,
+        empty_handlers: args.empty_handlers,
+        extended_modules_check: args.extended_modules_check,
+        check_use_synchronous_calls: args.check_use_synchronous_calls,
+        check_use_modality: args.check_use_modality,
+        unsupported_functional: args.unsupported_functional,
+        extension: args.extension.clone(),
+        all_extensions: args.all_extensions,
+    }
+}
+
+fn map_designer_modules_request(
+    args: &DesignerModulesSyntaxArgs,
+) -> DesignerModulesSyntaxRequest {
+    DesignerModulesSyntaxRequest {
+        thin_client: args.thin_client,
+        web_client: args.web_client,
+        server: args.server,
+        external_connection: args.external_connection,
+        thick_client_ordinary_application: args.thick_client_ordinary_application,
+        mobile_app_client: args.mobile_app_client,
+        mobile_app_server: args.mobile_app_server,
+        mobile_client: args.mobile_client,
+        extended_modules_check: args.extended_modules_check,
+        extension: args.extension.clone(),
+        all_extensions: args.all_extensions,
+    }
+}
+
+fn map_launch_request(args: &LaunchArgs) -> LaunchRequest {
+    LaunchRequest {
+        mode: args.mode.clone(),
+    }
+}
+
+fn build_test_envelope(result: TestRunResult, ok: bool) -> Envelope<TestRunResult> {
+    Envelope {
+        ok,
+        command: CommandName::Test.as_str().to_owned(),
+        duration_ms: result.duration_ms,
+        warnings: result.warnings.clone(),
+        steps: result.steps.clone(),
+        data: result,
+    }
+}
+
+fn render_build_text(result: &BuildResult, presenter: &Presenter, succeeded: bool) {
+    for step in &result.steps {
+        let mode = match &step.mode {
+            BuildMode::EdtExport => "edt_export",
+            BuildMode::Full => "full",
+            BuildMode::Partial { file_count } => {
+                presenter.print_info(&format!(
+                    "{}: partial ({file_count} files) - {}",
+                    step.source_set,
+                    step.message.as_deref().unwrap_or("ok")
+                ));
+                continue;
+            }
+            BuildMode::Skipped => "skipped",
+        };
+
+        presenter.print_info(&format!(
+            "{}: {mode} - {}",
+            step.source_set,
+            step.message.as_deref().unwrap_or("ok")
+        ));
+    }
+
+    if !succeeded {
+        presenter.print_info("Build failed");
+    } else if result
+        .steps
+        .iter()
+        .all(|step| matches!(step.mode, BuildMode::Skipped) && step.ok)
+    {
+        presenter.print_ok("Build completed: no changes");
+    } else {
+        presenter.print_ok("Build completed successfully");
+    }
+}
+
+fn render_dump_text(result: &DumpResult, presenter: &Presenter, succeeded: bool) {
+    let mode = match result.mode {
+        DumpMode::Full => "full",
+        DumpMode::Incremental => "incremental",
+        DumpMode::Partial => "partial",
+    };
+    let source_set = result.source_set.as_deref().unwrap_or("<unresolved>");
+    presenter.print_info(&format!(
+        "{source_set}: {mode} -> {}",
+        result.target_path.display()
+    ));
+    if let Some(message) = result.message.as_deref() {
+        presenter.print_info(message);
+    }
+
+    if succeeded {
+        presenter.print_ok("Dump completed successfully");
+    } else {
+        presenter.print_info("Dump failed");
+    }
+}
+
+fn render_syntax_text(result: &SyntaxCheckResult, presenter: &Presenter) {
+    let summary_line = format!(
+        "{}: {:?} (exit {}, errors {}, warnings {}, info {}, duration {} ms)",
+        result.check_name,
+        result.status,
+        result.exit_code,
+        result.summary.errors,
+        result.summary.warnings,
+        result.summary.info,
+        result.duration_ms
+    );
+
+    match result.status {
+        SyntaxCheckStatus::Clean => presenter.print_ok(&summary_line),
+        SyntaxCheckStatus::IssuesFound | SyntaxCheckStatus::ToolFailed => {
+            presenter.print_info(&summary_line)
+        }
+    }
+
+    for issue in &result.issues {
+        presenter.print_info(&render_issue(issue));
+    }
+
+    if let Some(log_read_warning) = &result.log_read_warning {
+        presenter.print_info(&format!("log warning: {log_read_warning}"));
+    }
+
+    if matches!(result.status, SyntaxCheckStatus::ToolFailed) {
+        if let Some(stderr) = &result.stderr {
+            presenter.print_info(&format!("stderr: {}", stderr.trim()));
+        }
+    }
+}
+
+fn render_test_text(result: &TestRunResult, presenter: &Presenter) {
+    let target = match &result.target {
+        TestTarget::All => "all".to_owned(),
+        TestTarget::Module { name } => format!("module {name}"),
+    };
+    presenter.print_info(&format!("Test target: {target}"));
+
+    if let Some(report) = &result.report {
+        presenter.print_info(&format!(
+            "Summary: total={}, passed={}, failed={}, skipped={}, errors={}",
+            report.summary.total,
+            report.summary.passed,
+            report.summary.failed,
+            report.summary.skipped,
+            report.summary.errors
+        ));
+
+        for suite in &report.suites {
+            presenter.print_info(&format!("Suite: {}", suite.name));
+            for case in &suite.cases {
+                presenter.print_info(&format!("  {} {}", status_label(&case.status), case.name));
+                if let Some(message) = &case.failure_message {
+                    presenter.print_info(&format!("    {message}"));
+                }
+                if let Some(trace) = &case.stack_trace {
+                    presenter.print_info(&format!("    {trace}"));
+                }
+            }
+        }
+    }
+
+    for diagnostic in &result.diagnostics {
+        presenter.print_info(&format!("Diagnostic: {diagnostic}"));
+    }
+    for warning in &result.warnings {
+        presenter.print_info(&format!("Warning: {warning}"));
+    }
+
+    if result.ok {
+        presenter.print_ok("Tests completed successfully");
+    } else {
+        presenter.print_info("Tests failed");
+    }
+}
+
+fn render_issue(issue: &Issue) -> String {
+    match issue {
+        Issue::Module(issue) => {
+            let location = match (issue.line, issue.column) {
+                (Some(line), Some(column)) => format!("{}:{}:{}", issue.path, line, column),
+                (Some(line), None) => format!("{}:{}", issue.path, line),
+                _ => issue.path.clone(),
+            };
+            format!(
+                "{} {} {}",
+                render_severity(&issue.severity),
+                location,
+                issue.message
+            )
+        }
+        Issue::Object(issue) => format!(
+            "{} {} {}",
+            render_severity(&issue.severity),
+            issue.object,
+            issue.message
+        ),
+        Issue::Edt(issue) => {
+            let location = match (issue.line, issue.column) {
+                (Some(line), Some(column)) => format!("{}:{}:{}", issue.path, line, column),
+                (Some(line), None) => format!("{}:{}", issue.path, line),
+                _ => issue.path.clone(),
+            };
+            format!(
+                "{} {} {}",
+                render_severity(&issue.severity),
+                location,
+                issue.message
+            )
+        }
+    }
+}
+
+fn render_severity(severity: &IssueSeverity) -> &'static str {
+    match severity {
+        IssueSeverity::Error => "ERROR",
+        IssueSeverity::Warning => "WARNING",
+        IssueSeverity::Info => "INFO",
+    }
+}
+
+fn status_label(status: &TestStatus) -> &'static str {
+    match status {
+        TestStatus::Passed => "PASSED",
+        TestStatus::Failed => "FAILED",
+        TestStatus::Skipped => "SKIPPED",
+        TestStatus::Error => "ERROR",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        command_name, map_build_request, map_designer_config_request, map_dump_request,
+        map_launch_request, map_syntax_request, map_test_request,
+    };
+    use crate::cli::args::{
+        BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs, DumpArgs,
+        LaunchArgs, SyntaxArgs, SyntaxTarget, TestArgs, TestScope,
+    };
+    use crate::use_cases::context::CommandName;
+    use crate::use_cases::request::{SyntaxTargetRequest, TestScopeRequest};
+
+    #[test]
+    fn maps_test_module_request() {
+        let request = map_test_request(&TestArgs {
+            full: true,
+            scope: TestScope::Module {
+                name: "ModuleA".to_owned(),
+            },
+        });
+
+        assert!(request.full);
+        assert_eq!(
+            request.scope,
+            TestScopeRequest::Module {
+                name: "ModuleA".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn maps_syntax_request() {
+        let request = map_syntax_request(&SyntaxArgs {
+            target: SyntaxTarget::DesignerModules(DesignerModulesSyntaxArgs {
+                thin_client: true,
+                web_client: false,
+                server: true,
+                external_connection: false,
+                thick_client_ordinary_application: false,
+                mobile_app_client: false,
+                mobile_app_server: false,
+                mobile_client: false,
+                extended_modules_check: true,
+                extension: Some("Ext".to_owned()),
+                all_extensions: false,
+            }),
+        });
+
+        assert!(matches!(
+            request.target,
+            SyntaxTargetRequest::DesignerModules(ref modules)
+                if modules.thin_client && modules.server && modules.extension.as_deref() == Some("Ext")
+        ));
+    }
+
+    #[test]
+    fn maps_build_dump_and_launch_requests() {
+        assert!(map_build_request(&BuildArgs { full_rebuild: true }).full_rebuild);
+        assert_eq!(
+            map_dump_request(&DumpArgs {
+                mode: "incremental".to_owned(),
+                source_set: Some("main".to_owned()),
+                extension: Some("Ext".to_owned()),
+                objects: vec!["Catalog.Item".to_owned()],
+            })
+            .source_set
+            .as_deref(),
+            Some("main")
+        );
+        assert_eq!(
+            map_launch_request(&LaunchArgs {
+                mode: "thin".to_owned()
+            })
+            .mode,
+            "thin"
+        );
+    }
+
+    #[test]
+    fn maps_designer_config_request() {
+        let request = map_designer_config_request(&DesignerConfigSyntaxArgs {
+            config_log_integrity: true,
+            incorrect_references: false,
+            thin_client: true,
+            web_client: false,
+            mobile_client: false,
+            server: true,
+            external_connection: false,
+            external_connection_server: false,
+            mobile_app_client: false,
+            mobile_app_server: false,
+            thick_client_managed_application: false,
+            thick_client_server_managed_application: false,
+            thick_client_ordinary_application: false,
+            thick_client_server_ordinary_application: false,
+            mobile_client_digi_sign: false,
+            distributive_modules: false,
+            unreference_procedures: false,
+            handlers_existence: false,
+            empty_handlers: false,
+            extended_modules_check: true,
+            check_use_synchronous_calls: true,
+            check_use_modality: false,
+            unsupported_functional: false,
+            extension: Some("Ext".to_owned()),
+            all_extensions: false,
+        });
+
+        assert!(request.config_log_integrity);
+        assert!(request.thin_client);
+        assert!(request.server);
+        assert!(request.extended_modules_check);
+        assert!(request.check_use_synchronous_calls);
+    }
+
+    #[test]
+    fn resolves_command_name() {
+        assert_eq!(command_name(&Command::Build(BuildArgs { full_rebuild: false })), CommandName::Build);
+    }
+}

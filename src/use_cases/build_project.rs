@@ -6,14 +6,11 @@ use crate::change_detection::analyzer::{self, AnalysisOutcome, PreparedStateUpda
 use crate::change_detection::hash_storage::{HashStorage, StorageError};
 use crate::change_detection::partial_load::{self, LoadDecision};
 use crate::change_detection::source_sets::SourceSetsService;
-use crate::cli::args::BuildArgs;
 use crate::config::model::{
     AppConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
 };
 use crate::domain::build::{BuildMode, BuildResult, BuildStep};
 use crate::domain::source_set::SourceSetContext;
-use crate::output::json::Envelope;
-use crate::output::presenter::Presenter;
 use crate::platform::designer::DesignerDsl;
 use crate::platform::edt::EdtDsl;
 use crate::platform::ibcmd::{DynamicUpdateMode, IbcmdConnection, IbcmdDsl, IbcmdError};
@@ -23,50 +20,32 @@ use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::support::temp::{partial_list_file, platform_logs_dir, reserved_source_set_dir};
+use crate::use_cases::context::ExecutionContext;
+use crate::use_cases::request::BuildRequest as BuildArgs;
+use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
 use tracing::info;
 
-const BUILD_COMMAND: &str = "build";
+#[cfg(test)]
+const BUILD_COMMAND: &str = crate::use_cases::context::CommandName::Build.as_str();
 const SUPPORTED_DESIGNER_BUILD_ERROR: &str =
     "build currently supports only builder=DESIGNER or IBCMD with format=DESIGNER";
 const SUPPORTED_EDT_BUILD_ERROR: &str =
     "build with format=EDT currently supports only builder=DESIGNER";
 
 pub fn execute(
+    context: &ExecutionContext,
     config: &AppConfig,
     args: &BuildArgs,
-    presenter: &Presenter,
-) -> Result<(), AppError> {
-    let result = match run_build(config, args) {
-        Ok(result) => result,
-        Err(failure) => {
-            if presenter.is_json() {
-                presenter.print_envelope(&Envelope::err(
-                    BUILD_COMMAND,
-                    failure.result.duration_ms,
-                    failure.result.clone(),
-                ));
-            } else {
-                render_text_result(&failure.result, presenter, false);
-                presenter.print_error(&failure.error.to_string());
-            }
-            return Err(failure.error);
-        }
-    };
-
-    if presenter.is_json() {
-        presenter.print_envelope(&Envelope::ok(BUILD_COMMAND, result.duration_ms, result));
-    } else {
-        render_text_result(&result, presenter, true);
-    }
-
-    Ok(())
+) -> UseCaseResult<BuildResult> {
+    info!(
+        command = context.command().as_str(),
+        transport = ?context.transport(),
+        "executing build use case"
+    );
+    run_build(config, args)
 }
 
-#[derive(Debug)]
-pub(crate) struct BuildExecutionFailure {
-    pub(crate) error: AppError,
-    pub(crate) result: BuildResult,
-}
+pub(crate) type BuildExecutionFailure = UseCaseFailure<BuildResult>;
 
 enum StepCommit {
     Prepared(PreparedStateUpdate),
@@ -89,20 +68,20 @@ enum StepPlan {
 pub(crate) fn run_build(
     config: &AppConfig,
     args: &BuildArgs,
-) -> Result<BuildResult, BuildExecutionFailure> {
+) -> UseCaseResult<BuildResult> {
     if config.format == SourceFormat::Edt {
         return run_build_edt(config, args);
     }
 
     if let Some(error) = validate_designer_supported_matrix(config) {
-        return Err(BuildExecutionFailure {
+        return Err(BuildExecutionFailure::with_payload(
             error,
-            result: BuildResult {
+            BuildResult {
                 ok: false,
                 steps: vec![],
                 duration_ms: 0,
             },
-        });
+        ));
     }
 
     match config.builder {
@@ -237,10 +216,10 @@ fn run_build_designer(
                         BuildMode::Skipped,
                         error.to_string(),
                     );
-                    return Err(BuildExecutionFailure {
-                        error: AppError::Runtime(error.to_string()),
+                    return Err(BuildExecutionFailure::with_payload(
+                        AppError::Runtime(error.to_string()),
                         result,
-                    });
+                    ));
                 }
             }
         };
@@ -290,10 +269,10 @@ fn run_build_designer(
                                     mode.clone(),
                                     error.to_string(),
                                 );
-                                return Err(BuildExecutionFailure {
-                                    error: AppError::Platform(error.to_string()),
+                                return Err(BuildExecutionFailure::with_payload(
+                                    AppError::Platform(error.to_string()),
                                     result,
-                                });
+                                ));
                             }
                         };
                         designer_binary = Some(location.path.clone());
@@ -333,7 +312,7 @@ fn run_build_designer(
                             mode,
                             error.to_string(),
                         );
-                        return Err(BuildExecutionFailure { error, result });
+                        return Err(BuildExecutionFailure::with_payload(error, result));
                     }
                 }
             }
@@ -500,10 +479,10 @@ fn run_build_ibcmd(
                         BuildMode::Skipped,
                         error.to_string(),
                     );
-                    return Err(BuildExecutionFailure {
-                        error: AppError::Runtime(error.to_string()),
+                    return Err(BuildExecutionFailure::with_payload(
+                        AppError::Runtime(error.to_string()),
                         result,
-                    });
+                    ));
                 }
             }
         };
@@ -553,10 +532,10 @@ fn run_build_ibcmd(
                                     mode.clone(),
                                     error.to_string(),
                                 );
-                                return Err(BuildExecutionFailure {
-                                    error: AppError::Platform(error.to_string()),
+                                return Err(BuildExecutionFailure::with_payload(
+                                    AppError::Platform(error.to_string()),
                                     result,
-                                });
+                                ));
                             }
                         };
                         ibcmd_binary = Some(location.path.clone());
@@ -594,7 +573,7 @@ fn run_build_ibcmd(
                             mode,
                             error.to_string(),
                         );
-                        return Err(BuildExecutionFailure { error, result });
+                        return Err(BuildExecutionFailure::with_payload(error, result));
                     }
                 }
             }
@@ -637,14 +616,14 @@ fn run_build_edt(
 ) -> Result<BuildResult, BuildExecutionFailure> {
     info!(full_rebuild = args.full_rebuild, "preparing edt build plan");
     if let Some(error) = validate_edt_supported_matrix(config) {
-        return Err(BuildExecutionFailure {
+        return Err(BuildExecutionFailure::with_payload(
             error,
-            result: BuildResult {
+            BuildResult {
                 ok: false,
                 steps: vec![],
                 duration_ms: 0,
             },
-        });
+        ));
     }
 
     let started = Instant::now();
@@ -749,10 +728,10 @@ fn run_build_edt(
                         BuildMode::Skipped,
                         error.to_string(),
                     );
-                    return Err(BuildExecutionFailure {
-                        error: AppError::Runtime(error.to_string()),
+                    return Err(BuildExecutionFailure::with_payload(
+                        AppError::Runtime(error.to_string()),
                         result,
-                    });
+                    ));
                 }
             }
         };
@@ -791,10 +770,10 @@ fn run_build_edt(
                                     BuildMode::EdtExport,
                                     error.to_string(),
                                 );
-                                return Err(BuildExecutionFailure {
-                                    error: AppError::Platform(error.to_string()),
+                                return Err(BuildExecutionFailure::with_payload(
+                                    AppError::Platform(error.to_string()),
                                     result,
-                                });
+                                ));
                             }
                         };
                         edt_binary = Some(location.path.clone());
@@ -823,7 +802,7 @@ fn run_build_edt(
                         BuildMode::EdtExport,
                         error.to_string(),
                     );
-                    return Err(BuildExecutionFailure { error, result });
+                    return Err(BuildExecutionFailure::with_payload(error, result));
                 }
 
                 steps.push(BuildStep {
@@ -852,10 +831,10 @@ fn run_build_edt(
                                     mode.clone(),
                                     error.to_string(),
                                 );
-                                return Err(BuildExecutionFailure {
-                                    error: AppError::Platform(error.to_string()),
+                                return Err(BuildExecutionFailure::with_payload(
+                                    AppError::Platform(error.to_string()),
                                     result,
-                                });
+                                ));
                             }
                         };
                         designer_binary = Some(location.path.clone());
@@ -895,7 +874,7 @@ fn run_build_edt(
                             mode,
                             error.to_string(),
                         );
-                        return Err(BuildExecutionFailure { error, result });
+                        return Err(BuildExecutionFailure::with_payload(error, result));
                     }
                 }
             }
@@ -1255,55 +1234,19 @@ fn fail_with_remaining_steps(
     }
 }
 
-fn render_text_result(result: &BuildResult, presenter: &Presenter, succeeded: bool) {
-    for step in &result.steps {
-        let mode = match &step.mode {
-            BuildMode::EdtExport => "edt_export",
-            BuildMode::Full => "full",
-            BuildMode::Partial { file_count } => {
-                presenter.print_info(&format!(
-                    "{}: partial ({file_count} files) - {}",
-                    step.source_set,
-                    step.message.as_deref().unwrap_or("ok")
-                ));
-                continue;
-            }
-            BuildMode::Skipped => "skipped",
-        };
-
-        presenter.print_info(&format!(
-            "{}: {mode} - {}",
-            step.source_set,
-            step.message.as_deref().unwrap_or("ok")
-        ));
-    }
-
-    if !succeeded {
-        presenter.print_info("Build failed");
-    } else if result
-        .steps
-        .iter()
-        .all(|step| matches!(step.mode, BuildMode::Skipped) && step.ok)
-    {
-        presenter.print_ok("Build completed: no changes");
-    } else {
-        presenter.print_ok("Build completed successfully");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{run_build, BUILD_COMMAND, SUPPORTED_EDT_BUILD_ERROR};
     use crate::change_detection::hash_storage::HashStorage;
     use crate::change_detection::source_sets::SourceSetsService;
-    use crate::cli::args::BuildArgs;
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, PlatformToolConfig, SourceFormat, SourceSetConfig,
         SourceSetPurpose, TestsConfig, ToolsConfig,
     };
     use crate::domain::build::BuildMode;
     use crate::output::json::Envelope;
-    use crate::support::error::AppError;
+    use crate::use_cases::request::BuildRequest as BuildArgs;
+    use crate::use_cases::result::UseCaseErrorKind;
     use std::fs;
     use std::path::{Path, PathBuf};
     use tempfile::tempdir;
@@ -1562,9 +1505,8 @@ mod tests {
             },
         )
         .expect_err("failure");
-        assert!(
-            matches!(failure.error, AppError::Validation(ref msg) if msg == SUPPORTED_EDT_BUILD_ERROR)
-        );
+        assert_eq!(failure.error.kind(), UseCaseErrorKind::Validation);
+        assert_eq!(failure.error.message(), SUPPORTED_EDT_BUILD_ERROR);
         assert!(!calls.exists());
     }
 
@@ -1922,7 +1864,7 @@ mod tests {
 
         let failure = run_build(&config, &BuildArgs { full_rebuild: true }).expect_err("failure");
 
-        assert!(matches!(failure.error, AppError::Runtime(_)));
+        assert_eq!(failure.error.kind(), UseCaseErrorKind::Runtime);
         assert!(storage_path.exists());
         assert!(storage_path.is_dir());
     }
