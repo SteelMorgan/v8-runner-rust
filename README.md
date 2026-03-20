@@ -47,4 +47,6 @@ The CLI now uses a transport-neutral use-case contract internally:
 
 - `cli::execute` maps parsed CLI args into request DTOs and renders the final text/json output.
 - `use_cases` no longer depend on `clap`, `Presenter`, or `Envelope`.
-- This is preparatory work for the upcoming MCP adapters without changing the public CLI surface.
+- `mcp` now adds a separate internal service boundary with MCP-specific request/response DTOs and explicit business-vs-internal failure split.
+- Raw MCP defaults and alias normalization are isolated in the service layer instead of leaking into use cases.
+- This remains preparatory work for the upcoming MCP adapters without changing the public CLI surface.

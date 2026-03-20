@@ -141,4 +141,5 @@
 - [x] Добавить `steps` в output envelope
 - [x] Добавить `warnings` в output envelope
 - [x] Убедиться, что use cases не зависят от CLI parsing
+- [x] Добавить MCP-facing service layer с business/internal failure boundary и отдельными MCP DTO
 - [x] Оставить место для будущего transport adapter слоя

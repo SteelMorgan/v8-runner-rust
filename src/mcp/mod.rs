@@ -1,0 +1,12 @@
+/// Per-call MCP service context.
+pub mod context;
+/// MCP-facing error and result contracts.
+pub mod error;
+/// Thin port used by the MCP service layer to call use cases.
+pub mod port;
+/// MCP-facing request DTOs.
+pub mod request;
+/// MCP-facing response DTOs.
+pub mod response;
+/// MCP-facing service layer over transport-neutral use cases.
+pub mod service;

@@ -3,21 +3,21 @@ use std::path::PathBuf;
 
 use crate::domain::execution::StepResult;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TestTarget {
     All,
     Module { name: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TestOutputMode {
     Compact,
     Full,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TestErrorKind {
     BuildFailed,
@@ -30,7 +30,7 @@ pub enum TestErrorKind {
     JunitMalformed,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RetainedPaths {
     pub run_dir: PathBuf,
     pub config_json: PathBuf,
@@ -40,7 +40,7 @@ pub struct RetainedPaths {
     pub sentinel: PathBuf,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TestRunResult {
     pub ok: bool,
     pub target: TestTarget,
@@ -57,14 +57,14 @@ pub struct TestRunResult {
     pub duration_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TestReport {
     pub summary: TestSummary,
     pub suites: Vec<TestSuite>,
     pub extracted_errors: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TestSummary {
     pub total: u32,
     pub passed: u32,
@@ -73,14 +73,14 @@ pub struct TestSummary {
     pub errors: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TestSuite {
     pub name: String,
     pub cases: Vec<TestCase>,
     pub duration_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TestCase {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]

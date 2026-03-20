@@ -2,15 +2,16 @@
 
 ## Overview
 
-`v8-test-runner` is a Rust CLI for orchestrating local 1C platform operations. The current codebase is organized into seven main layers:
+`v8-test-runner` is a Rust CLI for orchestrating local 1C platform operations. The current codebase is organized into eight main layers:
 
 1. `cli` parses arguments, maps them into transport-neutral requests, and owns command-level text/json rendering.
 2. `config` loads and validates YAML configuration.
 3. `domain` defines structured result types for commands plus shared execution step structs.
 4. `use_cases` owns transport-neutral requests, `ExecutionContext`, structured failures, and business orchestration.
-5. `platform` contains process execution, utility discovery, connection argument building, and low-level 1C adapters.
-6. `output` contains CLI presentation primitives such as `Presenter` and `Envelope`.
-7. `change_detection`, `parsers`, and `support` provide shared subsystems and utilities.
+5. `mcp` is the new MCP-facing service boundary: it maps raw tool inputs into use-case requests and returns MCP-specific DTOs plus structured business/internal failures.
+6. `platform` contains process execution, utility discovery, connection argument building, and low-level 1C adapters.
+7. `output` contains CLI presentation primitives such as `Presenter` and `Envelope`.
+8. `change_detection`, `parsers`, and `support` provide shared subsystems and utilities.
 
 ## Current Platform Layer
 
@@ -36,6 +37,16 @@ The CLI/runtime boundary is now split explicitly:
 
 This keeps current CLI behavior intact while reserving a stable internal API for MCP stdio/HTTP adapters.
 
+## MCP Boundary
+
+The future MCP adapter no longer needs to talk to `cli::execute` or to reuse domain serialization directly.
+
+- `mcp::request` defines raw tool-facing request DTOs.
+- `mcp::service::McpService` maps those requests into `use_cases::request::*` and attaches per-call MCP transport metadata.
+- `mcp::response` defines MCP-specific response DTOs, including nested step/test/issue structs that are decoupled from domain serialization details.
+- `mcp::error` splits failures into `McpBusinessFailure<T>` for structured tool responses and `McpInternalError` for adapter/runtime misuse that must not be surfaced as business payloads.
+- Provisional MCP defaults and alias handling live only inside the service-layer mapper helpers and are marked with `TODO(mcp-normalization-stage)`.
+
 ## Backend Dispatch
 
 `build` and `dump` use cases dispatch by `builder`:
@@ -55,6 +66,7 @@ Use cases now return transport-neutral payloads or structured failures.
 - `cli::execute` converts successful command payloads into `Envelope<T>` for JSON mode.
 - `cli::execute` preserves command-specific text formatting for build, test, dump, syntax, and launch.
 - Failure payload emission is also decided at the adapter boundary, which keeps `launch --output json` failure semantics unchanged while allowing other commands to keep structured JSON failures.
+- `mcp::service` returns MCP-specific DTOs and never reuses CLI `Envelope` or presenter logic.
 
 ## Working Directories
 

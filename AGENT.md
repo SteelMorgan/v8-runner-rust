@@ -1,5 +1,30 @@
 # Agent Rules for v8-test-runner-rust
 
+## Task Workflow
+
+For every task:
+
+1. Take the next concrete item from the spec or `spec/MCP_IMPLEMENTATION_PLAN.md`.
+2. Extract scope, constraints, acceptance criteria, and affected files before editing code.
+3. Draft an implementation plan with files, decisions, risks, and test strategy.
+4. Run a plan review loop with two `reviewer` subagents in parallel.
+5. Resolve findings and rerun once if major issues remain.
+6. Freeze the plan before implementation.
+7. Implement the task.
+8. Use `worker` subagents only for disjoint file sets.
+9. Run a code review loop in parallel:
+   - `reviewer`
+   - tests (`cargo test`)
+   - Rust best-practices review
+10. Fix findings and rerun once if needed.
+11. Update `spec/MCP_IMPLEMENTATION_PLAN.md`, public docs, and `ARCHITECTURE.md`.
+12. Commit only after all review and test gates pass.
+
+Hard limits:
+- Plan review: max 2 rounds
+- Code review: max 2 rounds
+- If disagreements remain, record them explicitly and stop for user decision
+
 ## After each implementation stage:
 
 1. **Review** — run `/rust-expert-best-practices-code-review` skill on changed code before committing
@@ -18,6 +43,16 @@ A stage is complete when:
 - `spec/IMPLEMENTATION_TODO.md` is updated: completed items marked with `[x]`
 - Public types and functions have `///` doc comments
 - `ARCHITECTURE.md` reflects any new modules or components
+
+## ОБЯЗАТЕЛЬНО перед каждым коммитом
+
+**ВСЕГДА** перед коммитом запускать три субагента параллельно:
+
+1. **Review субагент** — проверить все изменения на корректность, стиль, безопасность, соответствие архитектуре проекта
+2. **Tests субагент** — запустить тесты (`cargo test`) и убедиться что все проходят
+3. **Rust expert субагент** — запустить скил `/rust-expert-best-practices-code-review` для глубокого ревью кода на соответствие best practices Rust
+
+Коммит разрешён только если все три субагента завершились успешно.
 
 ## Commit message format
 

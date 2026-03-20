@@ -3,6 +3,7 @@ mod change_detection;
 mod cli;
 mod config;
 mod domain;
+mod mcp;
 mod output;
 mod parsers;
 mod platform;

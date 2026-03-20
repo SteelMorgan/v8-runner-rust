@@ -13,7 +13,11 @@
 - [x] 2026-03-20: Ввести transport-neutral request/result слой и `ExecutionContext`, чтобы use case-ы не зависели от `clap`, `Presenter` и `Envelope`.
   - Добавлены transport-neutral request DTO, `ExecutionContext`, shared use-case failure contract и CLI adapter boundary.
   - CLI rendering сохранен в `cli::execute`, а bootstrap error rendering оставлен в `app.rs`.
-- Добавить MCP-facing service layer с явными structured business failures.
+- [x] 2026-03-20: Добавить MCP-facing service layer с явными structured business failures.
+  - Добавлен внутренний модуль `src/mcp` с request/response DTO, `McpCallContext`, `McpUseCasePort` и `McpService`.
+  - MCP boundary теперь возвращает либо typed success payload, либо `McpBusinessFailure<T>` с machine-readable error code, либо отдельный `McpInternalError`.
+  - Raw MCP defaults и alias normalization изолированы в service-layer mapper-ах с явными `TODO(mcp-normalization-stage)`.
+  - MCP response structs отвязаны от domain nested DTO, чтобы будущий transport adapter не зависел от внутренних сериализационных деталей.
 - Расширить config:
   - `mcp.http.bind_address`
   - `mcp.http.path`
