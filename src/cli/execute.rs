@@ -19,8 +19,8 @@ use crate::use_cases::dump_config;
 use crate::use_cases::launch_app;
 use crate::use_cases::request::{
     BuildRequest, DesignerConfigSyntaxRequest, DesignerModulesSyntaxRequest, DumpModeRequest,
-    DumpRequest, LaunchModeRequest, LaunchRequest, SyntaxRequest, SyntaxTargetRequest,
-    TestRequest, TestScopeRequest,
+    DumpRequest, LaunchModeRequest, LaunchRequest, SyntaxRequest, SyntaxTargetRequest, TestRequest,
+    TestScopeRequest,
 };
 use crate::use_cases::result::{UseCaseError, UseCaseErrorKind};
 use crate::use_cases::run_tests;
@@ -38,6 +38,7 @@ pub fn execute_command(
         Command::Dump(args) => execute_dump(config, args, presenter),
         Command::Syntax(args) => execute_syntax(config, args, presenter),
         Command::Launch(args) => execute_launch(config, args, presenter),
+        Command::Mcp(_) => unreachable!("mcp commands are handled outside cli::execute"),
     }
 }
 
@@ -49,6 +50,7 @@ pub fn command_name(command: &Command) -> CommandName {
         Command::Dump(_) => CommandName::Dump,
         Command::Syntax(_) => CommandName::Syntax,
         Command::Launch(_) => CommandName::Launch,
+        Command::Mcp(_) => unreachable!("mcp commands do not map to CLI command names"),
     }
 }
 
@@ -62,8 +64,11 @@ fn execute_build(
     match build_project::execute(&context, config, &request) {
         Ok(result) => {
             if presenter.is_json() {
-                presenter
-                    .print_envelope(&Envelope::ok(CommandName::Build.as_str(), result.duration_ms, result));
+                presenter.print_envelope(&Envelope::ok(
+                    CommandName::Build.as_str(),
+                    result.duration_ms,
+                    result,
+                ));
             } else {
                 render_build_text(&result, presenter, true);
             }
@@ -133,8 +138,11 @@ fn execute_dump(
     match dump_config::execute(&context, config, &request) {
         Ok(result) => {
             if presenter.is_json() {
-                presenter
-                    .print_envelope(&Envelope::ok(CommandName::Dump.as_str(), result.duration_ms, result));
+                presenter.print_envelope(&Envelope::ok(
+                    CommandName::Dump.as_str(),
+                    result.duration_ms,
+                    result,
+                ));
             } else {
                 render_dump_text(&result, presenter, true);
             }
@@ -289,9 +297,7 @@ fn map_syntax_request(args: &SyntaxArgs) -> SyntaxRequest {
     }
 }
 
-fn map_designer_config_request(
-    args: &DesignerConfigSyntaxArgs,
-) -> DesignerConfigSyntaxRequest {
+fn map_designer_config_request(args: &DesignerConfigSyntaxArgs) -> DesignerConfigSyntaxRequest {
     DesignerConfigSyntaxRequest {
         config_log_integrity: args.config_log_integrity,
         incorrect_references: args.incorrect_references,
@@ -321,9 +327,7 @@ fn map_designer_config_request(
     }
 }
 
-fn map_designer_modules_request(
-    args: &DesignerModulesSyntaxArgs,
-) -> DesignerModulesSyntaxRequest {
+fn map_designer_modules_request(args: &DesignerModulesSyntaxArgs) -> DesignerModulesSyntaxRequest {
     DesignerModulesSyntaxRequest {
         thin_client: args.thin_client,
         web_client: args.web_client,
@@ -709,6 +713,11 @@ mod tests {
 
     #[test]
     fn resolves_command_name() {
-        assert_eq!(command_name(&Command::Build(BuildArgs { full_rebuild: false })), CommandName::Build);
+        assert_eq!(
+            command_name(&Command::Build(BuildArgs {
+                full_rebuild: false
+            })),
+            CommandName::Build
+        );
     }
 }

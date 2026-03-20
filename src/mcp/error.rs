@@ -1,9 +1,10 @@
+use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::use_cases::result::{UseCaseError, UseCaseErrorKind};
 
 /// Stable machine-readable code for MCP-facing service failures.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum McpErrorCode {
     InvalidArgument,
@@ -14,7 +15,7 @@ pub enum McpErrorCode {
 }
 
 /// High-level business error class surfaced by the MCP service layer.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum McpBusinessErrorKind {
     Validation,
@@ -33,7 +34,7 @@ impl From<UseCaseErrorKind> for McpBusinessErrorKind {
 }
 
 /// Structured business error metadata returned by the MCP service layer.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct McpBusinessError {
     pub code: McpErrorCode,
     pub kind: McpBusinessErrorKind,
@@ -76,7 +77,7 @@ impl McpBusinessError {
 }
 
 /// Structured business failure with a failure-shaped MCP response payload.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct McpBusinessFailure<T> {
     pub error: McpBusinessError,
     pub response: T,
@@ -90,7 +91,7 @@ impl<T> McpBusinessFailure<T> {
 }
 
 /// Non-business service error that must not be surfaced as a business response.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct McpInternalError {
     pub code: McpErrorCode,
     pub message: String,

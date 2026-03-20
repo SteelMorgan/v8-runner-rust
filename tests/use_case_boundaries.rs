@@ -14,7 +14,9 @@ fn assert_missing(path: &Path, forbidden: &str) {
 
 #[test]
 fn use_cases_do_not_depend_on_cli_or_output_types() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("use_cases");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("use_cases");
     let files = [
         root.join("build_project.rs"),
         root.join("check_syntax.rs"),

@@ -1,13 +1,17 @@
 use clap::Parser;
 use tracing::{error, info};
 
-use crate::cli::args::{Cli, Command};
+use crate::cli::args::{Cli, Command, McpCommand, McpServeTransport};
 use crate::cli::execute;
 use crate::config::loader::load_config;
 use crate::output::presenter::Presenter;
 
 pub fn run() -> i32 {
     let cli = Cli::parse();
+
+    if let Command::Mcp(args) = &cli.command {
+        return run_mcp_command(&cli, args);
+    }
 
     let color_mode = if cli.no_color {
         crate::output::presenter::ColorMode::Disabled
@@ -58,8 +62,12 @@ pub fn run() -> i32 {
     }
 
     let result = match &cli.command {
-        Command::Build(_) | Command::Test(_) | Command::Dump(_) | Command::Syntax(_)
+        Command::Build(_)
+        | Command::Test(_)
+        | Command::Dump(_)
+        | Command::Syntax(_)
         | Command::Launch(_) => execute::execute_command(&config, &cli.command, &presenter),
+        Command::Mcp(_) => unreachable!("mcp commands are handled before CLI presenter setup"),
     };
 
     match result {
@@ -79,4 +87,64 @@ pub fn run() -> i32 {
 
 fn command_name(command: &Command) -> &'static str {
     execute::command_name(command).as_str()
+}
+
+fn run_mcp_command(cli: &Cli, args: &crate::cli::args::McpArgs) -> i32 {
+    match &args.command {
+        McpCommand::Serve(serve) => match serve.transport {
+            McpServeTransport::Stdio => run_mcp_stdio(cli),
+        },
+    }
+}
+
+fn run_mcp_stdio(cli: &Cli) -> i32 {
+    install_mcp_panic_hook();
+
+    let config = match load_config(cli.config.as_deref(), cli.workdir.as_deref()) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("{error}");
+            return crate::output::exit_codes::VALIDATION_ERROR;
+        }
+    };
+
+    let level = cli.log_level.as_deref().unwrap_or("info");
+    if let Err(error) =
+        crate::support::logging::init_action_logging(level, "json", &config.work_path)
+    {
+        eprintln!("{error}");
+        return crate::output::exit_codes::RUNTIME_ERROR;
+    }
+
+    info!(
+        transport = "stdio",
+        work_path = %config.work_path.display(),
+        "starting mcp server"
+    );
+
+    if cli.clean_before_execution {
+        match crate::support::temp::platform_logs_dir(&config.work_path)
+            .and_then(|dir| crate::support::fs::clean_dir(&dir))
+        {
+            Ok(()) => info!("platform logs directory cleaned for mcp stdio"),
+            Err(error) => {
+                eprintln!("failed to clean platform logs: {error}");
+                return crate::output::exit_codes::RUNTIME_ERROR;
+            }
+        }
+    }
+
+    match crate::mcp::server::serve_stdio(config) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("{error}");
+            crate::output::exit_codes::RUNTIME_ERROR
+        }
+    }
+}
+
+fn install_mcp_panic_hook() {
+    std::panic::set_hook(Box::new(|panic_info| {
+        eprintln!("{panic_info}");
+    }));
 }

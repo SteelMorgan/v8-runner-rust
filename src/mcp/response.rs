@@ -1,7 +1,8 @@
+use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Stable MCP-facing build mode.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum McpBuildMode {
     EdtExport,
@@ -11,7 +12,7 @@ pub enum McpBuildMode {
 }
 
 /// MCP build step result.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct McpBuildStep {
     pub source_set: String,
     pub mode: McpBuildMode,
@@ -22,7 +23,7 @@ pub struct McpBuildStep {
 }
 
 /// MCP execution step result.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct McpStepResult {
     pub name: String,
     pub ok: bool,
@@ -32,7 +33,7 @@ pub struct McpStepResult {
 }
 
 /// Stable MCP-facing test status.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum McpTestStatus {
     Passed,
@@ -42,7 +43,7 @@ pub enum McpTestStatus {
 }
 
 /// MCP test case.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct McpTestCase {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -56,7 +57,7 @@ pub struct McpTestCase {
 }
 
 /// MCP test suite.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct McpTestSuite {
     pub name: String,
     pub cases: Vec<McpTestCase>,
@@ -64,7 +65,7 @@ pub struct McpTestSuite {
 }
 
 /// Stable MCP-facing issue severity.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum McpIssueSeverity {
     Error,
@@ -73,7 +74,7 @@ pub enum McpIssueSeverity {
 }
 
 /// MCP module issue.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct McpModuleIssue {
     pub path: String,
     pub line: Option<u32>,
@@ -83,7 +84,7 @@ pub struct McpModuleIssue {
 }
 
 /// MCP object issue.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct McpObjectIssue {
     pub object: String,
     pub message: String,
@@ -91,7 +92,7 @@ pub struct McpObjectIssue {
 }
 
 /// MCP EDT issue.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct McpEdtIssue {
     pub path: String,
     pub line: Option<u32>,
@@ -103,7 +104,7 @@ pub struct McpEdtIssue {
 }
 
 /// MCP issue payload.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum McpIssue {
     Module(McpModuleIssue),
@@ -112,7 +113,7 @@ pub enum McpIssue {
 }
 
 /// MCP response for `build_project`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct McpBuildResponse {
     pub success: bool,
     pub message: String,
@@ -123,7 +124,7 @@ pub struct McpBuildResponse {
 }
 
 /// MCP response for `run_all_tests` and `run_module_tests`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct McpTestResponse {
     pub success: bool,
     pub message: String,
@@ -148,7 +149,7 @@ pub struct McpTestResponse {
 }
 
 /// MCP response for `dump_config`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct McpDumpResponse {
     pub success: bool,
     pub message: String,
@@ -164,14 +165,14 @@ pub struct McpDumpResponse {
 }
 
 /// MCP response for `launch_app`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct McpLaunchResponse {
     pub success: bool,
     pub message: String,
 }
 
 /// MCP response for syntax-check tools.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct McpSyntaxCheckResponse {
     pub success: bool,
     pub message: String,

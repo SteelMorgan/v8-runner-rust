@@ -96,3 +96,19 @@ tools:
 
 - `mcp.http.*` and `mcp.execution.*` are parsed and validated now, but they are not wired into a live transport yet.
 - `tools.edt_cli.startup_timeout_ms` and `tools.edt_cli.command_timeout_ms` default to `300000` ms and also accept legacy `edt-cli` / kebab-case aliases for compatibility.
+
+## MCP Stdio
+
+The binary now exposes a live stdio MCP transport:
+
+- `v8-test-runner mcp serve stdio`
+- The stdio server is built on `rmcp` and advertises tools capability only.
+- The published tool set is: `run_all_tests`, `run_module_tests`, `build_project`, `dump_config`, `launch_app`, `check_syntax_edt`, `check_syntax_designer_config`, `check_syntax_designer_modules`.
+- MCP requests use the Kotlin-compatible `camelCase` argument surface (`fullRebuild`, `moduleName`, `utilityType`, `projectName`, `allExtensions`, `checkUseSynchronousCalls`, `checkUseModality`, ...).
+- Business failures are returned as structured MCP tool errors; internal adapter/runtime failures stay transport-level.
+- `stdout` is reserved for MCP frames on this path: tracing goes to `workPath/logs/mcp/actions.log`, bootstrap failures go to `stderr`, and spawned platform processes stay captured or null-routed.
+
+Current limits:
+
+- HTTP transport is not implemented yet.
+- MCP bounded concurrency and per-call timeout/cancel semantics are still pending follow-up work.

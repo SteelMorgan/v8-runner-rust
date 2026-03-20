@@ -8,5 +8,9 @@ pub mod port;
 pub mod request;
 /// MCP-facing response DTOs.
 pub mod response;
+/// MCP stdio server transport adapter.
+pub mod server;
 /// MCP-facing service layer over transport-neutral use cases.
 pub mod service;
+/// Structured tool payloads used by MCP transports.
+pub mod tool_result;

@@ -34,13 +34,18 @@
 
 ## Stage 2. MCP stdio MVP
 
-- Добавить `v8-test-runner mcp serve stdio`.
-- Поднять `rmcp` tool server только с tools-capability, без resources и prompts.
-- Опубликовать все 8 tools через MCP adapter поверх нового service layer.
-- Зафиксировать правило `stdout reserved for MCP`:
-  - никакого tracing/stdout логирования
-  - panic hook в stderr
-  - subprocess stdout/stderr только captured или null
+- [x] 2026-03-20: Добавить `v8-test-runner mcp serve stdio`.
+  - CLI surface расширен nested-командой `mcp serve stdio`, а `app.rs` получил отдельный bootstrap path без CLI presenter/json envelope.
+  - MCP bootstrap errors теперь печатаются в `stderr`, а обычный CLI bootstrap остался без изменений.
+- [x] 2026-03-20: Поднять `rmcp` tool server только с tools-capability, без resources и prompts.
+  - Добавлен `src/mcp/server.rs` с rmcp stdio transport adapter и `ServerCapabilities::enable_tools()` без resources/prompts.
+  - Реальный `tools/list` contract покрыт интеграционным тестом через child-process rmcp client.
+- [x] 2026-03-20: Опубликовать все 8 tools через MCP adapter поверх нового service layer.
+  - Через stdio публикуются `run_all_tests`, `run_module_tests`, `build_project`, `dump_config`, `launch_app`, `check_syntax_edt`, `check_syntax_designer_config`, `check_syntax_designer_modules`.
+  - Tool inputs теперь сериализуются через MCP DTO с `camelCase` schema/serde mapping, а business failures возвращаются как structured tool error payloads поверх `McpToolResult<T>`.
+- [x] 2026-03-20: Зафиксировать правило `stdout reserved for MCP`.
+  - MCP stdio path инициализирует file-only action logging через `workPath/logs/mcp/actions.log`, не пишет tracing в `stdout` и ставит explicit panic hook в `stderr`.
+  - Integration test на реальном stdio transport подтверждает, что initialize/tools-list/tool-call handshake проходит без загрязнения MCP stdout.
 - Добавить bounded execution через semaphore и per-call timeout/cancel semantics для MCP path.
 - На этом этапе EDT tools могут работать через текущий one-shot path, но уже через новый MCP adapter.
 

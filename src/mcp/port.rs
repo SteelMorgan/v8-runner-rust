@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::config::model::AppConfig;
 use crate::domain::build::BuildResult;
 use crate::domain::dump::DumpResult;
@@ -101,5 +103,55 @@ impl McpUseCasePort for DefaultMcpUseCasePort {
         request: &SyntaxRequest,
     ) -> UseCaseResult<SyntaxCheckResult> {
         check_syntax::execute(context, config, request)
+    }
+}
+
+impl<T> McpUseCasePort for Arc<T>
+where
+    T: McpUseCasePort + ?Sized,
+{
+    fn build_project(
+        &self,
+        context: &ExecutionContext,
+        config: &AppConfig,
+        request: &BuildRequest,
+    ) -> UseCaseResult<BuildResult> {
+        (**self).build_project(context, config, request)
+    }
+
+    fn run_tests(
+        &self,
+        context: &ExecutionContext,
+        config: &AppConfig,
+        request: &TestRequest,
+    ) -> UseCaseResult<TestRunResult> {
+        (**self).run_tests(context, config, request)
+    }
+
+    fn dump_config(
+        &self,
+        context: &ExecutionContext,
+        config: &AppConfig,
+        request: &DumpRequest,
+    ) -> UseCaseResult<DumpResult> {
+        (**self).dump_config(context, config, request)
+    }
+
+    fn launch_app(
+        &self,
+        context: &ExecutionContext,
+        config: &AppConfig,
+        request: &LaunchRequest,
+    ) -> UseCaseResult<LaunchResult> {
+        (**self).launch_app(context, config, request)
+    }
+
+    fn check_syntax(
+        &self,
+        context: &ExecutionContext,
+        config: &AppConfig,
+        request: &SyntaxRequest,
+    ) -> UseCaseResult<SyntaxCheckResult> {
+        (**self).check_syntax(context, config, request)
     }
 }

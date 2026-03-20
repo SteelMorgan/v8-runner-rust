@@ -145,3 +145,9 @@
 - [x] Добавить MCP-facing service layer с business/internal failure boundary и отдельными MCP DTO
 - [x] Нормализовать MCP contract mapping defaults, aliases и pre-validation в service layer
 - [x] Оставить место для будущего transport adapter слоя
+
+## MCP
+
+- [x] Добавить `v8-test-runner mcp serve stdio`
+- [x] Поднять rmcp stdio tool server с tools-only capability и опубликовать 8 MCP tools
+- [ ] Добавить bounded execution через semaphore и per-call timeout/cancel semantics для MCP path

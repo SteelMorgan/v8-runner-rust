@@ -8,7 +8,7 @@
 2. `config` loads and validates YAML configuration.
 3. `domain` defines structured result types for commands plus shared execution step structs.
 4. `use_cases` owns transport-neutral requests, `ExecutionContext`, structured failures, and business orchestration.
-5. `mcp` is the new MCP-facing service boundary: it maps raw tool inputs into use-case requests and returns MCP-specific DTOs plus structured business/internal failures.
+5. `mcp` now contains both the MCP-facing service boundary and the stdio transport adapter: it maps raw tool inputs into use-case requests, returns MCP-specific DTOs plus structured business/internal failures, and publishes the live stdio tool server.
 6. `platform` contains process execution, utility discovery, connection argument building, and low-level 1C adapters.
 7. `output` contains CLI presentation primitives such as `Presenter` and `Envelope`.
 8. `change_detection`, `parsers`, and `support` provide shared subsystems and utilities.
@@ -31,6 +31,7 @@ This boundary is designed so Wave 2 can add an EDT-specific interactive runner w
 The CLI/runtime boundary is now split explicitly:
 
 - `app.rs` owns bootstrap concerns only: config loading, logging setup, log cleanup, and top-level error envelopes for pre-command failures.
+- `app.rs` now also branches early for `mcp serve stdio`, because that path must bypass CLI presenters and keep `stdout` reserved for protocol traffic.
 - `cli::execute` converts `clap` args into transport-neutral request structs and renders command success/failure output.
 - `use_cases::{request,context,result}` define the transport-neutral contract that both CLI and future MCP adapters can consume.
 - `use_cases/*.rs` no longer depend on `clap`, `Presenter`, or `Envelope`.
@@ -49,12 +50,14 @@ These settings are intentionally inert for now: Stage 1 only loads, validates, a
 
 ## MCP Boundary
 
-The future MCP adapter no longer needs to talk to `cli::execute` or to reuse domain serialization directly.
+The MCP adapter no longer needs to talk to `cli::execute` or to reuse domain serialization directly.
 
 - `mcp::request` defines raw tool-facing request DTOs.
 - `mcp::service::McpService` maps those requests into `use_cases::request::*` and attaches per-call MCP transport metadata.
 - `mcp::response` defines MCP-specific response DTOs, including nested step/test/issue structs that are decoupled from domain serialization details.
 - `mcp::error` splits failures into `McpBusinessFailure<T>` for structured tool responses and `McpInternalError` for adapter/runtime misuse that must not be surfaced as business payloads.
+- `mcp::tool_result` defines the structured transport payload returned by MCP tools for success vs business failure outcomes.
+- `mcp::server::McpStdioServer` is the live rmcp stdio adapter. It exposes tools-only capabilities, maps incoming `camelCase` params into MCP DTOs, calls the synchronous `McpService` via `tokio::task::spawn_blocking`, and converts business/internal outcomes into MCP tool results.
 - MCP normalization is finalized in the service layer: dump-mode defaulting, launch alias mapping, `allExtensions` tri-state inference, and MCP-only pre-validation for syntax flag dependencies all live there instead of leaking into transport-neutral use cases.
 
 ## Backend Dispatch

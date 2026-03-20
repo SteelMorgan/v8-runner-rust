@@ -44,6 +44,8 @@ pub enum Command {
     Syntax(SyntaxArgs),
     /// Launch 1C application
     Launch(LaunchArgs),
+    /// Run Model Context Protocol transports
+    Mcp(McpArgs),
 }
 
 #[derive(Args, Debug)]
@@ -117,6 +119,30 @@ pub struct LaunchArgs {
     /// Launch mode
     #[arg(long, value_parser = ["designer", "thin", "thick"])]
     pub mode: String,
+}
+
+#[derive(Args, Debug)]
+pub struct McpArgs {
+    #[command(subcommand)]
+    pub command: McpCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum McpCommand {
+    /// Serve an MCP transport
+    Serve(McpServeArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct McpServeArgs {
+    #[command(subcommand)]
+    pub transport: McpServeTransport,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum McpServeTransport {
+    /// Serve MCP over stdio
+    Stdio,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -201,7 +227,7 @@ pub struct DesignerModulesSyntaxArgs {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, SyntaxTarget};
+    use super::{Cli, Command, McpCommand, McpServeTransport, SyntaxTarget};
     use clap::Parser;
 
     #[test]
@@ -257,6 +283,21 @@ mod tests {
                     assert!(!config.all_extensions);
                 }
                 _ => panic!("unexpected syntax target"),
+            },
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parses_mcp_stdio_command() {
+        let cli = Cli::try_parse_from(["v8-test-runner", "mcp", "serve", "stdio"])
+            .expect("parse mcp stdio");
+
+        match cli.command {
+            Command::Mcp(args) => match args.command {
+                McpCommand::Serve(serve) => {
+                    assert!(matches!(serve.transport, McpServeTransport::Stdio));
+                }
             },
             _ => panic!("unexpected command"),
         }
