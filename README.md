@@ -116,6 +116,7 @@ The binary now exposes a live stdio MCP transport:
 - Interactive EDT `stdout` no longer downgrades parseable `--file` issues into `tool_failed`: `stdout + issues` maps to `issues_found`, while `stdout` without parseable issues and any non-empty `stderr` still surface as `tool_failed`.
 - For bounded EDT MCP calls (`check_syntax_edt`), the timeout deadline still starts when the request enters the MCP server wrapper, so queue wait and execution time consume the same `tools.edt_cli.command_timeout_ms` budget.
 - Client cancellation now returns early for queued and already-running MCP tool calls. This early return does not kill already-started one-shot work; detached one-shot tools keep their server-side slot until they naturally finish, while live `check_syntax_edt` retains both the MCP execution slot and the actor admission slot until the in-flight interactive command finishes.
+- The MCP integration suite now covers all 8 published tools on the stdio path, explicit `dump_config(mode=PARTIAL)` regressions for both `DESIGNER` and `IBCMD`, and schema-level `tools/list` contract checks.
 - Transport-level error semantics are fixed as:
 - `queued cancel` => `reason=cancelled`, `stage=queued`, `timeoutMs=null|<budget>`
 - `running cancel` => `reason=cancelled`, `stage=running`, `timeoutMs=null|<budget>`
@@ -140,6 +141,7 @@ The binary now also exposes a live streamable HTTP MCP transport:
 - `mcp.http.idle_ttl_secs` maps to session inactivity timeout. Expired sessions are removed and their capacity becomes available to new `initialize` calls.
 - `mcp.http.stateful_sessions=false` switches the transport into POST-only stateless mode: no session header is issued and `GET` / `DELETE` return `405 Method Not Allowed`.
 - The HTTP path reuses the same global semaphore and the same shared interactive EDT actor as stdio. Separate HTTP MCP sessions do not spawn separate `1cedtcli` processes.
+- The HTTP integration suite now also covers a live non-EDT tool call and a burst `initialize` admission/recovery scenario on top of the existing session lifecycle tests.
 
 Current limits:
 

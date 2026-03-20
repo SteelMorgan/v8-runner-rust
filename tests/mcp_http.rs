@@ -146,6 +146,20 @@ fn setup_http_designer_project(
     max_sessions: usize,
     idle_ttl_secs: u64,
 ) -> (tempfile::TempDir, PathBuf, String) {
+    setup_http_designer_project_with_script(
+        "printf 'designer stub\\n'\nexit 0",
+        stateful_sessions,
+        max_sessions,
+        idle_ttl_secs,
+    )
+}
+
+fn setup_http_designer_project_with_script(
+    script_body: &str,
+    stateful_sessions: bool,
+    max_sessions: usize,
+    idle_ttl_secs: u64,
+) -> (tempfile::TempDir, PathBuf, String) {
     let dir = tempdir().expect("tempdir");
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
@@ -155,10 +169,7 @@ fn setup_http_designer_project(
 
     fs::create_dir_all(&base_path).expect("base");
     fs::create_dir_all(&work_path).expect("work");
-    write_script(
-        &platform_dir.join("bin").join("1cv8"),
-        "printf 'designer stub\\n'\nexit 0",
-    );
+    write_script(&platform_dir.join("bin").join("1cv8"), script_body);
     write_http_designer_config(
         &config_path,
         &base_path,
@@ -257,7 +268,10 @@ async fn wait_for_server(url: &str) {
         .expect("authority")
         .to_owned();
     for _ in 0..100 {
-        if tokio::net::TcpStream::connect(authority.as_str()).await.is_ok() {
+        if tokio::net::TcpStream::connect(authority.as_str())
+            .await
+            .is_ok()
+        {
             return;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -472,6 +486,38 @@ async fn mcp_http_initialize_reuses_session_and_lists_tools() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_http_launch_app_returns_success_payload_over_live_session() {
+    let (_dir, config_path, url) = setup_http_designer_project_with_script("sleep 1", true, 4, 900);
+    let mut server = HttpServerProcess::spawn(&config_path, &url).await;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .expect("http client");
+
+    let (session_id, _) = initialize_session(&client, &url).await;
+    send_initialized(&client, &url, &session_id).await;
+
+    let response = call_tool(
+        &client,
+        &url,
+        &session_id,
+        "launch_app",
+        json!({ "utilityType": "designer" }),
+        20,
+    )
+    .await;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let payload = extract_sse_json(&response.text().await.expect("launch body"));
+    assert_eq!(payload["result"]["structuredContent"]["status"], "success");
+    assert_eq!(
+        payload["result"]["structuredContent"]["result"]["success"],
+        true
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_http_missing_and_expired_sessions_are_deterministic() {
     let (_dir, config_path, url) = setup_http_designer_project(true, 4, 1);
     let mut server = HttpServerProcess::spawn(&config_path, &url).await;
@@ -492,7 +538,10 @@ async fn mcp_http_missing_and_expired_sessions_are_deterministic() {
         .send()
         .await
         .expect("missing session post");
-    assert_eq!(missing_session_post.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        missing_session_post.status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
 
     let missing_session_get = client
         .get(&url)
@@ -500,7 +549,10 @@ async fn mcp_http_missing_and_expired_sessions_are_deterministic() {
         .send()
         .await
         .expect("missing session get");
-    assert_eq!(missing_session_get.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        missing_session_get.status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
 
     let (session_id, _) = initialize_session(&client, &url).await;
     send_initialized(&client, &url, &session_id).await;
@@ -571,7 +623,10 @@ async fn mcp_http_stateless_mode_stays_post_only_and_validates_headers() {
 
     let initialize_response = initialize_stateless(&client, &url).await;
     assert_eq!(initialize_response.status(), reqwest::StatusCode::OK);
-    assert!(initialize_response.headers().get("Mcp-Session-Id").is_none());
+    assert!(initialize_response
+        .headers()
+        .get("Mcp-Session-Id")
+        .is_none());
 
     let wrong_accept = client
         .post(&url)
@@ -611,10 +666,77 @@ async fn mcp_http_stateless_mode_stays_post_only_and_validates_headers() {
         .send()
         .await
         .expect("stateless get");
-    assert_eq!(get_response.status(), reqwest::StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(
+        get_response.status(),
+        reqwest::StatusCode::METHOD_NOT_ALLOWED
+    );
 
     let delete_response = client.delete(&url).send().await.expect("stateless delete");
-    assert_eq!(delete_response.status(), reqwest::StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(
+        delete_response.status(),
+        reqwest::StatusCode::METHOD_NOT_ALLOWED
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_http_initialize_burst_respects_capacity_and_recovers_after_delete() {
+    let (_dir, config_path, url) = setup_http_designer_project(true, 2, 900);
+    let mut server = HttpServerProcess::spawn(&config_path, &url).await;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .expect("http client");
+
+    let mut handles = Vec::new();
+    for _ in 0..6 {
+        let client = client.clone();
+        let url = url.clone();
+        handles.push(tokio::spawn(async move {
+            initialize_stateless(&client, &url).await
+        }));
+    }
+    let mut responses = Vec::new();
+    for handle in handles {
+        responses.push(handle.await.expect("initialize join"));
+    }
+    let success_count = responses
+        .iter()
+        .filter(|response| response.status() == reqwest::StatusCode::OK)
+        .count();
+    let unavailable_count = responses
+        .iter()
+        .filter(|response| response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE)
+        .count();
+    assert_eq!(success_count, 2);
+    assert_eq!(unavailable_count, 4);
+
+    let session_ids = responses
+        .into_iter()
+        .filter(|response| response.status() == reqwest::StatusCode::OK)
+        .map(|response| {
+            response
+                .headers()
+                .get("Mcp-Session-Id")
+                .expect("session id header")
+                .to_str()
+                .expect("session id")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    for session_id in &session_ids {
+        let delete_response = client
+            .delete(&url)
+            .header("Mcp-Session-Id", session_id)
+            .send()
+            .await
+            .expect("delete session");
+        assert_eq!(delete_response.status(), reqwest::StatusCode::ACCEPTED);
+    }
+
+    let recovered = initialize_stateless(&client, &url).await;
+    assert_eq!(recovered.status(), reqwest::StatusCode::OK);
 
     server.shutdown().await;
 }

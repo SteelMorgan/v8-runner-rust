@@ -200,6 +200,108 @@ fn setup_hybrid_edt_project_with_options(
     (dir, config_path)
 }
 
+fn write_designer_suite_config(
+    path: &Path,
+    base_path: &Path,
+    work_path: &Path,
+    platform_path: &Path,
+) {
+    let config = format!(
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\ntests:\n  execution_timeout_seconds: 5\nmcp:\n  execution:\n    max_concurrent_calls: 1\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
+        base_path.display(),
+        work_path.display(),
+        platform_path.display(),
+    );
+    fs::write(path, config).expect("designer suite config");
+}
+
+fn setup_designer_suite_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
+    let dir = tempdir().expect("tempdir");
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    let platform_dir = dir.path().join("platform");
+    let config_path = dir.path().join("application.yaml");
+    let designer_calls_log = dir.path().join("designer.calls.log");
+    let enterprise_calls_log = dir.path().join("enterprise.calls.log");
+    let captured_config = dir.path().join("captured-config.json");
+
+    fs::create_dir_all(&base_path).expect("base");
+    fs::create_dir_all(base_path.join("main")).expect("main");
+    fs::create_dir_all(&work_path).expect("work");
+    fs::write(
+        base_path.join("main").join("Module.bsl"),
+        "procedure Test() endprocedure",
+    )
+    .expect("module");
+
+    let designer_script = format!(
+        "args=\"$*\"\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nprintf '%s\\n' \"$args\" >> '{}'\nif [ -n \"$out\" ]; then\n  mkdir -p \"$(dirname \"$out\")\"\n  case \"$args\" in\n    *\"/CheckModules\"*)\n      cat <<'LOG' > \"$out\"\n{{CommonModules.TestModule(4,2)}}: Ошибка компиляции\n{{1}}: context\nLOG\n      exit 101\n      ;;\n    *)\n      : > \"$out\"\n      ;;\n  esac\nfi\nexit 0",
+        designer_calls_log.display()
+    );
+    write_script(&platform_dir.join("bin").join("1cv8"), &designer_script);
+
+    let enterprise_script = format!(
+        "args=\"$*\"\nprintf '%s\\n' \"$args\" >> '{}'\npayload=\"\"\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/C\" ]; then payload=\"$arg\"; fi\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\ncase \"$args\" in\n  *\"RunUnitTests=\"*)\n    cfg=$(printf '%s' \"$payload\" | sed 's/^RunUnitTests=\"//; s/\"$//')\n    cp \"$cfg\" '{}'\n    report=$(awk -F '\"' '/reportPath/ {{print $4; exit}}' \"$cfg\")\n    ylog=$(awk -F '\"' '/\"file\"/ {{print $4; exit}}' \"$cfg\")\n    mkdir -p \"$(dirname \"$report\")\" \"$(dirname \"$ylog\")\"\n    cat <<'XML' > \"$report\"\n<testsuites><testsuite name=\"suite\"><testcase name=\"ok\" classname=\"Sample\" time=\"0.1\"/></testsuite></testsuites>\nXML\n    cat <<'LOG' > \"$ylog\"\n12:00:00.000 [INF] ok\nLOG\n    if [ -n \"$out\" ]; then mkdir -p \"$(dirname \"$out\")\" && : > \"$out\"; fi\n    exit 0\n    ;;\n  *)\n    sleep 1\n    exit 0\n    ;;\nesac",
+        enterprise_calls_log.display(),
+        captured_config.display()
+    );
+    write_script(&platform_dir.join("bin").join("1cv8c"), &enterprise_script);
+
+    write_designer_suite_config(&config_path, &base_path, &work_path, &platform_dir);
+
+    (
+        dir,
+        config_path,
+        designer_calls_log,
+        enterprise_calls_log,
+        captured_config,
+    )
+}
+
+fn write_ibcmd_config(path: &Path, base_path: &Path, work_path: &Path, ibcmd_path: &Path) {
+    let config = format!(
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\nconnection: 'File=/tmp/ib'\nmcp:\n  execution:\n    max_concurrent_calls: 1\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
+        base_path.display(),
+        work_path.display(),
+        ibcmd_path.display(),
+    );
+    fs::write(path, config).expect("ibcmd config");
+}
+
+fn write_ibcmd_script(path: &Path, calls_log: &Path, fail_pattern: Option<&str>) {
+    let fail_branch = fail_pattern
+        .map(|pattern| {
+            format!(
+                "if printf '%s' \"$args\" | grep -F -q -- '{}'; then exit 17; fi",
+                pattern
+            )
+        })
+        .unwrap_or_default();
+    let body = format!(
+        "args=\"$*\"\nprintf '%s\\n' \"$args\" >> '{}'\n{}\nmkdir -p \"$(printf '%s' \"$args\" | awk '{{print $NF}}')\"\nexit 0",
+        calls_log.display(),
+        fail_branch
+    );
+    write_script(path, &body);
+}
+
+fn setup_ibcmd_dump_project(fail_pattern: Option<&str>) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let dir = tempdir().expect("tempdir");
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    let ibcmd_path = dir.path().join("ibcmd");
+    let config_path = dir.path().join("application.yaml");
+    let calls_log = dir.path().join("ibcmd.calls.log");
+
+    fs::create_dir_all(base_path.join("main")).expect("main");
+    fs::create_dir_all(&work_path).expect("work");
+    fs::write(base_path.join("main").join("old.txt"), "old").expect("old");
+    write_ibcmd_script(&ibcmd_path, &calls_log, fail_pattern);
+    write_ibcmd_config(&config_path, &base_path, &work_path, &ibcmd_path);
+
+    (dir, config_path, calls_log)
+}
+
 #[cfg(unix)]
 fn make_executable(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
@@ -300,6 +402,13 @@ async fn wait_for_invocation_count(path: &Path, expected: usize) {
     );
 }
 
+fn schema_supports_type(value: &Value, expected: &str) -> bool {
+    value == expected
+        || value
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item == expected))
+}
+
 #[test]
 fn mcp_missing_config_reports_error_on_stderr() {
     let output = std::process::Command::new(cargo_bin("v8-test-runner"))
@@ -377,6 +486,74 @@ async fn mcp_stdio_exposes_expected_tools_and_capabilities() {
         .expect("required")
         .iter()
         .any(|value| value == "moduleName"));
+    let build_schema = tools
+        .iter()
+        .find(|tool| tool.name == "build_project")
+        .map(|tool| serde_json::to_value(&tool.input_schema).expect("build schema"))
+        .expect("build tool");
+    assert!(schema_supports_type(
+        &build_schema["properties"]["fullRebuild"]["type"],
+        "boolean"
+    ));
+
+    let tests_schema = tools
+        .iter()
+        .find(|tool| tool.name == "run_all_tests")
+        .map(|tool| serde_json::to_value(&tool.input_schema).expect("tests schema"))
+        .expect("tests tool");
+    assert!(schema_supports_type(
+        &tests_schema["properties"]["full"]["type"],
+        "boolean"
+    ));
+
+    let dump_schema = tools
+        .iter()
+        .find(|tool| tool.name == "dump_config")
+        .map(|tool| serde_json::to_value(&tool.input_schema).expect("dump schema"))
+        .expect("dump tool");
+    assert!(schema_supports_type(
+        &dump_schema["properties"]["mode"]["type"],
+        "string"
+    ));
+    assert_eq!(dump_schema["properties"]["objects"]["type"], "array");
+
+    let edt_schema = tools
+        .iter()
+        .find(|tool| tool.name == "check_syntax_edt")
+        .map(|tool| serde_json::to_value(&tool.input_schema).expect("edt schema"))
+        .expect("edt tool");
+    assert!(schema_supports_type(
+        &edt_schema["properties"]["projectName"]["type"],
+        "string"
+    ));
+
+    let designer_config_schema = tools
+        .iter()
+        .find(|tool| tool.name == "check_syntax_designer_config")
+        .map(|tool| serde_json::to_value(&tool.input_schema).expect("designer config schema"))
+        .expect("designer config tool");
+    assert!(schema_supports_type(
+        &designer_config_schema["properties"]["allExtensions"]["type"],
+        "boolean"
+    ));
+    assert!(schema_supports_type(
+        &designer_config_schema["properties"]["checkUseSynchronousCalls"]["type"],
+        "boolean"
+    ));
+
+    let designer_modules_schema = tools
+        .iter()
+        .find(|tool| tool.name == "check_syntax_designer_modules")
+        .map(|tool| serde_json::to_value(&tool.input_schema).expect("designer modules schema"))
+        .expect("designer modules tool");
+    assert!(schema_supports_type(
+        &designer_modules_schema["properties"]["server"]["type"],
+        "boolean"
+    ));
+    assert!(schema_supports_type(
+        &designer_modules_schema["properties"]["extendedModulesCheck"]["type"],
+        "boolean"
+    ));
 
     client.cancel().await.expect("cancel client");
 }
@@ -411,6 +588,364 @@ async fn mcp_stdio_returns_structured_business_failure() {
     assert_eq!(payload["status"], "business_failure");
     assert_eq!(payload["error"]["code"], "invalid_argument");
     assert_eq!(payload["response"]["success"], false);
+
+    client.cancel().await.expect("cancel client");
+}
+
+#[tokio::test]
+async fn mcp_stdio_run_all_tests_returns_success_payload() {
+    let (_dir, config_path, designer_calls_log, enterprise_calls_log, _captured_config) =
+        setup_designer_suite_project();
+    let transport = TokioChildProcess::new(
+        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+            cmd.arg("--config")
+                .arg(config_path.as_os_str())
+                .arg("mcp")
+                .arg("serve")
+                .arg("stdio");
+        }),
+    )
+    .expect("spawn stdio transport");
+
+    let client = ().serve(transport).await.expect("connect rmcp client");
+    let response = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("run_all_tests"))
+        .await
+        .expect("call tool");
+
+    assert_eq!(response.is_error, Some(false));
+    let payload: Value = response.structured_content.expect("structured payload");
+    assert_eq!(payload["status"], "success");
+    assert_eq!(payload["result"]["success"], true);
+    assert_eq!(payload["result"]["total_tests"], 1);
+    assert!(fs::read_to_string(designer_calls_log)
+        .expect("designer calls")
+        .contains("/UpdateDBCfg"));
+    assert!(fs::read_to_string(enterprise_calls_log)
+        .expect("enterprise calls")
+        .contains("RunUnitTests="));
+
+    client.cancel().await.expect("cancel client");
+}
+
+#[tokio::test]
+async fn mcp_stdio_run_module_tests_preserves_module_scope() {
+    let (_dir, config_path, _designer_calls_log, enterprise_calls_log, captured_config) =
+        setup_designer_suite_project();
+    let transport = TokioChildProcess::new(
+        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+            cmd.arg("--config")
+                .arg(config_path.as_os_str())
+                .arg("mcp")
+                .arg("serve")
+                .arg("stdio");
+        }),
+    )
+    .expect("spawn stdio transport");
+
+    let client = ().serve(transport).await.expect("connect rmcp client");
+    let response = client
+        .peer()
+        .call_tool(
+            CallToolRequestParams::new("run_module_tests").with_arguments(
+                serde_json::from_value(json!({ "moduleName": "Billing" })).expect("arguments"),
+            ),
+        )
+        .await
+        .expect("call tool");
+
+    assert_eq!(response.is_error, Some(false));
+    let payload: Value = response.structured_content.expect("structured payload");
+    assert_eq!(payload["status"], "success");
+    assert_eq!(payload["result"]["success"], true);
+    let captured: Value =
+        serde_json::from_slice(&fs::read(captured_config).expect("captured config json"))
+            .expect("captured config value");
+    assert_eq!(captured["filter"]["modules"][0], "Billing");
+    assert!(fs::read_to_string(enterprise_calls_log)
+        .expect("enterprise calls")
+        .contains("RunUnitTests="));
+
+    client.cancel().await.expect("cancel client");
+}
+
+#[tokio::test]
+async fn mcp_stdio_build_project_runs_full_rebuild_successfully() {
+    let (_dir, config_path, designer_calls_log, _enterprise_calls_log, _captured_config) =
+        setup_designer_suite_project();
+    let transport = TokioChildProcess::new(
+        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+            cmd.arg("--config")
+                .arg(config_path.as_os_str())
+                .arg("mcp")
+                .arg("serve")
+                .arg("stdio");
+        }),
+    )
+    .expect("spawn stdio transport");
+
+    let client = ().serve(transport).await.expect("connect rmcp client");
+    let response = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("build_project").with_arguments(
+            serde_json::from_value(json!({ "fullRebuild": true })).expect("arguments"),
+        ))
+        .await
+        .expect("call tool");
+
+    assert_eq!(response.is_error, Some(false));
+    let payload: Value = response.structured_content.expect("structured payload");
+    assert_eq!(payload["status"], "success");
+    assert_eq!(payload["result"]["success"], true);
+    assert!(fs::read_to_string(designer_calls_log)
+        .expect("designer calls")
+        .contains("/UpdateDBCfg"));
+
+    client.cancel().await.expect("cancel client");
+}
+
+#[tokio::test]
+async fn mcp_stdio_launch_app_returns_success_for_thin_client() {
+    let (_dir, config_path, _designer_calls_log, enterprise_calls_log, _captured_config) =
+        setup_designer_suite_project();
+    let transport = TokioChildProcess::new(
+        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+            cmd.arg("--config")
+                .arg(config_path.as_os_str())
+                .arg("mcp")
+                .arg("serve")
+                .arg("stdio");
+        }),
+    )
+    .expect("spawn stdio transport");
+
+    let client = ().serve(transport).await.expect("connect rmcp client");
+    let response = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("launch_app").with_arguments(
+            serde_json::from_value(json!({ "utilityType": "thin" })).expect("arguments"),
+        ))
+        .await
+        .expect("call tool");
+
+    assert_eq!(response.is_error, Some(false));
+    let payload: Value = response.structured_content.expect("structured payload");
+    assert_eq!(payload["status"], "success");
+    assert_eq!(payload["result"]["success"], true);
+    assert!(!fs::read_to_string(enterprise_calls_log)
+        .expect("enterprise calls")
+        .contains("RunUnitTests="));
+
+    client.cancel().await.expect("cancel client");
+}
+
+#[tokio::test]
+async fn mcp_stdio_check_syntax_designer_modules_returns_structured_issues() {
+    let (_dir, config_path, designer_calls_log, _enterprise_calls_log, _captured_config) =
+        setup_designer_suite_project();
+    let transport = TokioChildProcess::new(
+        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+            cmd.arg("--config")
+                .arg(config_path.as_os_str())
+                .arg("mcp")
+                .arg("serve")
+                .arg("stdio");
+        }),
+    )
+    .expect("spawn stdio transport");
+
+    let client = ().serve(transport).await.expect("connect rmcp client");
+    let response = client
+        .peer()
+        .call_tool(
+            CallToolRequestParams::new("check_syntax_designer_modules").with_arguments(
+                serde_json::from_value(json!({ "server": true })).expect("arguments"),
+            ),
+        )
+        .await
+        .expect("call tool");
+
+    assert_eq!(response.is_error, Some(true));
+    let payload: Value = response.structured_content.expect("structured payload");
+    assert_eq!(payload["status"], "business_failure");
+    assert_eq!(payload["response"]["check_result"], "issues_found");
+    assert_eq!(payload["response"]["issues"][0]["kind"], "module");
+    assert_eq!(
+        payload["response"]["issues"][0]["path"],
+        "CommonModules.TestModule"
+    );
+    assert!(fs::read_to_string(designer_calls_log)
+        .expect("designer calls")
+        .contains("/CheckModules"));
+
+    client.cancel().await.expect("cancel client");
+}
+
+#[tokio::test]
+async fn mcp_stdio_dump_config_full_returns_success_payload() {
+    let (_dir, config_path, designer_calls_log, _enterprise_calls_log, _captured_config) =
+        setup_designer_suite_project();
+    let transport = TokioChildProcess::new(
+        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+            cmd.arg("--config")
+                .arg(config_path.as_os_str())
+                .arg("mcp")
+                .arg("serve")
+                .arg("stdio");
+        }),
+    )
+    .expect("spawn stdio transport");
+
+    let client = ().serve(transport).await.expect("connect rmcp client");
+    let response =
+        client
+            .peer()
+            .call_tool(CallToolRequestParams::new("dump_config").with_arguments(
+                serde_json::from_value(json!({ "mode": "FULL" })).expect("arguments"),
+            ))
+            .await
+            .expect("call tool");
+
+    assert_eq!(response.is_error, Some(false));
+    let payload: Value = response.structured_content.expect("structured payload");
+    assert_eq!(payload["status"], "success");
+    assert_eq!(payload["result"]["success"], true);
+    assert_eq!(payload["result"]["mode"], "FULL");
+    assert!(fs::read_to_string(designer_calls_log)
+        .expect("designer calls")
+        .contains("DumpConfigToFiles"));
+
+    client.cancel().await.expect("cancel client");
+}
+
+#[tokio::test]
+async fn mcp_stdio_dump_config_partial_designer_preserves_partial_mode() {
+    let (_dir, config_path, designer_calls_log, _enterprise_calls_log, _captured_config) =
+        setup_designer_suite_project();
+    let transport = TokioChildProcess::new(
+        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+            cmd.arg("--config")
+                .arg(config_path.as_os_str())
+                .arg("mcp")
+                .arg("serve")
+                .arg("stdio");
+        }),
+    )
+    .expect("spawn stdio transport");
+
+    let client = ().serve(transport).await.expect("connect rmcp client");
+    let response = client
+        .peer()
+        .call_tool(
+            CallToolRequestParams::new("dump_config").with_arguments(
+                serde_json::from_value(json!({
+                    "mode": "PARTIAL",
+                    "objects": ["Catalog.Items"]
+                }))
+                .expect("arguments"),
+            ),
+        )
+        .await
+        .expect("call tool");
+
+    assert_eq!(response.is_error, Some(false));
+    let payload: Value = response.structured_content.expect("structured payload");
+    assert_eq!(payload["status"], "success");
+    assert_eq!(payload["result"]["success"], true);
+    assert_eq!(payload["result"]["mode"], "PARTIAL");
+    let calls = fs::read_to_string(designer_calls_log).expect("designer calls");
+    assert!(calls.contains("DumpConfigToFiles"));
+    assert!(calls.contains("-partial"));
+
+    client.cancel().await.expect("cancel client");
+}
+
+#[tokio::test]
+async fn mcp_stdio_dump_config_partial_ibcmd_returns_degraded_success() {
+    let (_dir, config_path, calls_log) = setup_ibcmd_dump_project(None);
+    let transport = TokioChildProcess::new(
+        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+            cmd.arg("--config")
+                .arg(config_path.as_os_str())
+                .arg("mcp")
+                .arg("serve")
+                .arg("stdio");
+        }),
+    )
+    .expect("spawn stdio transport");
+
+    let client = ().serve(transport).await.expect("connect rmcp client");
+    let response = client
+        .peer()
+        .call_tool(
+            CallToolRequestParams::new("dump_config").with_arguments(
+                serde_json::from_value(json!({
+                    "mode": "PARTIAL",
+                    "objects": ["Catalog.Items"]
+                }))
+                .expect("arguments"),
+            ),
+        )
+        .await
+        .expect("call tool");
+
+    assert_eq!(response.is_error, Some(false));
+    let payload: Value = response.structured_content.expect("structured payload");
+    assert_eq!(payload["status"], "success");
+    assert_eq!(payload["result"]["success"], true);
+    assert_eq!(payload["result"]["mode"], "PARTIAL");
+    assert!(payload["result"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("IBCMD does not support object-scoped partial dump"));
+    assert!(fs::read_to_string(calls_log)
+        .expect("ibcmd calls")
+        .contains("--sync"));
+
+    client.cancel().await.expect("cancel client");
+}
+
+#[tokio::test]
+async fn mcp_stdio_dump_config_partial_ibcmd_preserves_partial_mode_on_failure() {
+    let (_dir, config_path, calls_log) = setup_ibcmd_dump_project(Some("--sync"));
+    let transport = TokioChildProcess::new(
+        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+            cmd.arg("--config")
+                .arg(config_path.as_os_str())
+                .arg("mcp")
+                .arg("serve")
+                .arg("stdio");
+        }),
+    )
+    .expect("spawn stdio transport");
+
+    let client = ().serve(transport).await.expect("connect rmcp client");
+    let response = client
+        .peer()
+        .call_tool(
+            CallToolRequestParams::new("dump_config").with_arguments(
+                serde_json::from_value(json!({
+                    "mode": "PARTIAL",
+                    "objects": ["Catalog.Items"]
+                }))
+                .expect("arguments"),
+            ),
+        )
+        .await
+        .expect("call tool");
+
+    assert_eq!(response.is_error, Some(true));
+    let payload: Value = response.structured_content.expect("structured payload");
+    assert_eq!(payload["status"], "business_failure");
+    assert_eq!(payload["response"]["mode"], "PARTIAL");
+    assert!(payload["response"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("IBCMD does not support object-scoped partial dump"));
+    assert!(fs::read_to_string(calls_log)
+        .expect("ibcmd calls")
+        .contains("--sync"));
 
     client.cancel().await.expect("cancel client");
 }

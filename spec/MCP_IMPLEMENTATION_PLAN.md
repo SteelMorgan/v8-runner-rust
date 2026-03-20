@@ -106,13 +106,11 @@
 
 ## Stage 5. Hardening And Docs
 
-- Добавить stress и regression suite:
-  - contract tests на `list_tools`
-  - integration tests на все 8 tools
-  - stdio cleanliness tests
-  - HTTP session lifecycle tests
-  - EDT timeout/restart/isolation tests
-  - `dump PARTIAL` matrix for `DESIGNER` and `IBCMD`
+- [x] 2026-03-20: Добавить stress и regression suite.
+  - MCP `list_tools` contract теперь дополнительно фиксируется schema-level assertions на ключевые `camelCase` поля и required args поверх stdio/HTTP listing tests.
+  - Stdio integration suite теперь покрывает все 8 опубликованных tools: `run_all_tests`, `run_module_tests`, `build_project`, `dump_config`, `launch_app`, `check_syntax_edt`, `check_syntax_designer_config`, `check_syntax_designer_modules`.
+  - `dump_config` regression matrix теперь покрывает MCP `PARTIAL` для `DESIGNER` и degraded success/failure semantics для `IBCMD` с сохранением `mode=PARTIAL`.
+  - HTTP suite дополнительно покрывает live non-EDT tool call и burst admission/recovery scenario, а существующие tests остаются источником правды для session lifecycle и EDT timeout/restart/isolation semantics.
 - Добавить runtime metrics и tracing:
   - semaphore wait time
   - EDT queue depth
