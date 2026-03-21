@@ -636,7 +636,11 @@ fn find_prompt(buffer: &[u8], prompt: &[u8]) -> Option<(usize, usize)> {
         }
         let suffix = &buffer[index + prompt.len()..];
         let has_boundary = index == 0 || matches!(buffer[index - 1], b'\n' | b'\r');
-        if has_boundary && suffix.iter().all(|byte| matches!(byte, b'\n' | b'\r')) {
+        if has_boundary
+            && suffix
+                .iter()
+                .all(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
+        {
             return Some((index, prompt.len() + suffix.len()));
         }
     }
@@ -737,8 +741,9 @@ mod tests {
         write_script(
             path,
             &format!(
-                "prompt_stdout() {{ printf '1C:EDT>'; }}\n\
-                 prompt_stderr() {{ printf '1C:EDT>' >&2; }}\n\
+                "prompt_suffix=\"${{PROMPT_SUFFIX:-}}\"\n\
+                 prompt_stdout() {{ printf '1C:EDT>%s' \"$prompt_suffix\"; }}\n\
+                 prompt_stderr() {{ printf '1C:EDT>%s' \"$prompt_suffix\" >&2; }}\n\
                  startup_stream=\"${{STARTUP_PROMPT_STREAM:-stdout}}\"\n\
                  case \"$startup_stream\" in\n\
                    stdout) prompt_stdout ;;\n\
@@ -853,18 +858,37 @@ mod tests {
         startup_timeout: Duration,
         stream: &str,
     ) -> InteractiveProcessExecutor {
+        spawn_executor_with_wrapper(script, startup_timeout, &format!(
+            "STARTUP_PROMPT_STREAM='{}' exec '{}'\n",
+            stream,
+            script.display()
+        ))
+    }
+
+    #[cfg(unix)]
+    fn spawn_executor_with_prompt_suffix(
+        script: &Path,
+        startup_timeout: Duration,
+        prompt_suffix: &str,
+    ) -> InteractiveProcessExecutor {
+        spawn_executor_with_wrapper(script, startup_timeout, &format!(
+            "PROMPT_SUFFIX='{}' exec '{}'\n",
+            prompt_suffix,
+            script.display()
+        ))
+    }
+
+    #[cfg(unix)]
+    fn spawn_executor_with_wrapper(
+        script: &Path,
+        startup_timeout: Duration,
+        wrapper_body: &str,
+    ) -> InteractiveProcessExecutor {
         let wrapper = script
             .parent()
             .expect("script parent")
-            .join(format!("wrapper-{stream}.sh"));
-        write_script(
-            &wrapper,
-            &format!(
-                "STARTUP_PROMPT_STREAM='{}' exec '{}'\n",
-                stream,
-                script.display()
-            ),
-        );
+            .join(format!("wrapper-{}.sh", std::process::id()));
+        write_script(&wrapper, wrapper_body);
 
         InteractiveProcessExecutor::spawn(InteractiveProcessRequest::new(wrapper), startup_timeout)
             .expect("spawn executor")
@@ -910,6 +934,18 @@ mod tests {
 
         let executor =
             spawn_executor_with_startup_stream(&script, Duration::from_millis(200), "stderr");
+
+        assert!(executor.pid().expect("pid") > 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn startup_prompt_with_trailing_space_is_supported() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("repl.sh");
+        repl_script(&script, &dir.path().join("child.pid"));
+
+        let executor = spawn_executor_with_prompt_suffix(&script, Duration::from_millis(200), " ");
 
         assert!(executor.pid().expect("pid") > 0);
     }
@@ -1122,6 +1158,21 @@ mod tests {
             err,
             InteractiveProcessError::CommandTimeout { .. }
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_prompt_with_trailing_space_is_supported() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("repl.sh");
+        repl_script(&script, &dir.path().join("child.pid"));
+        let mut executor =
+            spawn_executor_with_prompt_suffix(&script, Duration::from_millis(200), " ");
+
+        let output = run_command(&mut executor, "echo:ok", Duration::from_millis(200));
+
+        assert_eq!(output.stdout, "ok\n");
+        assert_eq!(output.stderr, "");
     }
 
     #[cfg(unix)]
