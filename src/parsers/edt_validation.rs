@@ -7,7 +7,8 @@ use crate::domain::issue::{EdtIssue, Issue, IssueSeverity};
 /// Parse `1cedtcli validate --file` log content into structured EDT issues.
 ///
 /// Contract note: real `1cedtcli` output can vary by version. This parser accepts
-/// tab-separated lines with 3..=6 columns and skips malformed rows with warnings.
+/// both legacy tab-separated lines with 3..=6 columns and the current 8-column
+/// `1cedtcli` issue table, skipping malformed rows with warnings.
 pub fn parse(content: &str) -> Vec<Issue> {
     let mut issues = Vec::new();
 
@@ -50,6 +51,38 @@ fn parse_line(line: &str) -> Option<Issue> {
         return None;
     }
 
+    parse_current_issue_table(&columns).or_else(|| parse_legacy_issue_table(&columns))
+}
+
+fn parse_current_issue_table(columns: &[&str]) -> Option<Issue> {
+    if columns.len() < 8 || !looks_like_timestamp(columns[0]) {
+        return None;
+    }
+
+    let severity = parse_severity(columns[1].trim())?;
+    let path = columns[5].trim();
+    if path.is_empty() {
+        return None;
+    }
+
+    let (line_num, column_num) = parse_location(columns[6]);
+    let message = columns[7..].join("\t");
+    let message = message.trim();
+    if message.is_empty() {
+        return None;
+    }
+
+    Some(Issue::Edt(EdtIssue {
+        path: path.to_owned(),
+        line: line_num,
+        column: column_num,
+        message: message.to_owned(),
+        severity,
+        check: non_empty(columns[4]),
+    }))
+}
+
+fn parse_legacy_issue_table(columns: &[&str]) -> Option<Issue> {
     let severity = parse_severity(columns[0].trim())?;
     let path = columns[1].trim();
     if path.is_empty() {
@@ -116,16 +149,40 @@ fn parse_severity(value: &str) -> Option<IssueSeverity> {
         return None;
     }
 
-    if normalized.starts_with("err") || normalized.contains("ошиб") || normalized == "e" {
+    if normalized.starts_with("err")
+        || normalized.contains("ошиб")
+        || normalized.contains("крит")
+        || normalized.contains("блокир")
+        || normalized == "e"
+        || (normalized.contains("значит") && !normalized.contains("незнач"))
+    {
         Some(IssueSeverity::Error)
-    } else if normalized.starts_with("warn") || normalized.contains("предупр") || normalized == "w"
+    } else if normalized.starts_with("warn")
+        || normalized.contains("предупр")
+        || normalized.contains("незнач")
+        || normalized == "w"
     {
         Some(IssueSeverity::Warning)
-    } else if normalized.starts_with("info") || normalized.contains("инф") || normalized == "i" {
+    } else if normalized.starts_with("info")
+        || normalized.contains("инф")
+        || normalized.contains("триви")
+        || normalized == "i"
+    {
         Some(IssueSeverity::Info)
     } else {
         None
     }
+}
+
+fn parse_location(value: &str) -> (Option<u32>, Option<u32>) {
+    let mut numbers = value
+        .split(|ch: char| !ch.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse::<u32>().ok());
+
+    let line = numbers.next();
+    let column = numbers.next();
+    (line, column)
 }
 
 fn non_empty(value: &str) -> Option<String> {
@@ -153,6 +210,16 @@ fn is_header_line(line: &str) -> bool {
     c0 == "severity"
         && c1 == "path"
         && (c_last == "message" || c_last == "issue" || c_last == "description")
+}
+
+fn looks_like_timestamp(value: &str) -> bool {
+    let trimmed = value.trim();
+    let bytes = trimmed.as_bytes();
+    bytes.len() >= 16
+        && bytes.get(4) == Some(&b'-')
+        && bytes.get(7) == Some(&b'-')
+        && trimmed.contains('T')
+        && trimmed.contains(':')
 }
 
 #[cfg(test)]
@@ -210,6 +277,68 @@ mod tests {
                 assert_eq!(issue.severity, IssueSeverity::Warning);
                 assert!(issue.line.is_none());
                 assert!(issue.column.is_none());
+            }
+            _ => panic!("expected edt issue"),
+        }
+    }
+
+    #[test]
+    fn parses_current_edt_issue_table_rows() {
+        let issues = parse(
+            "2026-03-20T01:07:56+0300\tНезначительная\tСтандарты кодирования\tclient-mcp\tcom.e1c.v8codestyle.bsl:doc-comment-collection-item-type\tОбщийМодуль.Мсп_РеестрКлиент.Модуль\tстрока 182\tCollection type should have contain item type\n\
+2026-03-20T01:07:59+0300\tЗначительная\tПредупреждение\tclient-mcp\tcom._1c.g5.v8.dt.bsl:bsl-legacy-check-dynamic-feature-access\tОбщийМодуль.Мсп_ПаузаВызовСервера.Модуль\tline 15 column 3\tDeprecated method",
+        );
+
+        assert_eq!(issues.len(), 2);
+
+        match &issues[0] {
+            Issue::Edt(issue) => {
+                assert_eq!(issue.path, "ОбщийМодуль.Мсп_РеестрКлиент.Модуль");
+                assert_eq!(issue.line, Some(182));
+                assert_eq!(issue.column, None);
+                assert_eq!(
+                    issue.check.as_deref(),
+                    Some("com.e1c.v8codestyle.bsl:doc-comment-collection-item-type")
+                );
+                assert_eq!(issue.severity, IssueSeverity::Warning);
+            }
+            _ => panic!("expected edt issue"),
+        }
+
+        match &issues[1] {
+            Issue::Edt(issue) => {
+                assert_eq!(issue.path, "ОбщийМодуль.Мсп_ПаузаВызовСервера.Модуль");
+                assert_eq!(issue.line, Some(15));
+                assert_eq!(issue.column, Some(3));
+                assert_eq!(issue.message, "Deprecated method");
+                assert_eq!(issue.severity, IssueSeverity::Error);
+            }
+            _ => panic!("expected edt issue"),
+        }
+    }
+
+    #[test]
+    fn parses_additional_current_table_severity_labels() {
+        let issues = parse(
+            r#"2026-03-20T01:08:57+0300	Тривиальная	Стандарты кодирования	tests	com.e1c.v8codestyle.bsl:doc-comment-field-in-description-suggestion	Обработка.ЮТПомощникДляСозданияТестовыхДанных.МодульМенеджера	строка 31	Probably Field is defined in description
+2026-03-20T01:08:45+0300	Блокирующая	Стандарты кодирования	tests	com.e1c.v8codestyle.md:common-module-type	ОбщийМодуль.ЮТИсполнительСлужебныйКлиентСервер	Внешнее соединение	Common module for type "Client-Server module" has incorrect settings: External connection"#,
+        );
+
+        assert_eq!(issues.len(), 2);
+
+        match &issues[0] {
+            Issue::Edt(issue) => {
+                assert_eq!(issue.line, Some(31));
+                assert_eq!(issue.severity, IssueSeverity::Info);
+            }
+            _ => panic!("expected edt issue"),
+        }
+
+        match &issues[1] {
+            Issue::Edt(issue) => {
+                assert_eq!(issue.line, None);
+                assert_eq!(issue.column, None);
+                assert_eq!(issue.severity, IssueSeverity::Error);
             }
             _ => panic!("expected edt issue"),
         }
