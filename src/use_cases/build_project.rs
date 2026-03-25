@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::time::Instant;
 
 use crate::change_detection::analyzer::{self, AnalysisOutcome, PreparedStateUpdate};
@@ -926,11 +927,21 @@ fn execute_edt_export_step(
             export_target.display()
         ))
     })?;
-    let dsl = EdtDsl::new(
-        binary.to_path_buf(),
-        config.work_path.join("edt-workspace"),
-        runner,
-    );
+    let dsl = if config.tools.edt_cli.interactive_mode {
+        EdtDsl::new_interactive(
+            binary.to_path_buf(),
+            config.work_path.join("edt-workspace"),
+            Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
+            Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
+        )
+        .map_err(|error| AppError::Platform(error.to_string()))?
+    } else {
+        EdtDsl::new(
+            binary.to_path_buf(),
+            config.work_path.join("edt-workspace"),
+            runner,
+        )
+    };
     let export_result = dsl
         .export_project(edt_context.path(), designer_context.path())
         .map_err(|error| AppError::Platform(error.to_string()))?;
@@ -1400,6 +1411,7 @@ mod tests {
                     path: Some(platform_path.to_path_buf()),
                     version: None,
                 },
+                enterprise: Default::default(),
                 edt_cli: crate::config::model::EdtCliConfig {
                     path: Some(edt_cli_path.to_path_buf()),
                     auto_start: false,

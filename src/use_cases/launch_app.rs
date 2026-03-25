@@ -37,6 +37,12 @@ pub fn execute(
 
     let mut process_args = vec![command_mode.to_owned()];
     process_args.extend(config.v8_connection().args());
+    if matches!(
+        args.mode,
+        LaunchModeRequest::Thin | LaunchModeRequest::Thick
+    ) {
+        process_args.extend(config.tools.enterprise.additional_launch_keys.clone());
+    }
 
     let spawned = utilities
         .runner_for(utility)
@@ -70,5 +76,122 @@ fn mode_label(mode: LaunchModeRequest) -> &'static str {
         LaunchModeRequest::Designer => "designer",
         LaunchModeRequest::Thin => "thin",
         LaunchModeRequest::Thick => "thick",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::execute;
+    use crate::config::model::{
+        AppConfig, BuildConfig, BuilderBackend, EnterpriseToolConfig, PlatformToolConfig,
+        SourceFormat, SourceSetConfig, SourceSetPurpose, TestsConfig, ToolsConfig,
+    };
+    use crate::use_cases::context::{CommandName, ExecutionContext};
+    use crate::use_cases::request::{LaunchModeRequest, LaunchRequest};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use tempfile::tempdir;
+
+    #[cfg(unix)]
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut perms = fs::metadata(path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).expect("chmod");
+    }
+
+    #[cfg(unix)]
+    fn write_script(path: &Path, body: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create dirs");
+        }
+        fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write script");
+        make_executable(path);
+    }
+
+    fn sample_config(base_path: &Path, work_path: &Path, platform_path: &Path) -> AppConfig {
+        AppConfig {
+            base_path: base_path.to_path_buf(),
+            work_path: work_path.to_path_buf(),
+            format: SourceFormat::Designer,
+            builder: BuilderBackend::Designer,
+            connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
+            source_sets: vec![SourceSetConfig {
+                name: "main".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: PathBuf::from("."),
+            }],
+            build: BuildConfig::default(),
+            tools: ToolsConfig {
+                platform: PlatformToolConfig {
+                    path: Some(platform_path.to_path_buf()),
+                    version: None,
+                },
+                enterprise: EnterpriseToolConfig::default(),
+                edt_cli: Default::default(),
+            },
+            mcp: Default::default(),
+            tests: TestsConfig::default(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn thin_launch_app_appends_enterprise_additional_keys() {
+        let dir = tempdir().expect("tempdir");
+        let args_log = dir.path().join("thin.args.log");
+        let platform_dir = dir.path().join("platform");
+        write_script(
+            &platform_dir.join("bin").join("1cv8c"),
+            &format!("printf '%s\n' \"$@\" > '{}'\nsleep 1", args_log.display()),
+        );
+
+        let mut config = sample_config(dir.path(), dir.path(), &platform_dir);
+        config.tools.enterprise.additional_launch_keys = vec!["/TESTMANAGER".to_owned()];
+
+        let result = execute(
+            &ExecutionContext::cli(CommandName::Launch),
+            &config,
+            &LaunchRequest {
+                mode: LaunchModeRequest::Thin,
+            },
+        )
+        .expect("launch succeeds");
+
+        assert!(result.ok);
+        let args = fs::read_to_string(args_log).expect("args log");
+        assert!(args.contains("ENTERPRISE"));
+        assert!(args.contains("/TESTMANAGER"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn designer_launch_app_does_not_append_enterprise_additional_keys() {
+        let dir = tempdir().expect("tempdir");
+        let args_log = dir.path().join("designer.args.log");
+        let platform_dir = dir.path().join("platform");
+        write_script(
+            &platform_dir.join("bin").join("1cv8"),
+            &format!("printf '%s\n' \"$@\" > '{}'\nsleep 1", args_log.display()),
+        );
+
+        let mut config = sample_config(dir.path(), dir.path(), &platform_dir);
+        config.tools.enterprise.additional_launch_keys = vec!["/TESTMANAGER".to_owned()];
+
+        let result = execute(
+            &ExecutionContext::cli(CommandName::Launch),
+            &config,
+            &LaunchRequest {
+                mode: LaunchModeRequest::Designer,
+            },
+        )
+        .expect("launch succeeds");
+
+        assert!(result.ok);
+        let args = fs::read_to_string(args_log).expect("args log");
+        assert!(args.contains("DESIGNER"));
+        assert!(!args.contains("/TESTMANAGER"));
     }
 }

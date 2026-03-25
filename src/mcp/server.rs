@@ -448,6 +448,29 @@ impl McpToolServer {
         request: McpCheckSyntaxEdtRequest,
         cancellation: CancellationToken,
     ) -> Result<CallToolResult, ErrorData> {
+        if !self.config.tools.edt_cli.interactive_mode {
+            return self
+                .execute_tool(
+                    McpTool::CheckSyntaxEdt,
+                    request,
+                    cancellation,
+                    |config, port, call_context, request| {
+                        let context = crate::use_cases::context::ExecutionContext::new(
+                            crate::use_cases::context::CommandName::Syntax,
+                            call_context.transport(),
+                        )
+                        .with_edt_timeout(call_context.edt_timeout());
+                        let use_case_request = normalize_check_syntax_edt_request(&request);
+                        map_syntax_use_case_result(port.check_syntax(
+                            &context,
+                            config.as_ref(),
+                            &use_case_request,
+                        ))
+                    },
+                )
+                .await;
+        }
+
         let timeout = McpTool::CheckSyntaxEdt
             .execution_policy(self.config.as_ref())
             .timeout;
@@ -1564,6 +1587,7 @@ mod tests {
             build: BuildConfig::default(),
             tools: ToolsConfig {
                 platform: PlatformToolConfig::default(),
+                enterprise: Default::default(),
                 edt_cli: crate::config::model::EdtCliConfig {
                     command_timeout_ms: edt_timeout_ms,
                     ..Default::default()

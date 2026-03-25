@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::time::Instant;
 
 use tracing::info;
@@ -243,11 +244,30 @@ fn ensure_edt_workspace(config: &AppConfig, utilities: &mut PlatformUtilities) -
         }
     };
 
-    let dsl = EdtDsl::new(
-        binary,
-        workspace.clone(),
-        utilities.runner_for(UtilityType::EdtCli),
-    );
+    let dsl = if config.tools.edt_cli.interactive_mode {
+        match EdtDsl::new_interactive(
+            binary,
+            workspace.clone(),
+            Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
+            Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
+        ) {
+            Ok(dsl) => dsl,
+            Err(error) => {
+                return StepOutcome::failed(
+                    "edt_workspace",
+                    "import",
+                    started,
+                    AppError::Platform(error.to_string()),
+                )
+            }
+        }
+    } else {
+        EdtDsl::new(
+            binary,
+            workspace.clone(),
+            utilities.runner_for(UtilityType::EdtCli),
+        )
+    };
     for source_set in ordered_source_sets(config) {
         let source_path = resolve_source_set_path(config, source_set);
         match dsl.import_project(&source_path) {

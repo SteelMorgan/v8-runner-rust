@@ -51,9 +51,14 @@ tools:
     # ...or it can be a version-like discovery hint:
     path: 2025.2.3
     # version: 2025.2.3
+    interactive-mode: false
     auto-start: false
     startup_timeout_ms: 300000
     command_timeout_ms: 300000
+
+  enterprise:
+    additional-launch-keys:
+      - /TESTMANAGER
 
 # MCP transport defaults (parsed and validated now; transport wiring comes later)
 mcp:

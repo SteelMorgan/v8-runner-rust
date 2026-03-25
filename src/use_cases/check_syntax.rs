@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::change_detection::source_sets::SourceSetsService;
@@ -487,12 +488,39 @@ fn run_edt_syntax(
         }
     };
 
-    let runner = utilities.runner_for(UtilityType::EdtCli);
-    let dsl = EdtDsl::new(
-        location.path,
-        config.work_path.join("edt-workspace"),
-        runner,
-    )
+    let dsl = if config.tools.edt_cli.interactive_mode {
+        match EdtDsl::new_interactive(
+            location.path,
+            config.work_path.join("edt-workspace"),
+            Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
+            Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
+        ) {
+            Ok(dsl) => dsl,
+            Err(error) => {
+                let message = error.to_string();
+                let app_error = AppError::Platform(message.clone());
+                return Err(SyntaxExecutionFailure::with_payload(
+                    app_error,
+                    failed_result(
+                        "edt",
+                        SyntaxCheckStatus::ToolFailed,
+                        -1,
+                        started,
+                        vec![],
+                        None,
+                        Some(message),
+                        None,
+                    ),
+                ));
+            }
+        }
+    } else {
+        EdtDsl::new(
+            location.path,
+            config.work_path.join("edt-workspace"),
+            utilities.runner_for(UtilityType::EdtCli),
+        )
+    }
     .with_timeout(context.edt_timeout());
     let mut issues = Vec::new();
     let mut status = SyntaxCheckStatus::Clean;
@@ -950,6 +978,7 @@ mod tests {
                     path: Some(platform_path.to_path_buf()),
                     version: None,
                 },
+                enterprise: Default::default(),
                 edt_cli: Default::default(),
             },
             mcp: Default::default(),
@@ -980,6 +1009,7 @@ mod tests {
             build: BuildConfig::default(),
             tools: ToolsConfig {
                 platform: Default::default(),
+                enterprise: Default::default(),
                 edt_cli: crate::config::model::EdtCliConfig {
                     path: Some(edt_cli_path.to_path_buf()),
                     auto_start: false,

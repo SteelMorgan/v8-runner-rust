@@ -219,7 +219,7 @@ v8-test-runner mcp serve http
 
 - Значение по умолчанию для `allExtensions` выводится из того, передан ли `extension`.
 - `checkUseSynchronousCalls` и `checkUseModality` отклоняются, когда `extendedModulesCheck=false`.
-- `check_syntax_edt` — единственный MCP-инструмент, который сейчас выполняется через общую живую EDT-сессию.
+- `check_syntax_edt` использует общую живую EDT-сессию только при `tools.edt_cli.interactive-mode=true`.
 
 ### Особенности HTTP-транспорта
 
@@ -253,8 +253,10 @@ v8-test-runner mcp serve http
 | `tests.execution_timeout_seconds` | Нет | `300` |
 | `tools.platform.path` | Нет | Может указывать на бинарь, `bin`-директорию или корень платформы с версиями |
 | `tools.platform.version` | Нет | Точная подсказка по версии платформы |
+| `tools.enterprise.additional-launch-keys[]` | Нет | Дополнительные ключи только для `ENTERPRISE`-запуска клиента |
 | `tools.edt_cli.path` | Нет | Опциональный путь к `1cedtcli`, корню установки EDT или version-like подсказка для автопоиска |
 | `tools.edt_cli.version` | Нет | Отдельная version-like подсказка для автопоиска EDT, например `2025.2.3` |
+| `tools.edt_cli.interactive-mode` | Нет | `false`; включает interactive backend для всех EDT-операций |
 | `tools.edt_cli.auto-start` | Нет | `false` |
 | `tools.edt_cli.startup_timeout_ms` | Нет | `300000`; также принимает `startup-timeout-ms` |
 | `tools.edt_cli.command_timeout_ms` | Нет | `300000`; также принимает `command-timeout-ms` |
@@ -283,4 +285,4 @@ v8-test-runner mcp serve http
 - Нет публичного MCP-инструмента для `get_configuration`.
 - Нет публичного MCP-инструмента для `check_platform`.
 - `IBCMD` не предоставляет нативную точечную частичную выгрузку по объектам.
-- Общая интерактивная EDT-сессия не является путём выполнения для всех EDT-сценариев; текущая долгоживущая сессия сосредоточена на MCP `check_syntax_edt`.
+- Нет отдельной настройки `working-directory` для `1cedtcli`; используется `workPath/edt-workspace`.

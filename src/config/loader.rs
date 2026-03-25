@@ -151,7 +151,7 @@ mod tests {
         std::fs::write(
             &config_path,
             format!(
-                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: \"File=/tmp/ib\"\nmcp:\n  http:\n    bind_address: 127.0.0.1:4000\n    path: /custom-mcp\n    stateful_sessions: false\n    max_sessions: 12\n    idle_ttl_secs: 45\n  execution:\n    max_concurrent_calls: 3\n    shutdown_grace_period_secs: 9\ntools:\n  edt_cli:\n    startup_timeout_ms: 1234\n    command_timeout_ms: 5678\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: src\n",
+                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: \"File=/tmp/ib\"\nmcp:\n  http:\n    bind_address: 127.0.0.1:4000\n    path: /custom-mcp\n    stateful_sessions: false\n    max_sessions: 12\n    idle_ttl_secs: 45\n  execution:\n    max_concurrent_calls: 3\n    shutdown_grace_period_secs: 9\ntools:\n  enterprise:\n    additional-launch-keys:\n      - /TESTMANAGER\n  edt_cli:\n    interactive-mode: true\n    startup_timeout_ms: 1234\n    command_timeout_ms: 5678\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: src\n",
                 base.display(),
                 work.display()
             ),
@@ -167,6 +167,11 @@ mod tests {
         assert_eq!(config.mcp.http.idle_ttl_secs, 45);
         assert_eq!(config.mcp.execution.max_concurrent_calls, 3);
         assert_eq!(config.mcp.execution.shutdown_grace_period_secs, 9);
+        assert_eq!(
+            config.tools.enterprise.additional_launch_keys,
+            vec!["/TESTMANAGER".to_owned()]
+        );
+        assert!(config.tools.edt_cli.interactive_mode);
         assert_eq!(config.tools.edt_cli.startup_timeout_ms, 1234);
         assert_eq!(config.tools.edt_cli.command_timeout_ms, 5678);
     }

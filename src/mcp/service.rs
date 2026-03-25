@@ -2085,6 +2085,7 @@ mod tests {
             build: BuildConfig::default(),
             tools: ToolsConfig {
                 platform: PlatformToolConfig::default(),
+                enterprise: Default::default(),
                 edt_cli: Default::default(),
             },
             mcp: Default::default(),

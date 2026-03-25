@@ -127,6 +127,9 @@ pub struct ToolsConfig {
     #[serde(default)]
     pub platform: PlatformToolConfig,
 
+    #[serde(default)]
+    pub enterprise: EnterpriseToolConfig,
+
     #[serde(rename = "edt_cli", alias = "edt-cli", default)]
     pub edt_cli: EdtCliConfig,
 }
@@ -233,6 +236,14 @@ pub struct PlatformToolConfig {
     pub version: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub struct EnterpriseToolConfig {
+    /// Additional command-line keys appended to enterprise client launches.
+    #[serde(default)]
+    pub additional_launch_keys: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct EdtCliConfig {
@@ -241,6 +252,10 @@ pub struct EdtCliConfig {
 
     /// Optional EDT version hint used for auto-discovery, for example `1c-edt-2025.2.3`.
     pub version: Option<String>,
+
+    /// Use long-lived interactive `1cedtcli` processes instead of one-shot invocations.
+    #[serde(default)]
+    pub interactive_mode: bool,
 
     /// Auto-start interactive EDT session on startup
     #[serde(default)]
@@ -268,6 +283,7 @@ impl Default for EdtCliConfig {
         Self {
             path: None,
             version: None,
+            interactive_mode: false,
             auto_start: false,
             startup_timeout_ms: default_edt_cli_startup_timeout_ms(),
             command_timeout_ms: default_edt_cli_command_timeout_ms(),

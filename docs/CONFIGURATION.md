@@ -36,9 +36,13 @@ tools:
   platform:
     path: /opt/1cv8/x86_64
     version: 8.3.27.1859
+  enterprise:
+    additional-launch-keys:
+      - /TESTMANAGER
   edt-cli:
     path: 2025.2.3
     version: 2025.2.3
+    interactive-mode: false
     auto-start: false
     startup-timeout-ms: 300000
     command-timeout-ms: 300000
@@ -251,20 +255,36 @@ tools:
 - По умолчанию: `300000`
 - Также принимает: `command-timeout-ms`
 
-Используется как timeout для EDT-команд в MCP `check_syntax_edt`.
+Используется как timeout для интерактивных EDT-команд.
+
+### `tools.edt_cli.interactive_mode`
+
+- Тип: boolean
+- По умолчанию: `false`
+- Также принимает: `interactive-mode`
+
+Если включён:
+
+- все EDT-операции (`init`, EDT export в `build`, `syntax edt`, MCP `check_syntax_edt`) идут через long-lived interactive `1cedtcli`;
+- shared MCP EDT session тоже работает в interactive-режиме;
+- `auto-start` начинает реально влиять на shared MCP EDT session.
+
+Если выключен:
+
+- все EDT-операции идут через обычные one-shot вызовы `1cedtcli -command ...`;
+- `auto-start` игнорируется.
 
 ### `tools.edt_cli.auto-start`
 
 - Тип: boolean
 - По умолчанию: `false`
 
-Текущий статус:
+Работает только вместе с `tools.edt_cli.interactive_mode=true`.
 
-- ключ читается конфигом;
-- явного отдельного поведения от него сейчас нет;
-- shared interactive EDT session поднимается лениво при первом реальном EDT MCP-вызове.
+Поведение:
 
-То есть на текущем этапе `auto-start` скорее зарезервирован, чем полноценно влияет на runtime.
+- для shared MCP EDT session выполняет eager prewarm на старте сервера;
+- при `interactive_mode=false` не оказывает эффекта.
 
 ### `tools.edt_cli.working-directory`
 
@@ -276,19 +296,19 @@ tools:
 
 ## Интерактивный EDT: что реально работает
 
-Сейчас интерактивный режим `1cedtcli` используется только для MCP-инструмента `check_syntax_edt`.
-
 Реально поддержано:
 
 - автопоиск `1cedtcli`;
-- ленивый старт shared session;
+- отдельное переключение через `tools.edt_cli.interactive_mode`;
+- интерактивный backend для всех EDT-операций;
+- ленивый старт shared MCP session;
+- eager prewarm через `auto-start`, если включён interactive-mode;
 - timeout старта через `tools.edt_cli.startup_timeout_ms`;
 - timeout команды через `tools.edt_cli.command_timeout_ms`;
 - workspace в `workPath/edt-workspace`.
 
 Пока не поддержано как отдельная настраиваемая функция:
 
-- явный prewarm через `auto-start`;
 - произвольный `working-directory`;
 - дополнительные аргументы для старта `1cedtcli` сверх `-data <workPath/edt-workspace>`.
 
@@ -313,11 +333,22 @@ tools:
 
 ### Дополнительные параметры клиента 1С
 
-Текущий статус:
+Поддержано:
 
-- отдельной конфигурации для проброса дополнительных CLI-параметров в `launch` сейчас нет;
-- в `application.yaml` нет поддержанных ключей вида `launch.args`, `launch.additional-args`, `tools.platform.client-args` и т.п.;
-- MCP `launch_app` тоже принимает только тип запуска, без дополнительного набора аргументов.
+- `tools.enterprise.additional-launch-keys` как список строк;
+- ключи дописываются только к `thin`/`thick` запуску клиента (`ENTERPRISE`);
+- `designer`-запуск эти ключи не получает;
+- MCP `launch_app` использует те же настройки, потому что опирается на тот же use case.
+
+Пример:
+
+```yaml
+tools:
+  enterprise:
+    additional-launch-keys:
+      - /TESTMANAGER
+      - /RunModeOrdinaryApplication
+```
 
 Если нужен запуск с чем-то вроде:
 

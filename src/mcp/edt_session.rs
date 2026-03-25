@@ -124,11 +124,13 @@ impl EdtSessionManager {
         let queue_capacity = config.mcp.execution.max_concurrent_calls.max(1);
         let shutdown_timeout =
             Duration::from_secs(config.mcp.execution.shutdown_grace_period_secs.max(1));
+        let prewarm = config.tools.edt_cli.interactive_mode && config.tools.edt_cli.auto_start;
         Self::with_factory_and_telemetry(
             Arc::new(DefaultSessionFactory::new(config.clone())),
             telemetry,
             queue_capacity,
             shutdown_timeout,
+            prewarm,
         )
     }
 
@@ -291,6 +293,7 @@ impl EdtSessionManager {
             Arc::new(EdtTelemetry::default()),
             queue_capacity,
             shutdown_timeout,
+            false,
         )
     }
 
@@ -299,6 +302,7 @@ impl EdtSessionManager {
         telemetry: Arc<EdtTelemetry>,
         queue_capacity: usize,
         shutdown_timeout: Duration,
+        prewarm: bool,
     ) -> Result<Self, EdtSessionError> {
         let inner = Arc::new(EdtSessionManagerInner {
             queue: Mutex::new(VecDeque::new()),
@@ -316,7 +320,7 @@ impl EdtSessionManager {
         let worker_factory = factory.clone();
         let worker = thread::Builder::new()
             .name("v8tr-edt-session".to_owned())
-            .spawn(move || run_worker(worker_inner, worker_factory))
+            .spawn(move || run_worker(worker_inner, worker_factory, prewarm))
             .map_err(|error| EdtSessionError::InternalFailure {
                 message: format!("failed to spawn shared EDT worker thread: {error}"),
             })?;
@@ -734,8 +738,22 @@ impl SessionFactory for DefaultSessionFactory {
     }
 }
 
-fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactory>) {
+fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactory>, prewarm: bool) {
     let mut session: Option<Box<dyn ManagedSession>> = None;
+    if prewarm && !inner.shutdown_token.is_cancelled() {
+        match factory.spawn_session() {
+            Ok(new_session) => {
+                inner
+                    .active_pid
+                    .store(new_session.pid().unwrap_or(0), Ordering::SeqCst);
+                session = Some(new_session);
+            }
+            Err(_) => {
+                inner.telemetry.record_startup_failure();
+                inner.active_pid.store(0, Ordering::SeqCst);
+            }
+        }
+    }
     while let Some(queued) = inner.next_request() {
         if inner.shutdown_token.is_cancelled() {
             queued.state.release_queued();
