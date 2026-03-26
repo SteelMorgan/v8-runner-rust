@@ -432,11 +432,19 @@ fn normalize_extension_scope(
 fn launch_mode_from_raw(raw: &str) -> Result<LaunchModeRequest, McpBusinessError> {
     let normalized = normalize_required_string(raw, "utility_type")?.to_lowercase();
     match normalized.as_str() {
-        "designer" | "1cv8" | "конфигуратор" => Ok(LaunchModeRequest::Designer),
-        "thin" | "thin_client" | "1cv8c" | "тонкий клиент" | "тонкий" => {
+        "designer" | "configurator" | "1cv8" | "конфигуратор" => Ok(LaunchModeRequest::Designer),
+        "thin"
+        | "thin-client"
+        | "thin client"
+        | "thin_client"
+        | "tc"
+        | "1cv8c"
+        | "тонкий клиент"
+        | "тонкий" => {
             Ok(LaunchModeRequest::Thin)
         }
-        "thick" | "thick_client" | "толстый клиент" | "толстый" => {
+        "thick" | "thick-client" | "thick client" | "thick_client" | "толстый клиент"
+        | "толстый" => {
             Ok(LaunchModeRequest::Thick)
         }
         _ => Err(McpBusinessError::unsupported_value(format!(
@@ -1420,6 +1428,11 @@ mod tests {
                 LaunchMode::Designer,
                 LaunchModeRequest::Designer,
             ),
+            (
+                "configurator",
+                LaunchMode::Designer,
+                LaunchModeRequest::Designer,
+            ),
             (" 1CV8 ", LaunchMode::Designer, LaunchModeRequest::Designer),
             (
                 "конфигуратор",
@@ -1427,7 +1440,10 @@ mod tests {
                 LaunchModeRequest::Designer,
             ),
             ("thin", LaunchMode::Thin, LaunchModeRequest::Thin),
+            ("thin-client", LaunchMode::Thin, LaunchModeRequest::Thin),
+            ("thin client", LaunchMode::Thin, LaunchModeRequest::Thin),
             ("THIN_CLIENT", LaunchMode::Thin, LaunchModeRequest::Thin),
+            ("tc", LaunchMode::Thin, LaunchModeRequest::Thin),
             ("1cv8c", LaunchMode::Thin, LaunchModeRequest::Thin),
             (
                 "  тонкий клиент  ",
@@ -1436,6 +1452,8 @@ mod tests {
             ),
             ("тонкий", LaunchMode::Thin, LaunchModeRequest::Thin),
             ("thick", LaunchMode::Thick, LaunchModeRequest::Thick),
+            ("thick-client", LaunchMode::Thick, LaunchModeRequest::Thick),
+            ("thick client", LaunchMode::Thick, LaunchModeRequest::Thick),
             ("THICK_CLIENT", LaunchMode::Thick, LaunchModeRequest::Thick),
             (
                 " толстый клиент ",
