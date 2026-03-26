@@ -32,7 +32,8 @@ Hard limits:
 2. **Mark progress** — update task status in the task list (in_progress → completed)
 3. **Update docs** — update the active task list (`spec/IMPLEMENTATION_TODO.md` by default, and `spec/MCP_IMPLEMENTATION_PLAN.md` only when explicitly maintaining the closed MCP rollout history/reference), and add/update doc comments (`///`) on all public types, functions, and modules introduced in the stage
 4. **Update architecture** — if new modules or significant components are added, update `ARCHITECTURE.md` to reflect the current structure
-5. **Commit** — create a git commit with a clear message describing the stage
+5. **Commit** — create a separate git commit for every completed ready stage with a clear message describing exactly that stage
+6. **Do not batch ready stages** — if a step is completed and passes the required checks, commit it immediately instead of accumulating multiple completed steps into one commit
 
 ## Stage definition
 
@@ -43,6 +44,8 @@ A stage is complete when:
 - The governing task list is updated: `spec/IMPLEMENTATION_TODO.md` by default, or `spec/MCP_IMPLEMENTATION_PLAN.md` for explicit closed MCP rollout history/reference tasks; completed items marked with `[x]`
 - Public types and functions have `///` doc comments
 - `ARCHITECTURE.md` reflects any new modules or components
+
+When a stage meets these conditions, it is considered ready and must be committed before starting the next completed-ready stage.
 
 ## ОБЯЗАТЕЛЬНО перед каждым коммитом
 
