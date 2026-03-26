@@ -20,6 +20,12 @@ For every task:
 11. Update the governing spec document for the task (`spec/IMPLEMENTATION_TODO.md` by default; `spec/MCP_IMPLEMENTATION_PLAN.md` only for explicit MCP rollout history/reference work), public docs, and `ARCHITECTURE.md`.
 12. Commit only after all review and test gates pass.
 
+## Documentation Language
+
+- Новые документы и любые обновления существующих документов в репозитории нужно писать на русском языке.
+- Это правило относится как минимум к `README`, `docs/*`, `spec/*`, `ARCHITECTURE.md` и аналогичным текстовым артефактам, которые изменяются в рамках текущей задачи.
+- Английский допустим только там, где он является частью внешнего интерфейса, имени команды, формата данных, исходной цитаты или общепринятого технического идентификатора.
+
 Hard limits:
 - Plan review: max 2 rounds
 - Code review: max 2 rounds
