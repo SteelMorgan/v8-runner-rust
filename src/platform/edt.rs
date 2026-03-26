@@ -194,8 +194,8 @@ impl<'a> EdtDsl<'a> {
                 debug!(
                     workspace = %self.workspace.display(),
                     command = interactive_command,
-                    stdout_bytes = output.stdout.len(),
-                    stderr_bytes = output.stderr.len(),
+                    stdout = render_interactive_output_for_log(&output.stdout),
+                    stderr = render_interactive_output_for_log(&output.stderr),
                     "interactive edt command finished"
                 );
                 crate::platform::process::ProcessResult {
@@ -300,6 +300,22 @@ fn render_process_command(binary: &Path, args: &[String]) -> String {
     let mut parts = vec![binary.display().to_string()];
     parts.extend(args.iter().cloned());
     parts.join(" ")
+}
+
+fn render_interactive_output_for_log(output: &str) -> String {
+    const MAX_LEN: usize = 400;
+
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return "<empty>".to_owned();
+    }
+
+    let mut rendered = trimmed.replace('\n', "\\n");
+    if rendered.len() > MAX_LEN {
+        rendered.truncate(MAX_LEN);
+        rendered.push_str("...");
+    }
+    rendered
 }
 
 fn export_command_arguments(source: &Path, target: &Path) -> Vec<String> {
