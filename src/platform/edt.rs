@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use thiserror::Error;
+use tracing::debug;
 
 use crate::platform::interactive::{
     InteractiveProcessError, InteractiveProcessExecutor, InteractiveProcessRequest,
@@ -57,8 +58,23 @@ impl<'a> EdtDsl<'a> {
         })?;
         let request = InteractiveProcessRequest::new(binary.clone())
             .with_args(["-data".to_owned(), workspace.display().to_string()]);
+        debug!(
+            command = render_process_command(
+                &binary,
+                &["-data".to_owned(), workspace.display().to_string()]
+            ),
+            startup_timeout_ms = startup_timeout.as_millis() as u64,
+            command_timeout_ms = command_timeout.as_millis() as u64,
+            "starting interactive edt session"
+        );
         let session = InteractiveProcessExecutor::spawn(request, startup_timeout)
             .map_err(EdtError::Interactive)?;
+        debug!(
+            binary = %binary.display(),
+            workspace = %workspace.display(),
+            pid = session.pid(),
+            "interactive edt session started"
+        );
 
         Ok(Self {
             binary,
@@ -133,6 +149,12 @@ impl<'a> EdtDsl<'a> {
 
         let process = match &self.backend {
             EdtBackend::OneShot { runner } => {
+                let rendered_command = render_process_command(&self.binary, args);
+                debug!(
+                    command = rendered_command.as_str(),
+                    timeout_ms = self.timeout.map(|value| value.as_millis() as u64),
+                    "running edt command"
+                );
                 let request = ProcessRequest {
                     program: self.binary.clone(),
                     args: args.to_vec(),
@@ -154,6 +176,12 @@ impl<'a> EdtDsl<'a> {
             } => {
                 let effective_timeout = self.timeout.unwrap_or(*command_timeout);
                 let mut session = session.borrow_mut();
+                debug!(
+                    workspace = %self.workspace.display(),
+                    command = interactive_command,
+                    timeout_ms = effective_timeout.as_millis() as u64,
+                    "running interactive edt command"
+                );
                 session
                     .execute(
                         &render_interactive_change_dir_command(&self.workspace),
@@ -163,6 +191,13 @@ impl<'a> EdtDsl<'a> {
                 let output = session
                     .execute(interactive_command, effective_timeout)
                     .map_err(EdtError::Interactive)?;
+                debug!(
+                    workspace = %self.workspace.display(),
+                    command = interactive_command,
+                    stdout_bytes = output.stdout.len(),
+                    stderr_bytes = output.stderr.len(),
+                    "interactive edt command finished"
+                );
                 crate::platform::process::ProcessResult {
                     exit_code: 0,
                     stdout: output.stdout,
@@ -205,6 +240,11 @@ impl Drop for EdtDsl<'_> {
             ..
         } = &self.backend
         {
+            debug!(
+                workspace = %self.workspace.display(),
+                timeout_ms = shutdown_timeout.as_millis() as u64,
+                "shutting down interactive edt session"
+            );
             let _ = session.borrow_mut().shutdown(*shutdown_timeout);
         }
     }
@@ -254,6 +294,12 @@ fn process_arguments(workspace: &Path, command_arguments: &[String]) -> Vec<Stri
     ];
     args.extend(command_arguments.iter().cloned());
     args
+}
+
+fn render_process_command(binary: &Path, args: &[String]) -> String {
+    let mut parts = vec![binary.display().to_string()];
+    parts.extend(args.iter().cloned());
+    parts.join(" ")
 }
 
 fn export_command_arguments(source: &Path, target: &Path) -> Vec<String> {

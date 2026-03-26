@@ -9,7 +9,7 @@ use crate::support::error::AppError;
 use crate::use_cases::context::ExecutionContext;
 use crate::use_cases::request::{LaunchModeRequest, LaunchRequest as LaunchArgs};
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
-use tracing::info;
+use tracing::{debug, info};
 
 const LAUNCH_STARTUP_PROBE: Duration = Duration::from_millis(250);
 
@@ -18,7 +18,7 @@ pub fn execute(
     config: &AppConfig,
     args: &LaunchArgs,
 ) -> UseCaseResult<LaunchResult> {
-    info!(
+    debug!(
         command = context.command().as_str(),
         transport = ?context.transport(),
         mode = ?args.mode,
@@ -44,6 +44,7 @@ pub fn execute(
         process_args.extend(config.tools.enterprise.additional_launch_keys.clone());
     }
 
+    info!("Запуск приложения: {}", mode_label(args.mode));
     let spawned = utilities
         .runner_for(utility)
         .spawn(&ProcessRequest {
@@ -73,9 +74,9 @@ pub fn execute(
 
 fn mode_label(mode: LaunchModeRequest) -> &'static str {
     match mode {
-        LaunchModeRequest::Designer => "designer",
-        LaunchModeRequest::Thin => "thin",
-        LaunchModeRequest::Thick => "thick",
+        LaunchModeRequest::Designer => "конфигуратор",
+        LaunchModeRequest::Thin => "тонкий клиент",
+        LaunchModeRequest::Thick => "толстый клиент",
     }
 }
 

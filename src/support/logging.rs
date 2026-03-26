@@ -34,7 +34,7 @@ pub fn init_action_logging(
         .with_env_filter(EnvFilter::try_new(level).unwrap_or_else(|_| EnvFilter::new("info")))
         .with_writer(writer)
         .with_timer(UtcTimer)
-        .with_ansi(false)
+        .with_ansi(output_format == "text")
         .with_target(false)
         .try_init()
         .map_err(|error| LoggingInitError::Install(error.to_string()))?;

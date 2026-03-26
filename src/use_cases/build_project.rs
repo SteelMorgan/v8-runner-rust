@@ -24,7 +24,7 @@ use crate::support::temp::{partial_list_file, platform_logs_dir, reserved_source
 use crate::use_cases::context::ExecutionContext;
 use crate::use_cases::request::BuildRequest as BuildArgs;
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
-use tracing::info;
+use tracing::{debug, info};
 
 #[cfg(test)]
 const BUILD_COMMAND: &str = crate::use_cases::context::CommandName::Build.as_str();
@@ -38,7 +38,7 @@ pub fn execute(
     config: &AppConfig,
     args: &BuildArgs,
 ) -> UseCaseResult<BuildResult> {
-    info!(
+    debug!(
         command = context.command().as_str(),
         transport = ?context.transport(),
         "executing build use case"
@@ -92,7 +92,7 @@ fn run_build_designer(
     config: &AppConfig,
     args: &BuildArgs,
 ) -> Result<BuildResult, BuildExecutionFailure> {
-    info!(full_rebuild = args.full_rebuild, "preparing build plan");
+    debug!(full_rebuild = args.full_rebuild, "preparing build plan");
 
     let started = Instant::now();
     let service = SourceSetsService::new(config);
@@ -138,7 +138,7 @@ fn run_build_designer(
                 .expect("every source-set must have an analysis result")
             {
                 Ok(AnalysisOutcome::NoChanges) => {
-                    info!(
+                    debug!(
                         source_set = source_set.name.as_str(),
                         found_changes = 0,
                         "change analysis result: found 0 change(s)"
@@ -149,7 +149,7 @@ fn run_build_designer(
                     }
                 }
                 Ok(AnalysisOutcome::Fallback) => {
-                    info!(
+                    debug!(
                         source_set = source_set.name.as_str(),
                         "change analysis result: fallback to full load after recoverable issue"
                     );
@@ -171,7 +171,7 @@ fn run_build_designer(
                         config.build.partial_load_threshold,
                     ) {
                         LoadDecision::Partial(paths) => {
-                            info!(
+                            debug!(
                                 source_set = source_set.name.as_str(),
                                 partial_file_count = paths.len(),
                                 threshold = config.build.partial_load_threshold,
@@ -187,7 +187,7 @@ fn run_build_designer(
                             }
                         }
                         LoadDecision::Full => {
-                            info!(
+                            debug!(
                                 source_set = source_set.name.as_str(),
                                 threshold = config.build.partial_load_threshold,
                                 "change analysis decision: full load"
@@ -224,7 +224,7 @@ fn run_build_designer(
 
         match plan {
             StepPlan::Skip { message, ok } => {
-                info!(
+                debug!(
                     source_set = source_set.name.as_str(),
                     message = message.as_str(),
                     "skipping build step"
@@ -243,7 +243,7 @@ fn run_build_designer(
                 partial_paths,
                 commit,
             } => {
-                info!(
+                debug!(
                     source_set = source_set.name.as_str(),
                     mode = ?mode,
                     message = message.as_str(),
@@ -338,13 +338,8 @@ fn log_change_analysis(source_set_name: &str, changes: &[analyzer::FileChange]) 
     }
 
     info!(
-        source_set = source_set_name,
-        changed_files = changes.len(),
-        found_changes = changes.len(),
-        added,
-        modified,
-        deleted,
-        "change analysis result: found change(s)"
+        "Изменения в {source_set_name}: найдено {} (новых {added}, изменено {modified}, удалено {deleted})",
+        changes.len()
     );
 }
 
@@ -352,7 +347,7 @@ fn run_build_ibcmd(
     config: &AppConfig,
     args: &BuildArgs,
 ) -> Result<BuildResult, BuildExecutionFailure> {
-    info!(
+    debug!(
         full_rebuild = args.full_rebuild,
         "preparing ibcmd build plan"
     );
@@ -612,7 +607,7 @@ fn run_build_edt(
     config: &AppConfig,
     args: &BuildArgs,
 ) -> Result<BuildResult, BuildExecutionFailure> {
-    info!(full_rebuild = args.full_rebuild, "preparing edt build plan");
+    debug!(full_rebuild = args.full_rebuild, "preparing edt build plan");
     if let Some(error) = validate_edt_supported_matrix(config) {
         return Err(BuildExecutionFailure::with_payload(
             error,
@@ -678,7 +673,7 @@ fn run_build_edt(
                 .expect("every source-set must have an EDT analysis result")
             {
                 Ok(AnalysisOutcome::NoChanges) => {
-                    info!(
+                    debug!(
                         source_set = source_set.name.as_str(),
                         found_changes = 0,
                         "edt change analysis result: found 0 change(s)"
@@ -689,7 +684,7 @@ fn run_build_edt(
                     }
                 }
                 Ok(AnalysisOutcome::Fallback) => {
-                    info!(
+                    debug!(
                         source_set = source_set.name.as_str(),
                         "edt change analysis result: fallback to full export/load after recoverable issue"
                     );
@@ -780,6 +775,10 @@ fn run_build_edt(
                 };
 
                 let export_started = Instant::now();
+                info!(
+                    "Конвертация EDT в файлы Конфигуратора: {}",
+                    source_set.name
+                );
                 if let Err(error) = execute_edt_export_step(
                     config,
                     &edt,
@@ -964,11 +963,17 @@ fn execute_source_set_step(
     partial_paths: Option<&[PathBuf]>,
     commit: &StepCommit,
 ) -> Result<(), AppError> {
-    info!(
-        source_set = source_set.name.as_str(),
-        partial = partial_paths.is_some(),
-        "loading source-set into designer"
-    );
+    if partial_paths.is_some() {
+        info!(
+            "Загрузка изменений в базу через Конфигуратор: {}",
+            source_set.name
+        );
+    } else {
+        info!(
+            "Загрузка в базу через Конфигуратор: {}",
+            source_set.name
+        );
+    }
     let load_result = if let Some(paths) = partial_paths {
         let list_file = partial_list_file(&config.work_path).map_err(|error| {
             AppError::Runtime(format!("failed to create partial list file: {error}"))
@@ -990,7 +995,7 @@ fn execute_source_set_step(
     };
     ensure_platform_success("load", source_set, &load_result)?;
 
-    info!(
+    debug!(
         source_set = source_set.name.as_str(),
         "updating database configuration after load"
     );
@@ -1008,7 +1013,7 @@ fn execute_source_set_step(
 
     match commit {
         StepCommit::Prepared(prepared) => {
-            info!(
+            debug!(
                 source_set = source_set.name.as_str(),
                 "committing prepared change-detection state"
             );
@@ -1016,7 +1021,7 @@ fn execute_source_set_step(
                 .map_err(|error| AppError::Runtime(error.to_string()))
         }
         StepCommit::RescanFull { recover_storage } => {
-            info!(
+            debug!(
                 source_set = source_set.name.as_str(),
                 recover_storage, "rescanning source-set state after full build"
             );
@@ -1034,11 +1039,11 @@ fn execute_source_set_step_ibcmd(
     partial_paths: Option<&[PathBuf]>,
     commit: &StepCommit,
 ) -> Result<(), AppError> {
-    info!(
-        source_set = source_set.name.as_str(),
-        partial = partial_paths.is_some(),
-        "loading source-set into ibcmd"
-    );
+    if partial_paths.is_some() {
+        info!("Загрузка изменений в базу через ibcmd: {}", source_set.name);
+    } else {
+        info!("Загрузка в базу через ibcmd: {}", source_set.name);
+    }
 
     let dsl = build_ibcmd_dsl(config, binary, runner)?;
     let extension = extension_name(source_set);
@@ -1054,7 +1059,7 @@ fn execute_source_set_step_ibcmd(
     };
     ensure_platform_success("load", source_set, &load_result)?;
 
-    info!(
+    debug!(
         source_set = source_set.name.as_str(),
         "applying database configuration after ibcmd load"
     );
@@ -1065,7 +1070,7 @@ fn execute_source_set_step_ibcmd(
 
     match commit {
         StepCommit::Prepared(prepared) => {
-            info!(
+            debug!(
                 source_set = source_set.name.as_str(),
                 "committing prepared change-detection state"
             );
@@ -1073,7 +1078,7 @@ fn execute_source_set_step_ibcmd(
                 .map_err(|error| AppError::Runtime(error.to_string()))
         }
         StepCommit::RescanFull { recover_storage } => {
-            info!(
+            debug!(
                 source_set = source_set.name.as_str(),
                 recover_storage, "rescanning source-set state after full build"
             );

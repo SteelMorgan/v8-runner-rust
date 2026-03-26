@@ -1,5 +1,5 @@
 use clap::Parser;
-use tracing::{error, info};
+use tracing::{debug, error};
 
 use crate::cli::args::{Cli, Command, McpCommand, McpServeTransport};
 use crate::cli::execute;
@@ -38,22 +38,22 @@ pub fn run() -> i32 {
             }
         };
 
-    info!(
+    debug!(
         command = command_name(&cli.command),
         output = cli.output.as_str(),
         work_path = %config.work_path.display(),
         "starting command"
     );
     if let Some(path) = &action_log_path {
-        info!(path = %path.display(), "action log file enabled");
+        debug!(path = %path.display(), "action log file enabled");
     }
 
     if cli.clean_before_execution {
-        info!("cleaning platform logs directory before execution");
+        debug!("cleaning platform logs directory before execution");
         match crate::support::temp::platform_logs_dir(&config.work_path)
             .and_then(|dir| crate::support::fs::clean_dir(&dir))
         {
-            Ok(()) => info!("platform logs directory cleaned"),
+            Ok(()) => debug!("platform logs directory cleaned"),
             Err(e) => {
                 presenter.print_error(&format!("failed to clean platform logs: {e}"));
                 return crate::output::exit_codes::RUNTIME_ERROR;
@@ -73,7 +73,7 @@ pub fn run() -> i32 {
 
     match result {
         Ok(()) => {
-            info!(
+            debug!(
                 command = command_name(&cli.command),
                 "command finished successfully"
             );
@@ -153,7 +153,7 @@ fn prepare_mcp_runtime(
         return Err(crate::output::exit_codes::RUNTIME_ERROR);
     }
 
-    info!(
+    debug!(
         transport,
         work_path = %config.work_path.display(),
         "starting mcp server"
@@ -163,7 +163,7 @@ fn prepare_mcp_runtime(
         match crate::support::temp::platform_logs_dir(&config.work_path)
             .and_then(|dir| crate::support::fs::clean_dir(&dir))
         {
-            Ok(()) => info!(
+            Ok(()) => debug!(
                 transport,
                 "platform logs directory cleaned for mcp transport"
             ),

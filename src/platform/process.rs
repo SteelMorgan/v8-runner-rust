@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use thiserror::Error;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 const EXECUTABLE_BUSY_MAX_RETRIES: usize = 5;
 const EXECUTABLE_BUSY_RETRY_DELAY: Duration = Duration::from_millis(10);
@@ -108,7 +108,7 @@ impl ProcessRunner for ProcessExecutor {
 
     fn spawn(&self, request: &ProcessRequest) -> Result<SpawnResult, ProcessError> {
         let rendered_command = render_command(request);
-        info!(command = rendered_command.as_str(), "spawning process");
+        debug!(command = rendered_command.as_str(), "spawning process");
         let child = spawn_command(request, ProcessIoMode::Detached, &rendered_command)?;
         let pid = child.id();
         let mut child = child;
@@ -135,7 +135,7 @@ impl ProcessRunner for ProcessExecutor {
             }
         }
 
-        info!(command = rendered_command.as_str(), pid, "process started");
+        debug!(command = rendered_command.as_str(), pid, "process started");
         Ok(SpawnResult {
             pid,
             binary: request.program.clone(),
@@ -150,7 +150,7 @@ impl ProcessExecutor {
         timeout: Option<Duration>,
     ) -> Result<ProcessResult, ProcessError> {
         let rendered_command = render_command(request);
-        info!(
+        debug!(
             command = rendered_command.as_str(),
             timeout_ms = timeout.map(|value| value.as_millis() as u64),
             "running process"
