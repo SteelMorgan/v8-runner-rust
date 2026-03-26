@@ -441,9 +441,14 @@ fn build_enterprise_dsl<'a>(
     let location = utilities
         .locate(UtilityType::V8C)
         .map_err(|error| AppError::Platform(error.to_string()))?;
+    tracing::info!(
+        additional_launch_keys = ?config.tools.enterprise.additional_launch_keys,
+        "resolved enterprise additional launch keys"
+    );
     Ok(EnterpriseDsl::new(
         location.path,
         config.v8_connection(),
+        config.tools.enterprise.additional_launch_keys.clone(),
         runner,
         artifacts.platform_log.clone(),
         Duration::from_secs(config.tests.execution_timeout_seconds),

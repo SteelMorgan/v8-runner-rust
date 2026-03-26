@@ -177,6 +177,43 @@ mod tests {
     }
 
     #[test]
+    fn load_config_accepts_enterprise_additional_keys_aliases() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).expect("src dir");
+
+        for key in [
+            "additional-launch-keys",
+            "additional_launch_keys",
+            "additionalLaunchKeys",
+        ] {
+            let config_path = dir.path().join(format!("{key}.yaml"));
+            std::fs::write(
+                &config_path,
+                format!(
+                    "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: \"File=/tmp/ib\"\ntools:\n  enterprise:\n    {}:\n      - /TESTMANAGER\n      - /TCUser\n      - ci-user\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: src\n",
+                    base.display(),
+                    work.display(),
+                    key
+                ),
+            )
+            .expect("write config");
+
+            let config = load_config(config_path.to_str(), None).expect("load config");
+            assert_eq!(
+                config.tools.enterprise.additional_launch_keys,
+                vec![
+                    "/TESTMANAGER".to_owned(),
+                    "/TCUser".to_owned(),
+                    "ci-user".to_owned()
+                ]
+            );
+        }
+    }
+
+    #[test]
     fn load_config_uses_mcp_and_edt_timeout_defaults_when_sections_are_omitted() {
         let dir = tempdir().expect("tempdir");
         let base = dir.path().join("base");

@@ -274,7 +274,6 @@ impl EdtSessionManager {
     }
 
     /// Stops admission, drains queued work, and waits for the worker thread to exit.
-    #[cfg(test)]
     pub fn shutdown(&self) -> Result<(), EdtSessionShutdownError> {
         self.inner
             .begin_shutdown()

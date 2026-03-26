@@ -240,7 +240,11 @@ pub struct PlatformToolConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct EnterpriseToolConfig {
     /// Additional command-line keys appended to enterprise client launches.
-    #[serde(default)]
+    #[serde(
+        default,
+        alias = "additional_launch_keys",
+        alias = "additionalLaunchKeys"
+    )]
     pub additional_launch_keys: Vec<String>,
 }
 

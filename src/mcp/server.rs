@@ -34,7 +34,7 @@ use tracing::error;
 
 use crate::config::model::AppConfig;
 use crate::mcp::context::McpCallContext;
-use crate::mcp::edt_session::{EdtRequestCompletion, EdtSessionManager};
+use crate::mcp::edt_session::{EdtRequestCompletion, EdtSessionManager, EdtSessionShutdownError};
 use crate::mcp::edt_syntax;
 use crate::mcp::error::{McpInternalError, McpServiceResult};
 use crate::mcp::port::{DefaultMcpUseCasePort, McpUseCasePort};
@@ -156,16 +156,17 @@ pub fn serve_stdio(config: AppConfig) -> Result<(), McpServerError> {
 
     let result = runtime.block_on(async move {
         let server = McpToolServer::stdio(Arc::new(config))?;
+        let edt_session = server.edt_session.clone();
         let running = server
             .serve(rmcp::transport::stdio())
             .await
             .map_err(|error| McpServerError::Start(error.to_string()))?;
 
-        running
-            .waiting()
-            .await
-            .map_err(|error| McpServerError::Task(error.to_string()))?;
-        Ok(())
+        let result = running.waiting().await;
+        shutdown_edt_session(edt_session)?;
+        result
+            .map(|_| ())
+            .map_err(|error| McpServerError::Task(error.to_string()))
     });
 
     runtime.shutdown_timeout(shutdown_timeout);
@@ -185,6 +186,7 @@ pub fn serve_http(config: AppConfig) -> Result<(), McpServerError> {
         let config = Arc::new(config);
         let shutdown = CancellationToken::new();
         let server = McpToolServer::http(config.clone())?;
+        let edt_session = server.edt_session.clone();
         let service = HttpMcpService::new(server, config.clone(), shutdown.child_token());
         let listener = tokio::net::TcpListener::bind(config.mcp.http.bind_address.as_str())
             .await
@@ -210,13 +212,25 @@ pub fn serve_http(config: AppConfig) -> Result<(), McpServerError> {
             }
         });
 
-        serve
-            .await
-            .map_err(|error| McpServerError::Task(error.to_string()))
+        let result = serve.await;
+        drop(service);
+        shutdown.cancel();
+        shutdown_edt_session(edt_session)?;
+        result.map_err(|error| McpServerError::Task(error.to_string()))
     });
 
     runtime.shutdown_timeout(shutdown_timeout);
     result
+}
+
+fn shutdown_edt_session(edt_session: Arc<EdtSessionManager>) -> Result<(), McpServerError> {
+    edt_session
+        .shutdown()
+        .map_err(|error| McpServerError::Task(format_edt_shutdown_error(error)))
+}
+
+fn format_edt_shutdown_error(error: EdtSessionShutdownError) -> String {
+    error.to_string()
 }
 
 /// rmcp-backed MCP transport adapter over the MCP service layer.

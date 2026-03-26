@@ -76,13 +76,26 @@ fn write_config(
     work_path: &Path,
     install_dir: &Path,
     timeout_seconds: u64,
+    additional_launch_keys: &[&str],
 ) {
+    let additional_launch_keys_block = if additional_launch_keys.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "  enterprise:\n    additional-launch-keys:\n{}",
+            additional_launch_keys
+                .iter()
+                .map(|key| format!("      - '{}'\n", key))
+                .collect::<String>()
+        )
+    };
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib;Pwd=secret'\ntests:\n  execution_timeout_seconds: {}\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib;Pwd=secret'\ntests:\n  execution_timeout_seconds: {}\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n{}",
         base_path.display(),
         work_path.display(),
         timeout_seconds,
         install_dir.display(),
+        additional_launch_keys_block,
     );
     fs::write(path, config).expect("config");
 }
@@ -95,6 +108,28 @@ fn setup_project(
     build_fail: bool,
     timeout_seconds: u64,
     sleep_seconds: Option<u64>,
+) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
+    setup_project_with_additional_launch_keys(
+        work_dir_name,
+        report_xml,
+        yax_log,
+        enterprise_exit,
+        build_fail,
+        timeout_seconds,
+        sleep_seconds,
+        &[],
+    )
+}
+
+fn setup_project_with_additional_launch_keys(
+    work_dir_name: &str,
+    report_xml: &str,
+    yax_log: &str,
+    enterprise_exit: i32,
+    build_fail: bool,
+    timeout_seconds: u64,
+    sleep_seconds: Option<u64>,
+    additional_launch_keys: &[&str],
 ) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
     let dir = tempdir().expect("tempdir");
     let base_path = dir.path().join("project");
@@ -133,6 +168,7 @@ fn setup_project(
         &work_path,
         &install_dir,
         timeout_seconds,
+        additional_launch_keys,
     );
 
     (dir, config_path, build_calls, test_calls, captured_config)
@@ -195,6 +231,41 @@ fn test_all_full_json_runs_build_first_and_returns_report() {
         "ok"
     );
     assert_eq!(payload["data"]["retained_paths"], Value::Null);
+}
+
+#[test]
+fn test_run_appends_enterprise_additional_launch_keys() {
+    let (_dir, config_path, _build_calls, test_calls, _captured_config) =
+        setup_project_with_additional_launch_keys(
+            "work",
+            JUNIT_SMOKE_REPORT_FIXTURE,
+            "12:00:00.000 [INF] ok",
+            0,
+            false,
+            5,
+            None,
+            &["/TESTMANAGER", "/TCUser", "ci-user"],
+        );
+
+    let output = std::process::Command::cargo_bin("v8-test-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "test",
+            "all",
+        ])
+        .output()
+        .expect("run");
+
+    assert!(output.status.success());
+    let calls = fs::read_to_string(test_calls).expect("test calls");
+    assert!(calls.contains("RunUnitTests="));
+    assert!(calls.contains("/TESTMANAGER"));
+    assert!(calls.contains("/TCUser"));
+    assert!(calls.contains("ci-user"));
 }
 
 #[test]

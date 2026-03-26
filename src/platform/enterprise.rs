@@ -16,6 +16,7 @@ pub enum EnterpriseError {
 pub struct EnterpriseDsl<'a> {
     binary: PathBuf,
     connection: V8Connection,
+    additional_launch_keys: Vec<String>,
     runner: &'a dyn ProcessRunner,
     log_file: PathBuf,
     timeout: Duration,
@@ -25,6 +26,7 @@ impl<'a> EnterpriseDsl<'a> {
     pub fn new(
         binary: PathBuf,
         connection: V8Connection,
+        additional_launch_keys: Vec<String>,
         runner: &'a dyn ProcessRunner,
         log_file: PathBuf,
         timeout: Duration,
@@ -32,6 +34,7 @@ impl<'a> EnterpriseDsl<'a> {
         Self {
             binary,
             connection,
+            additional_launch_keys,
             runner,
             log_file,
             timeout,
@@ -82,6 +85,7 @@ impl<'a> EnterpriseDsl<'a> {
     fn build_run_unit_tests_args(&self, config_path: &Path) -> Vec<String> {
         let mut args = vec!["ENTERPRISE".to_owned()];
         args.extend(self.connection.args());
+        args.extend(self.additional_launch_keys.clone());
         args.push("/C".to_owned());
         args.push(format!(
             "RunUnitTests={}",
@@ -119,6 +123,7 @@ mod tests {
         let dsl = EnterpriseDsl::new(
             dir.path().join("1cv8c"),
             V8Connection::from_connection_string("File=/tmp/ib"),
+            vec!["/TESTMANAGER".to_owned()],
             &runner as &dyn ProcessRunner,
             dir.path().join("platform.log"),
             Duration::from_secs(5),
@@ -128,6 +133,7 @@ mod tests {
             dsl.build_run_unit_tests_args(Path::new("/tmp/path with space/тест config.json"));
 
         assert_eq!(args[0], "ENTERPRISE");
+        assert!(args.iter().any(|arg| arg == "/TESTMANAGER"));
         assert!(args.iter().any(|arg| arg == "/C"));
         assert!(args
             .iter()
