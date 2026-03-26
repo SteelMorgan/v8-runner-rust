@@ -4,6 +4,7 @@ use std::time::Duration;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandName {
     Init,
+    Extensions,
     Build,
     Test,
     Dump,
@@ -16,6 +17,7 @@ impl CommandName {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Init => "init",
+            Self::Extensions => "extensions",
             Self::Build => "build",
             Self::Test => "test",
             Self::Dump => "dump",

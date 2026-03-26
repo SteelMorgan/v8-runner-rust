@@ -1,12 +1,13 @@
 use std::time::Instant;
 
 use crate::cli::args::{
-    BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs, DumpArgs, LaunchArgs,
-    SyntaxArgs, SyntaxTarget, TestArgs, TestScope,
+    BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs, DumpArgs,
+    ExtensionsArgs, LaunchArgs, SyntaxArgs, SyntaxTarget, TestArgs, TestScope,
 };
 use crate::config::model::AppConfig;
 use crate::domain::build::{BuildMode, BuildResult};
 use crate::domain::dump::{DumpMode, DumpResult};
+use crate::domain::extensions::ExtensionsResult;
 use crate::domain::init::{InitResult, InitStepStatus};
 use crate::domain::issue::{Issue, IssueSeverity};
 use crate::domain::syntax::{SyntaxCheckResult, SyntaxCheckStatus};
@@ -15,14 +16,15 @@ use crate::output::json::Envelope;
 use crate::output::presenter::Presenter;
 use crate::use_cases::build_project;
 use crate::use_cases::check_syntax;
+use crate::use_cases::configure_extensions;
 use crate::use_cases::context::{CommandName, ExecutionContext};
 use crate::use_cases::dump_config;
 use crate::use_cases::init_project;
 use crate::use_cases::launch_app;
 use crate::use_cases::request::{
-    BuildRequest, DesignerConfigSyntaxRequest, DesignerModulesSyntaxRequest, DumpModeRequest,
-    DumpRequest, InitRequest, LaunchModeRequest, LaunchRequest, SyntaxRequest, SyntaxTargetRequest,
-    TestRequest, TestScopeRequest,
+    BuildRequest, ConfigureExtensionsRequest, DesignerConfigSyntaxRequest,
+    DesignerModulesSyntaxRequest, DumpModeRequest, DumpRequest, InitRequest, LaunchModeRequest,
+    LaunchRequest, SyntaxRequest, SyntaxTargetRequest, TestRequest, TestScopeRequest,
 };
 use crate::use_cases::result::{UseCaseError, UseCaseErrorKind};
 use crate::use_cases::run_tests;
@@ -36,6 +38,7 @@ pub fn execute_command(
 ) -> Result<(), UseCaseError> {
     match command {
         Command::Init => execute_init(config, presenter),
+        Command::Extensions(args) => execute_extensions(config, args, presenter),
         Command::Build(args) => execute_build(config, args, presenter),
         Command::Test(args) => execute_test(config, args, presenter),
         Command::Dump(args) => execute_dump(config, args, presenter),
@@ -49,12 +52,54 @@ pub fn execute_command(
 pub fn command_name(command: &Command) -> CommandName {
     match command {
         Command::Init => CommandName::Init,
+        Command::Extensions(_) => CommandName::Extensions,
         Command::Build(_) => CommandName::Build,
         Command::Test(_) => CommandName::Test,
         Command::Dump(_) => CommandName::Dump,
         Command::Syntax(_) => CommandName::Syntax,
         Command::Launch(_) => CommandName::Launch,
         Command::Mcp(_) => unreachable!("mcp commands do not map to CLI command names"),
+    }
+}
+
+fn execute_extensions(
+    config: &AppConfig,
+    args: &ExtensionsArgs,
+    presenter: &Presenter,
+) -> Result<(), UseCaseError> {
+    let request = map_extensions_request(args);
+    let context = ExecutionContext::cli(CommandName::Extensions);
+    match configure_extensions::execute(&context, config, &request) {
+        Ok(result) => {
+            if presenter.is_json() {
+                presenter.print_envelope(&Envelope::ok(
+                    CommandName::Extensions.as_str(),
+                    result.duration_ms,
+                    result,
+                ));
+            } else {
+                render_extensions_text(&result, presenter, true);
+            }
+            Ok(())
+        }
+        Err(failure) => {
+            let error = failure.error;
+            if presenter.is_json() {
+                if let Some(result) = failure.payload {
+                    presenter.print_envelope(&Envelope::err(
+                        CommandName::Extensions.as_str(),
+                        result.duration_ms,
+                        result,
+                    ));
+                }
+            } else {
+                if let Some(result) = failure.payload.as_ref() {
+                    render_extensions_text(result, presenter, false);
+                }
+                presenter.print_error(&error.to_string());
+            }
+            Err(error)
+        }
     }
 }
 
@@ -293,6 +338,12 @@ fn map_build_request(args: &BuildArgs) -> BuildRequest {
     }
 }
 
+fn map_extensions_request(args: &ExtensionsArgs) -> ConfigureExtensionsRequest {
+    ConfigureExtensionsRequest {
+        names: args.names.clone(),
+    }
+}
+
 fn map_test_request(args: &TestArgs) -> TestRequest {
     TestRequest {
         full: args.full,
@@ -444,6 +495,28 @@ fn render_build_text(result: &BuildResult, presenter: &Presenter, succeeded: boo
         presenter.print_ok("Build completed: no changes");
     } else {
         presenter.print_ok("Build completed successfully");
+    }
+}
+
+fn render_extensions_text(result: &ExtensionsResult, presenter: &Presenter, succeeded: bool) {
+    for step in &result.steps {
+        let line = format!(
+            "{}: {} - {}",
+            step.target,
+            step.action,
+            step.message.as_deref().unwrap_or("ok")
+        );
+        if step.ok {
+            presenter.print_success_item(&line);
+        } else {
+            presenter.print_failure_item(&line);
+        }
+    }
+
+    if succeeded {
+        presenter.print_success_item("Extension properties updated successfully");
+    } else {
+        presenter.print_failure_item("Extension property update failed");
     }
 }
 
@@ -631,11 +704,11 @@ fn status_label(status: &TestStatus) -> &'static str {
 mod tests {
     use super::{
         command_name, map_build_request, map_designer_config_request, map_dump_request,
-        map_launch_request, map_syntax_request, map_test_request,
+        map_extensions_request, map_launch_request, map_syntax_request, map_test_request,
     };
     use crate::cli::args::{
         BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs, DumpArgs,
-        LaunchArgs, SyntaxArgs, SyntaxTarget, TestArgs, TestScope,
+        ExtensionsArgs, LaunchArgs, SyntaxArgs, SyntaxTarget, TestArgs, TestScope,
     };
     use crate::use_cases::context::CommandName;
     use crate::use_cases::request::{
@@ -689,6 +762,13 @@ mod tests {
     #[test]
     fn maps_build_dump_and_launch_requests() {
         assert!(map_build_request(&BuildArgs { full_rebuild: true }).full_rebuild);
+        assert_eq!(
+            map_extensions_request(&ExtensionsArgs {
+                names: vec!["client_mcp".to_owned()],
+            })
+            .names,
+            vec!["client_mcp"]
+        );
         assert_eq!(
             map_dump_request(&DumpArgs {
                 mode: "incremental".to_owned(),
@@ -780,6 +860,10 @@ mod tests {
     #[test]
     fn resolves_command_name() {
         assert_eq!(command_name(&Command::Init), CommandName::Init);
+        assert_eq!(
+            command_name(&Command::Extensions(ExtensionsArgs { names: vec![] })),
+            CommandName::Extensions
+        );
         assert_eq!(
             command_name(&Command::Build(BuildArgs {
                 full_rebuild: false

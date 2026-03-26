@@ -2,6 +2,8 @@
 pub mod build_project;
 /// Syntax-check orchestration use case.
 pub mod check_syntax;
+/// Extension properties orchestration use case.
+pub mod configure_extensions;
 /// Per-invocation execution metadata shared across transports.
 pub mod context;
 /// Dump orchestration use case.

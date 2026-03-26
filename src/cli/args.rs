@@ -36,6 +36,8 @@ pub struct Cli {
 pub enum Command {
     /// Initialize infobase and EDT workspace
     Init,
+    /// Update extension properties in infobase
+    Extensions(ExtensionsArgs),
     /// Load sources into infobase
     Build(BuildArgs),
     /// Run YaXUnit tests
@@ -55,6 +57,13 @@ pub struct BuildArgs {
     /// Clear change cache and rebuild everything
     #[arg(long)]
     pub full_rebuild: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ExtensionsArgs {
+    /// Extension source-set name to update. Repeat to target multiple extensions.
+    #[arg(long = "name")]
+    pub names: Vec<String>,
 }
 
 #[derive(Args, Debug)]
@@ -231,7 +240,7 @@ pub struct DesignerModulesSyntaxArgs {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, McpCommand, McpServeTransport, SyntaxTarget};
+    use super::{Cli, Command, ExtensionsArgs, McpCommand, McpServeTransport, SyntaxTarget};
     use clap::Parser;
 
     #[test]
@@ -264,6 +273,26 @@ mod tests {
     fn parses_init_command() {
         let cli = Cli::try_parse_from(["v8-test-runner", "init"]).expect("parse");
         assert!(matches!(cli.command, Command::Init));
+    }
+
+    #[test]
+    fn parses_extensions_command_with_names() {
+        let cli = Cli::try_parse_from([
+            "v8-test-runner",
+            "extensions",
+            "--name",
+            "client_mcp",
+            "--name",
+            "tests",
+        ])
+        .expect("parse");
+
+        match cli.command {
+            Command::Extensions(ExtensionsArgs { names }) => {
+                assert_eq!(names, vec!["client_mcp", "tests"]);
+            }
+            _ => panic!("unexpected command"),
+        }
     }
 
     #[test]

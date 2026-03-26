@@ -102,6 +102,34 @@ impl<'a> IbcmdDsl<'a> {
         self.run(&args)
     }
 
+    pub fn infobase_extension_update_properties(
+        &self,
+        name: &str,
+        safe_mode: bool,
+        unsafe_action_protection: bool,
+    ) -> Result<PlatformCommandResult, IbcmdError> {
+        let mut args = vec![
+            "infobase".to_owned(),
+            "extensions".to_owned(),
+            "update".to_owned(),
+        ];
+        args.extend(self.base_args());
+        args.push(format!("--name={name}"));
+        args.push(format!(
+            "--safe-mode={}",
+            if safe_mode { "yes" } else { "no" }
+        ));
+        args.push(format!(
+            "--unsafe-action-protection={}",
+            if unsafe_action_protection {
+                "yes"
+            } else {
+                "no"
+            }
+        ));
+        self.run(&args)
+    }
+
     pub fn config_import_partial(
         &self,
         base_dir: &Path,
@@ -455,5 +483,33 @@ mod tests {
         assert!(args.contains("infobase"));
         assert!(args.contains("create"));
         assert!(args.contains("--database-path=/ib"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn infobase_extension_update_properties_builds_expected_args() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("ibcmd");
+        let args_log = dir.path().join("args.log");
+        write_script(
+            &script,
+            &format!("printf '%s\\n' \"$@\" > \"{}\"\nexit 0", args_log.display()),
+        );
+        let runner = ProcessExecutor;
+        let conn =
+            IbcmdConnection::from_v8_connection(&V8Connection::from_connection_string("File=/ib"))
+                .expect("connection");
+        let dsl = IbcmdDsl::new(script, conn, &runner as &dyn ProcessRunner);
+
+        dsl.infobase_extension_update_properties("client_mcp", false, false)
+            .expect("update");
+
+        let args = fs::read_to_string(args_log).expect("args");
+        assert!(args.contains("infobase"));
+        assert!(args.contains("extensions"));
+        assert!(args.contains("update"));
+        assert!(args.contains("--name=client_mcp"));
+        assert!(args.contains("--safe-mode=no"));
+        assert!(args.contains("--unsafe-action-protection=no"));
     }
 }

@@ -128,3 +128,10 @@ pub struct LaunchRequest {
 /// Transport-neutral request for the `init` use case.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct InitRequest;
+
+/// Transport-neutral request for extension property updates.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ConfigureExtensionsRequest {
+    /// Optional source-set names to update. Empty means all extension source-sets.
+    pub names: Vec<String>,
+}

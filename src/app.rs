@@ -68,6 +68,7 @@ pub fn run() -> i32 {
 
     let result = match &cli.command {
         Command::Init
+        | Command::Extensions(_)
         | Command::Build(_)
         | Command::Test(_)
         | Command::Dump(_)
