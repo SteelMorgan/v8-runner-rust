@@ -74,7 +74,8 @@ The MCP adapter no longer needs to talk to `cli::execute` or to reuse domain ser
 
 Important staging note:
 
-- The shared actor is wired only into live MCP `check_syntax_edt`. CLI EDT execution and future EDT export/build flows still use the existing one-shot path until the remaining EDT rollout tasks in `spec/IMPLEMENTATION_TODO.md` land.
+- The shared actor is wired only into live MCP `check_syntax_edt`.
+- CLI EDT execution now also supports interactive `1cedtcli` when `tools.edt_cli.interactive_mode=true` for `init`, EDT export during `build`, and CLI `syntax edt`, but it does not reuse the MCP shared actor/session manager.
 - `spec/MCP_IMPLEMENTATION_PLAN.md` remains the canonical staged MCP rollout history/reference for the closed Stage 1-5 MCP rollout; it is not the active backlog for follow-up EDT work.
 
 ## Backend Dispatch
@@ -109,4 +110,4 @@ Use cases now return transport-neutral payloads or structured failures.
 - `workPath/temp/partial-lists/` stores partial load and partial dump list files.
 - `workPath/temp/yaxunit/` stores temporary YaXUnit config files.
 - `workPath/hash-storages/` remains reserved for change detection state.
-- `workPath/<sourceSetName>/` is used by the EDT export/build flow as the generated Designer-format output area for a source-set.
+- `workPath/designer/<sourceSetName>/` is used by the EDT export/build flow as the generated Designer-format output area for a source-set.

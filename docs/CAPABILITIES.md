@@ -13,6 +13,7 @@
 | `init` | `format=DESIGNER` + `builder=DESIGNER` | Создаёт файловую ИБ через `1cv8 CREATEINFOBASE`, если отсутствует |
 | `init` | `format=DESIGNER` + `builder=IBCMD` | Создаёт файловую ИБ через `ibcmd infobase create`, если отсутствует |
 | `init` | `format=EDT` + `builder=DESIGNER` | Создаёт файловую ИБ и, если workspace отсутствует, импортирует все EDT `source-set` в `workPath/edt-workspace` |
+| `extensions` | `format=DESIGNER` или `format=EDT` | Обновляет свойства расширений для extension `source-set`, указанных в конфиге |
 | `build` | `format=DESIGNER` + `builder=DESIGNER` | Инкрементальная или полная загрузка через Designer |
 | `build` | `format=DESIGNER` + `builder=IBCMD` | Использует `ibcmd config import` + `config apply`; только файловая ИБ |
 | `build` | `format=EDT` + `builder=DESIGNER` | Определяет EDT-изменения, экспортирует затронутые `source-set`, затем загружает Designer-вывод |
@@ -78,6 +79,20 @@ v8-test-runner init
 - Для `format=EDT` workspace создаётся в `workPath/edt-workspace`, а импорт проектов идёт в порядке `CONFIGURATION`, затем `EXTENSION`.
 - Если `workPath/edt-workspace` уже существует и содержит внутренний marker успешной инициализации, EDT-шаг пропускается.
 - Если каталог workspace уже есть, но marker успешной инициализации отсутствует, `init` повторяет импорт всех EDT-проектов.
+
+## Команда `extensions`
+
+```bash
+v8-test-runner extensions [--name <SOURCE_SET>...]
+```
+
+Поведение:
+
+- Работает только с `source-set`, у которых `purpose=EXTENSION`.
+- Если `--name` не передан, команда обрабатывает все extension `source-set` из конфига.
+- Если имя передано несколько раз, обновляются только указанные расширения.
+- Команда обновляет свойства расширения в информационной базе и возвращает пошаговый результат по каждому целевому расширению.
+- Поведение одинаково для Designer- и EDT-проектов: источник имени расширения определяется из соответствующего `source-set`.
 
 ## Команда `test`
 
@@ -237,37 +252,19 @@ v8-test-runner mcp serve http
 - Создание новых HTTP-сессий ограничено `max_sessions`.
 - В режиме без состояния отключается жизненный цикл MCP-сессий на `GET` и `DELETE`.
 
-## Ключи конфигурации
+## Конфигурация
 
-| Ключ | Обязателен | Значение по умолчанию / примечания |
-| --- | --- | --- |
-| `basePath` | Да | Корневой путь к исходникам проекта |
-| `workPath` | Да | Корень для артефактов выполнения, временных файлов, логов и хранилищ хешей |
-| `format` | Нет | `DESIGNER` |
-| `builder` | Нет | `DESIGNER` |
-| `connection` | Да | Строка подключения к информационной базе в сыром виде |
-| `credentials.user` | Нет | Опциональный пользователь ИБ |
-| `credentials.password` | Нет | Опциональный пароль ИБ |
-| `source-set[]` | Да | Каждый элемент содержит `name`, `purpose`, `path`; используйте `CONFIGURATION` и `EXTENSION` |
-| `build.partialLoadThreshold` | Нет | `20` |
-| `tests.execution_timeout_seconds` | Нет | `300` |
-| `tools.platform.path` | Нет | Может указывать на бинарь, `bin`-директорию или корень платформы с версиями |
-| `tools.platform.version` | Нет | Точная подсказка по версии платформы |
-| `tools.enterprise.additional-launch-keys[]` | Нет | Дополнительные ключи только для `ENTERPRISE`-запуска клиента |
-| `tools.edt_cli.path` | Нет | Опциональный путь к `1cedtcli`, корню установки EDT или version-like подсказка для автопоиска |
-| `tools.edt_cli.version` | Нет | Отдельная version-like подсказка для автопоиска EDT, например `2025.2.3` |
-| `tools.edt_cli.interactive-mode` | Нет | `false`; включает interactive backend для всех EDT-операций |
-| `tools.edt_cli.auto-start` | Нет | `false` |
-| `tools.edt_cli.startup_timeout_ms` | Нет | `300000`; также принимает `startup-timeout-ms` |
-| `tools.edt_cli.command_timeout_ms` | Нет | `300000`; также принимает `command-timeout-ms` |
-| `tools.edt_cli` | Нет | Также принимает обратносовместимый алиас ключа `edt-cli` |
-| `mcp.http.bind_address` | Нет | `127.0.0.1:3000` |
-| `mcp.http.path` | Нет | `/mcp` |
-| `mcp.http.stateful_sessions` | Нет | `true` |
-| `mcp.http.max_sessions` | Нет | `64` |
-| `mcp.http.idle_ttl_secs` | Нет | `900` |
-| `mcp.execution.max_concurrent_calls` | Нет | `1` |
-| `mcp.execution.shutdown_grace_period_secs` | Нет | `30` |
+Полный справочник по всем ключам `application.yaml` вынесен в [CONFIGURATION.md](CONFIGURATION.md), чтобы не дублировать его здесь.
+
+Чаще всего при чтении этого файла нужны только такие опорные ключи:
+
+- `basePath`, `workPath`, `connection`
+- `format`, `builder`
+- `source-set[]`
+- `build.partialLoadThreshold`
+- `tests.execution_timeout_seconds`
+- `tools.platform.*`, `tools.enterprise.*`, `tools.edt_cli.*`
+- `mcp.http.*`, `mcp.execution.*`
 
 ## Артефакты выполнения
 
