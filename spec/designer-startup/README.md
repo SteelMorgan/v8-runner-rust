@@ -1,26 +1,23 @@
 # Designer Startup Specs
 
-Справочник собран из локальной документации `ZIF1` и `ZIF2` через viewer API на `http://localhost:8080`.
+Краткий индекс параметров запуска `1cv8` для AI-агентов.
 
-## Состав
+## Базовый контракт
 
-- Обзор выбора режима запуска: `mode-selection/ZIF1.md`
-- Общих параметров запуска (ZIF2): `69`
-- Машиночитаемый индекс: `manifest.json`
-- Смежный batch-справочник: `../designer-batch/README.md`
+- Режимы запуска: `DESIGNER`, `ENTERPRISE`, `CREATEINFOBASE`.
+- Обзор выбора режима: `mode-selection/ZIF1.md`.
+- Машиночитаемый индекс: `manifest.json`.
+- Смежный batch-справочник: `../designer-batch/README.md`.
 
-## Группы ZIF2
+## Группы параметров
 
-### Указание параметров подключения
+### Использование клиентских сертификатов (только для тонкого клиента)
 
-- `F` -> `common-parameters/connection/F.md`
-- `IBConnectionString` -> `common-parameters/connection/IBConnectionString.md`
-- `IBName` -> `common-parameters/connection/IBName.md`
-- `O` -> `common-parameters/connection/O.md`
-- `S` -> `common-parameters/connection/S.md`
-- `SLev` -> `common-parameters/connection/SLev.md`
-- `WS` -> `common-parameters/connection/WS.md`
-- `Z` -> `common-parameters/connection/Z.md`
+- `HttpsCA` -> `common-parameters/client-certificates/HttpsCA.md`
+- `HttpsCert` -> `common-parameters/client-certificates/HttpsCert.md`
+- `HttpsForceTLS1_0` -> `common-parameters/client-certificates/HttpsForceTLS1_0.md`
+- `HttpsForceTLS1_1` -> `common-parameters/client-certificates/HttpsForceTLS1_1.md`
+- `HttpsForceTLS1_2` -> `common-parameters/client-certificates/HttpsForceTLS1_2.md`
 
 ### Настройка аутентификации
 
@@ -38,22 +35,6 @@
 - `WSA` -> `common-parameters/authentication/WSA.md`
 - `WSN` -> `common-parameters/authentication/WSN.md`
 - `WSP` -> `common-parameters/authentication/WSP.md`
-
-### Определение режима запуска
-
-- `AppArch` -> `common-parameters/launch-mode/AppArch.md`
-- `AppAutoCheckMode` -> `common-parameters/launch-mode/AppAutoCheckMode.md`
-- `AppAutoCheckVersion` -> `common-parameters/launch-mode/AppAutoCheckVersion.md`
-- `RunModeManagedApplication` -> `common-parameters/launch-mode/RunModeManagedApplication.md`
-- `RunModeOrdinaryApplication` -> `common-parameters/launch-mode/RunModeOrdinaryApplication.md`
-
-### Использование клиентских сертификатов (только для тонкого клиента)
-
-- `HttpsCA` -> `common-parameters/client-certificates/HttpsCA.md`
-- `HttpsCert` -> `common-parameters/client-certificates/HttpsCert.md`
-- `HttpsForceTLS1_0` -> `common-parameters/client-certificates/HttpsForceTLS1_0.md`
-- `HttpsForceTLS1_1` -> `common-parameters/client-certificates/HttpsForceTLS1_1.md`
-- `HttpsForceTLS1_2` -> `common-parameters/client-certificates/HttpsForceTLS1_2.md`
 
 ### Настройки интерфейса
 
@@ -80,6 +61,14 @@
 - `TestClient` -> `common-parameters/testing/TestClient.md`
 - `TestManager` -> `common-parameters/testing/TestManager.md`
 - `UILogRecorder` -> `common-parameters/testing/UILogRecorder.md`
+
+### Определение режима запуска
+
+- `AppArch` -> `common-parameters/launch-mode/AppArch.md`
+- `AppAutoCheckMode` -> `common-parameters/launch-mode/AppAutoCheckMode.md`
+- `AppAutoCheckVersion` -> `common-parameters/launch-mode/AppAutoCheckVersion.md`
+- `RunModeManagedApplication` -> `common-parameters/launch-mode/RunModeManagedApplication.md`
+- `RunModeOrdinaryApplication` -> `common-parameters/launch-mode/RunModeOrdinaryApplication.md`
 
 ### Проверки во время работы клиентского приложения
 
@@ -109,3 +98,20 @@
 - `URL` -> `common-parameters/misc/URL.md`
 - `UseHwLicenses` -> `common-parameters/misc/UseHwLicenses.md`
 - `UsePrivilegedMode` -> `common-parameters/misc/UsePrivilegedMode.md`
+
+### Указание параметров подключения
+
+- `F` -> `common-parameters/connection/F.md`
+- `IBConnectionString` -> `common-parameters/connection/IBConnectionString.md`
+- `IBName` -> `common-parameters/connection/IBName.md`
+- `O` -> `common-parameters/connection/O.md`
+- `S` -> `common-parameters/connection/S.md`
+- `SLev` -> `common-parameters/connection/SLev.md`
+- `WS` -> `common-parameters/connection/WS.md`
+- `Z` -> `common-parameters/connection/Z.md`
+
+## Правила чтения
+
+- В каждой карточке оставлены назначение, синтаксис, связи и важные примечания.
+- `Связи` фиксируют ограничения, режимы совместного использования и значения по умолчанию.
+- Метаданные источника (group/pagePath/sourceUrl) сохранены в `manifest.json`.
