@@ -67,6 +67,11 @@ pub struct ReplaceDirOutcome {
     pub cleanup_warning: Option<String>,
 }
 
+#[derive(Debug)]
+pub struct ReplaceFileOutcome {
+    pub cleanup_warning: Option<String>,
+}
+
 pub fn acquire_advisory_lock(path: &Path) -> std::io::Result<AdvisoryLockGuard> {
     acquire_advisory_lock_with_mode(path, false)
 }
@@ -279,6 +284,108 @@ pub fn replace_dir_atomically(
     }
 
     Ok(ReplaceDirOutcome {
+        cleanup_warning: if warnings.is_empty() {
+            None
+        } else {
+            Some(warnings.join("; "))
+        },
+    })
+}
+
+pub fn replace_file_atomically(
+    staging_file: &Path,
+    target_file: &Path,
+    run_id: &str,
+    target_identity: &str,
+) -> std::io::Result<ReplaceFileOutcome> {
+    let parent = target_file.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("target path has no parent: {}", target_file.display()),
+        )
+    })?;
+    let backup_name = target_file
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "artifact".to_owned());
+    let backup_file = parent.join(format!(".{backup_name}.backup-{run_id}"));
+    let stage_metadata_path = metadata_sidecar_path(staging_file);
+    let backup_metadata_path = metadata_sidecar_path(&backup_file);
+
+    if !target_file.exists() {
+        std::fs::rename(staging_file, target_file)?;
+        let fsync_result = best_effort_fsync_dir(parent);
+        let _ = remove_path_if_exists(&stage_metadata_path);
+        fsync_result?;
+        return Ok(ReplaceFileOutcome {
+            cleanup_warning: None,
+        });
+    }
+
+    std::fs::rename(target_file, &backup_file)?;
+    if let Err(error) = best_effort_fsync_dir(parent) {
+        let rollback_result =
+            std::fs::rename(&backup_file, target_file).and_then(|()| best_effort_fsync_dir(parent));
+        return Err(with_rollback_context(
+            error,
+            rollback_result.err(),
+            "failed to fsync parent after moving target file to backup",
+        ));
+    }
+
+    if let Err(error) = write_temp_dir_metadata(
+        &backup_file,
+        TempDirKind::Backup,
+        run_id,
+        target_file,
+        target_identity,
+    ) {
+        let rollback_result =
+            std::fs::rename(&backup_file, target_file).and_then(|()| best_effort_fsync_dir(parent));
+        return Err(with_rollback_context(
+            error,
+            rollback_result.err(),
+            "failed to write backup file metadata",
+        ));
+    }
+
+    if let Err(error) = std::fs::rename(staging_file, target_file) {
+        let rollback_result =
+            std::fs::rename(&backup_file, target_file).and_then(|()| best_effort_fsync_dir(parent));
+        return Err(with_rollback_context(
+            error,
+            rollback_result.err(),
+            "failed to publish staged artifact file",
+        ));
+    }
+
+    if let Err(error) = best_effort_fsync_dir(parent) {
+        let rollback_result = std::fs::rename(target_file, staging_file)
+            .and_then(|()| std::fs::rename(&backup_file, target_file))
+            .and_then(|()| best_effort_fsync_dir(parent));
+        return Err(with_rollback_context(
+            error,
+            rollback_result.err(),
+            "failed to fsync parent after publishing staged artifact file",
+        ));
+    }
+
+    let _ = remove_path_if_exists(&stage_metadata_path);
+
+    let mut warnings = Vec::new();
+    if let Err(error) = remove_path_if_exists(&backup_file) {
+        warnings.push(format!(
+            "failed to remove backup file '{}': {error}",
+            backup_file.display()
+        ));
+    } else if let Err(error) = remove_path_if_exists(&backup_metadata_path) {
+        warnings.push(format!(
+            "failed to remove backup metadata '{}': {error}",
+            backup_metadata_path.display()
+        ));
+    }
+
+    Ok(ReplaceFileOutcome {
         cleanup_warning: if warnings.is_empty() {
             None
         } else {

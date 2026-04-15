@@ -3,10 +3,11 @@ use std::time::Instant;
 use serde_json::json;
 
 use crate::cli::args::{
-    BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs, DumpArgs,
-    ExtensionsArgs, LaunchArgs, SyntaxArgs, SyntaxTarget, TestArgs, TestScope,
+    ArtifactsArgs, BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs,
+    DumpArgs, ExtensionsArgs, LaunchArgs, SyntaxArgs, SyntaxTarget, TestArgs, TestScope,
 };
 use crate::config::model::AppConfig;
+use crate::domain::artifacts::{ArtifactBuildMode, ArtifactsResult};
 use crate::domain::build::{BuildMode, BuildResult};
 use crate::domain::dump::{DumpMode, DumpResult};
 use crate::domain::extensions::ExtensionsResult;
@@ -24,12 +25,14 @@ use crate::use_cases::check_syntax;
 use crate::use_cases::configure_extensions;
 use crate::use_cases::context::{CommandName, ExecutionContext};
 use crate::use_cases::dump_config;
+use crate::use_cases::artifacts;
 use crate::use_cases::init_project;
 use crate::use_cases::launch_app;
 use crate::use_cases::request::{
-    BuildRequest, ConfigureExtensionsRequest, DesignerConfigSyntaxRequest,
-    DesignerModulesSyntaxRequest, DumpModeRequest, DumpRequest, InitRequest, LaunchModeRequest,
-    LaunchRequest, SyntaxRequest, SyntaxTargetRequest, TestRequest, TestScopeRequest,
+    ArtifactsModeRequest, ArtifactsRequest, BuildRequest, ConfigureExtensionsRequest,
+    DesignerConfigSyntaxRequest, DesignerModulesSyntaxRequest, DumpModeRequest, DumpRequest,
+    InitRequest, LaunchModeRequest, LaunchRequest, SyntaxRequest, SyntaxTargetRequest,
+    TestRequest, TestScopeRequest,
 };
 use crate::use_cases::result::{UseCaseError, UseCaseErrorKind};
 use crate::use_cases::run_tests;
@@ -51,6 +54,9 @@ pub fn execute_command(
         Command::Build(args) => execute_build(config, args, presenter, clean_before_execution),
         Command::Test(args) => execute_test(config, args, presenter, clean_before_execution),
         Command::Dump(args) => execute_dump(config, args, presenter, clean_before_execution),
+        Command::Artifacts(args) => {
+            execute_artifacts(config, args, presenter, clean_before_execution)
+        }
         Command::Syntax(args) => execute_syntax(config, args, presenter, clean_before_execution),
         Command::Launch(args) => execute_launch(config, args, presenter, clean_before_execution),
         Command::Mcp(_) => unreachable!("mcp commands are handled outside cli::execute"),
@@ -65,6 +71,7 @@ pub fn command_name(command: &Command) -> CommandName {
         Command::Build(_) => CommandName::Build,
         Command::Test(_) => CommandName::Test,
         Command::Dump(_) => CommandName::Dump,
+        Command::Artifacts(_) => CommandName::Artifacts,
         Command::Syntax(_) => CommandName::Syntax,
         Command::Launch(_) => CommandName::Launch,
         Command::Mcp(_) => unreachable!("mcp commands do not map to CLI command names"),
@@ -302,6 +309,54 @@ fn execute_dump(
     )
 }
 
+fn execute_artifacts(
+    config: &AppConfig,
+    args: &ArtifactsArgs,
+    presenter: &Presenter,
+    clean_before_execution: bool,
+) -> Result<(), UseCaseError> {
+    let request = map_artifacts_request(args);
+    let context = ExecutionContext::cli(CommandName::Artifacts);
+    with_cli_workspace_lock(
+        config,
+        presenter,
+        CommandName::Artifacts,
+        clean_before_execution,
+        || match artifacts::execute(&context, config, &request) {
+            Ok(result) => {
+                if presenter.is_json() {
+                    presenter.print_envelope(&Envelope::ok(
+                        CommandName::Artifacts.as_str(),
+                        result.duration_ms,
+                        result,
+                    ));
+                } else {
+                    render_artifacts_text(&result, presenter, true);
+                }
+                Ok(())
+            }
+            Err(failure) => {
+                let error = failure.error;
+                if presenter.is_json() {
+                    if let Some(result) = failure.payload {
+                        presenter.print_envelope(&Envelope::err(
+                            CommandName::Artifacts.as_str(),
+                            result.duration_ms,
+                            result,
+                        ));
+                    }
+                } else {
+                    if let Some(result) = failure.payload.as_ref() {
+                        render_artifacts_text(result, presenter, false);
+                    }
+                    presenter.print_error(&error.to_string());
+                }
+                Err(error)
+            }
+        },
+    )
+}
+
 fn execute_syntax(
     config: &AppConfig,
     args: &SyntaxArgs,
@@ -494,6 +549,22 @@ fn map_dump_request(args: &DumpArgs) -> Result<DumpRequest, UseCaseError> {
         extension: args.extension.clone(),
         objects: args.objects.clone(),
     })
+}
+
+fn map_artifacts_request(args: &ArtifactsArgs) -> ArtifactsRequest {
+    let mode = if args.extension.is_some() {
+        ArtifactsModeRequest::ExtensionCfe
+    } else {
+        ArtifactsModeRequest::ConfigurationCf
+    };
+
+    ArtifactsRequest {
+        execution: ArtifactsRequest::default_execution(mode),
+        mode,
+        output_path: args.output.clone(),
+        source_set: args.source_set.clone(),
+        extension: args.extension.clone(),
+    }
 }
 
 fn map_syntax_request(args: &SyntaxArgs) -> SyntaxRequest {
@@ -701,6 +772,31 @@ fn render_dump_text(result: &DumpResult, presenter: &Presenter, succeeded: bool)
     }
 }
 
+fn render_artifacts_text(result: &ArtifactsResult, presenter: &Presenter, succeeded: bool) {
+    let mode = match result.mode {
+        ArtifactBuildMode::ConfigurationCf => "cf",
+        ArtifactBuildMode::ExtensionCfe => "cfe",
+    };
+    let source_set = result.source_set.as_deref().unwrap_or("<unresolved>");
+    let mut summary = format!("{source_set}: {mode} -> {}", result.output_path.display());
+    if let Some(extension) = result.extension.as_deref() {
+        summary.push_str(&format!(" (extension: {extension})"));
+    }
+    if succeeded {
+        presenter.print_success_item(&summary);
+    } else {
+        presenter.print_failure_item(&summary);
+    }
+    if let Some(message) = result.message.as_deref() {
+        presenter.print_info(message);
+    }
+    if succeeded {
+        presenter.print_success_item("Artifacts export completed successfully");
+    } else {
+        presenter.print_failure_item("Artifacts export failed");
+    }
+}
+
 fn render_syntax_text(result: &SyntaxCheckResult, presenter: &Presenter) {
     let summary_line = format!(
         "{}: {:?} (exit {}, errors {}, warnings {}, info {}, duration {} ms)",
@@ -837,13 +933,13 @@ fn status_label(status: &TestStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_name, execute_command, map_build_request, map_designer_config_request,
-        map_dump_request, map_extensions_request, map_launch_request, map_syntax_request,
-        map_test_request, pre_dispatch_error_envelope,
+        command_name, execute_command, map_artifacts_request, map_build_request,
+        map_designer_config_request, map_dump_request, map_extensions_request,
+        map_launch_request, map_syntax_request, map_test_request, pre_dispatch_error_envelope,
     };
     use crate::cli::args::{
-        BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs, DumpArgs,
-        ExtensionsArgs, LaunchArgs, SyntaxArgs, SyntaxTarget, TestArgs, TestScope,
+        ArtifactsArgs, BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs,
+        DumpArgs, ExtensionsArgs, LaunchArgs, SyntaxArgs, SyntaxTarget, TestArgs, TestScope,
     };
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
@@ -854,7 +950,8 @@ mod tests {
     use crate::support::temp::platform_logs_dir;
     use crate::use_cases::context::CommandName;
     use crate::use_cases::request::{
-        DumpModeRequest, LaunchModeRequest, SyntaxTargetRequest, TestScopeRequest,
+        ArtifactsModeRequest, DumpModeRequest, LaunchModeRequest, SyntaxTargetRequest,
+        TestScopeRequest,
     };
     use crate::use_cases::result::UseCaseErrorKind;
     use crate::use_cases::workspace_lock::workspace_lock_path;
@@ -964,6 +1061,27 @@ mod tests {
             .mode,
             LaunchModeRequest::Thin
         );
+        let artifacts = map_artifacts_request(&ArtifactsArgs {
+            output: "dist/ext.cfe".to_owned(),
+            source_set: Some("ext-sales".to_owned()),
+            extension: Some("SalesAddon".to_owned()),
+        });
+        assert_eq!(artifacts.mode, ArtifactsModeRequest::ExtensionCfe);
+        assert_eq!(artifacts.source_set.as_deref(), Some("ext-sales"));
+        assert_eq!(artifacts.extension.as_deref(), Some("SalesAddon"));
+    }
+
+    #[test]
+    fn maps_artifacts_request_keeps_blank_extension_in_cfe_mode() {
+        let artifacts = map_artifacts_request(&ArtifactsArgs {
+            output: "dist/main.cf".to_owned(),
+            source_set: Some("main".to_owned()),
+            extension: Some("   ".to_owned()),
+        });
+
+        assert_eq!(artifacts.mode, ArtifactsModeRequest::ExtensionCfe);
+        assert_eq!(artifacts.extension.as_deref(), Some("   "));
+        assert_eq!(artifacts.source_set.as_deref(), Some("main"));
     }
 
     #[test]
@@ -1033,6 +1151,14 @@ mod tests {
                 full_rebuild: false
             })),
             CommandName::Build
+        );
+        assert_eq!(
+            command_name(&Command::Artifacts(ArtifactsArgs {
+                output: "dist/main.cf".to_owned(),
+                source_set: None,
+                extension: None,
+            })),
+            CommandName::Artifacts
         );
     }
 

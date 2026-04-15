@@ -58,6 +58,7 @@ pub fn run() -> i32 {
         | Command::Build(_)
         | Command::Test(_)
         | Command::Dump(_)
+        | Command::Artifacts(_)
         | Command::Syntax(_)
         | Command::Launch(_) => execute::execute_command(
             &config,

@@ -1,3 +1,5 @@
+/// Artifact export orchestration use case.
+pub mod artifacts;
 /// Build orchestration use case.
 pub mod build_project;
 /// Syntax-check orchestration use case.

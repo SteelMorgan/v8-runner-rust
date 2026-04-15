@@ -44,6 +44,8 @@ pub enum Command {
     Test(TestArgs),
     /// Dump configuration from infobase to files
     Dump(DumpArgs),
+    /// Export configuration artifacts via Designer batch commands
+    Artifacts(ArtifactsArgs),
     /// Run syntax checks
     Syntax(SyntaxArgs),
     /// Launch 1C application
@@ -103,6 +105,21 @@ pub struct DumpArgs {
     /// Objects for partial dump (TYPE:NAME)
     #[arg(long = "object")]
     pub objects: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct ArtifactsArgs {
+    /// Final output file path (.cf or .cfe)
+    #[arg(long)]
+    pub output: String,
+
+    /// Optional source set name used to disambiguate repository context
+    #[arg(long)]
+    pub source_set: Option<String>,
+
+    /// Extension name in the infobase for cfe export
+    #[arg(long)]
+    pub extension: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -240,7 +257,9 @@ pub struct DesignerModulesSyntaxArgs {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, ExtensionsArgs, McpCommand, McpServeTransport, SyntaxTarget};
+    use super::{
+        ArtifactsArgs, Cli, Command, ExtensionsArgs, McpCommand, McpServeTransport, SyntaxTarget,
+    };
     use clap::Parser;
 
     #[test]
@@ -353,6 +372,53 @@ mod tests {
                     assert!(matches!(serve.transport, McpServeTransport::Http));
                 }
             },
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parses_artifacts_cf_command() {
+        let cli = Cli::try_parse_from(["v8-test-runner", "artifacts", "--output", "dist/main.cf"])
+            .expect("parse artifacts");
+
+        match cli.command {
+            Command::Artifacts(ArtifactsArgs {
+                output,
+                source_set,
+                extension,
+            }) => {
+                assert_eq!(output, "dist/main.cf");
+                assert!(source_set.is_none());
+                assert!(extension.is_none());
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parses_artifacts_cfe_command_with_extension_and_source_set() {
+        let cli = Cli::try_parse_from([
+            "v8-test-runner",
+            "artifacts",
+            "--output",
+            "dist/ext.cfe",
+            "--source-set",
+            "ext-sales",
+            "--extension",
+            "SalesAddon",
+        ])
+        .expect("parse artifacts");
+
+        match cli.command {
+            Command::Artifacts(ArtifactsArgs {
+                output,
+                source_set,
+                extension,
+            }) => {
+                assert_eq!(output, "dist/ext.cfe");
+                assert_eq!(source_set.as_deref(), Some("ext-sales"));
+                assert_eq!(extension.as_deref(), Some("SalesAddon"));
+            }
             _ => panic!("unexpected command"),
         }
     }

@@ -2,6 +2,7 @@ use crate::domain::execution::ExecutionTimeouts;
 use crate::domain::runner::{
     ExecutionPolicy, RunnerKind, RunnerOutputFormat, RunnerProfile, ScenarioExecutionRequest,
 };
+use crate::domain::artifacts::{CF_RUNNER_ID, CFE_RUNNER_ID};
 use crate::domain::test::TEST_RUNNER_ID;
 
 /// Transport-neutral request for the `build` use case.
@@ -75,6 +76,51 @@ pub struct DumpRequest {
     pub extension: Option<String>,
     /// Requested object filters for `Partial` dump mode.
     pub objects: Vec<String>,
+}
+
+/// Transport-neutral artifact export mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactsModeRequest {
+    ConfigurationCf,
+    ExtensionCfe,
+}
+
+/// Transport-neutral request for the `artifacts` use case.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactsRequest {
+    /// Shared runner execution block for packaging-like scenarios.
+    pub execution: ScenarioExecutionRequest,
+    /// Requested artifact export mode.
+    pub mode: ArtifactsModeRequest,
+    /// Final output file path provided by the caller.
+    pub output_path: String,
+    /// Optional source-set selector used to disambiguate repo context.
+    pub source_set: Option<String>,
+    /// Requested extension name in the infobase for `-Extension`.
+    pub extension: Option<String>,
+}
+
+impl ArtifactsRequest {
+    pub fn default_execution(mode: ArtifactsModeRequest) -> ScenarioExecutionRequest {
+        let (id, kind) = match mode {
+            ArtifactsModeRequest::ConfigurationCf => (CF_RUNNER_ID, RunnerKind::Cf),
+            ArtifactsModeRequest::ExtensionCfe => (CFE_RUNNER_ID, RunnerKind::Cfe),
+        };
+
+        ScenarioExecutionRequest {
+            profile: RunnerProfile {
+                id: id.to_owned(),
+                kind,
+                output_formats: vec![RunnerOutputFormat::Binary, RunnerOutputFormat::PlainTextLog],
+                backend_hint: Some("designer".to_owned()),
+            },
+            timeouts: ExecutionTimeouts::default(),
+            policy: ExecutionPolicy {
+                retain_artifacts_on_failure: true,
+                retain_artifacts_on_success: true,
+            },
+        }
+    }
 }
 
 /// Transport-neutral request for the `syntax` use case.

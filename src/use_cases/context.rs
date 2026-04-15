@@ -8,6 +8,7 @@ pub enum CommandName {
     Build,
     Test,
     Dump,
+    Artifacts,
     Syntax,
     Launch,
 }
@@ -21,6 +22,7 @@ impl CommandName {
             Self::Build => "build",
             Self::Test => "test",
             Self::Dump => "dump",
+            Self::Artifacts => "artifacts",
             Self::Syntax => "syntax",
             Self::Launch => "launch",
         }

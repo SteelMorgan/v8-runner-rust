@@ -1,5 +1,7 @@
 /// Shared artifact models.
 pub mod artifact;
+/// Artifact build/export domain models.
+pub mod artifacts;
 /// Build domain models.
 pub mod build;
 /// Dump domain models.

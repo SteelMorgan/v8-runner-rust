@@ -119,6 +119,22 @@ impl<'a> DesignerDsl<'a> {
         self.run(&args)
     }
 
+    /// `/DumpCfg <file> [-Extension <name>]`
+    pub fn dump_cfg(
+        &self,
+        target_file: &Path,
+        extension: Option<&str>,
+    ) -> Result<PlatformCommandResult, DesignerError> {
+        let mut args = self.base_args();
+        args.push("/DumpCfg".to_owned());
+        args.push(target_file.display().to_string());
+        if let Some(extension) = extension {
+            args.push("-Extension".to_owned());
+            args.push(extension.to_owned());
+        }
+        self.run(&args)
+    }
+
     /// `/DumpConfigToFiles <dir> -partial -listFile <list_file> -updateConfigDumpInfo`
     /// `[-Extension <name>]`
     pub fn dump_config_to_files_partial(
@@ -401,5 +417,38 @@ mod tests {
         let args = fs::read_to_string(args_log).expect("args log");
         assert!(args.contains("CREATEINFOBASE"));
         assert!(args.contains("File='/tmp/my ib'"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dump_cfg_passes_dumpcfg_extension_and_out_arguments() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("1cv8");
+        let args_log = dir.path().join("args.log");
+        let log_path = dir.path().join("designer.log");
+        let target = dir.path().join("release.cfe");
+        write_script(
+            &script,
+            &format!(
+                "printf '%s\\n' \"$*\" > \"{}\"\nprev=''\nfor arg in \"$@\"; do if [ \"$prev\" = '/Out' ]; then printf 'designer log' > \"$arg\"; fi; prev=\"$arg\"; done\nexit 0",
+                args_log.display()
+            ),
+        );
+        let runner = ProcessExecutor;
+        let dsl = DesignerDsl::new(
+            script,
+            V8Connection::from_connection_string("File=/tmp/ib"),
+            &runner as &dyn ProcessRunner,
+            Some(log_path.clone()),
+        );
+
+        let result = dsl.dump_cfg(&target, Some("SalesAddon")).expect("dump cfg");
+
+        let args = fs::read_to_string(args_log).expect("args log");
+        assert!(args.contains("/DumpCfg"));
+        assert!(args.contains(&target.display().to_string()));
+        assert!(args.contains("-Extension SalesAddon"));
+        assert!(args.contains(&format!("/Out {}", log_path.display())));
+        assert_eq!(result.platform_log_path, Some(log_path));
     }
 }
