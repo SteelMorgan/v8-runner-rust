@@ -204,6 +204,75 @@ Skip policy:
 - `workPath/temp/**`
 - stdout/stderr конкретной команды
 
+### 5. Live CLI Designer smoke
+
+Назначение: fixture-based smoke для всех поддержанных CLI-команд конфигуратора при `format=DESIGNER + builder=DESIGNER` с реальным `1cv8` и файловой ИБ.
+
+Команда:
+
+```bash
+bash scripts/test/live-cli-designer.sh
+```
+
+Что выполняется:
+
+1. `init`
+2. `build --full-rebuild`
+3. `dump --mode full --source-set configuration`
+4. `dump --mode incremental --source-set configuration`
+5. `dump --mode partial --source-set configuration --object Catalog.Справочник1`
+6. `syntax designer-config --all-extensions`
+7. `syntax designer-modules --server --all-extensions`
+8. `artifacts --output <.../configuration.cf>`
+9. `artifacts --output <.../extension.cfe> --source-set Расширение1 --extension Расширение1`
+10. `artifacts --output <.../external-processor> --source-set external-processor`
+11. `artifacts --output <.../external-report> --source-set external-report`
+12. `launch --mode designer`
+
+Контракт live-конфига:
+
+- `V8TR_DESIGNER_REAL_CONFIG` должен указывать на отдельный YAML-конфиг для fixture-набора из `tests/fixtures/designer`;
+- `basePath` должен резолвиться в `<repo>/tests/fixtures/designer`;
+- `workPath` рекомендуется держать внутри `target/manual-tests/live-cli-designer/work`;
+- `format: DESIGNER`;
+- `builder: DESIGNER`;
+- файловое подключение `connection: File=...` или raw `/F ...`;
+- source-set'ы: `configuration`, `Расширение1`, `external-processor`, `external-report`;
+- `tools.platform.path` должен быть задан и указывать на валидный platform hint;
+- шаблон: `examples/live-cli-designer.fixture.yaml`.
+
+Что дополнительно проверяет smoke:
+
+- после `init` существует `1Cv8.1CD`;
+- `build --full-rebuild` в JSON-результате содержит успешные steps для `configuration` и `Расширение1`;
+- после `dump` реально существуют `Configuration.xml`, `ConfigDumpInfo.xml` и `Catalogs/Справочник1.xml`;
+- после `artifacts` реально существуют и не пусты `configuration.cf`, `extension.cfe`, `ВнешняяОбработка1.epf`, `ВнешнийОтчет1.erf`;
+- `launch --mode designer` возвращает JSON с `pid`, процесс поднимается и завершается cleanup'ом скрипта.
+
+Skip policy:
+
+- если `V8TR_DESIGNER_REAL_CONFIG` не задан, скрипт завершает прогон со статусом `SKIPPED` и `exit code 0`;
+- если `V8TR_DESIGNER_REAL_CONFIG` задан, но файл отсутствует, не соответствует `format: DESIGNER` + `builder: DESIGNER`, не использует файловую строку подключения, не ссылается на fixture-basePath или не содержит обязательные source-set'ы, скрипт падает ранней понятной ошибкой.
+
+Переменные окружения:
+
+- `V8TR_DESIGNER_REAL_CONFIG` - путь к отдельному live YAML-конфигу для Designer fixture smoke
+- `V8TR_BIN` - путь к бинарю `v8-test-runner`
+
+Критерий успеха:
+
+- при заданном валидном `V8TR_DESIGNER_REAL_CONFIG` все команды smoke завершаются с `exit code 0`;
+- обязательные dump/artifacts outputs реально опубликованы;
+- `launch --mode designer` возвращает рабочий `pid`;
+- при незаданном `V8TR_DESIGNER_REAL_CONFIG` сценарий завершается как `SKIPPED` (`exit code 0`).
+
+Артефакты для анализа при падении:
+
+- `target/manual-tests/live-cli-designer/**`
+- `workPath/logs/**`
+- `workPath/temp/**`
+- stdout/stderr конкретной команды
+
 ## Рекомендуемый порядок запуска
 
 ### Локально
@@ -212,6 +281,7 @@ Skip policy:
 2. `bash scripts/test/live-cli.sh`
 3. `python3 scripts/test/live-mcp-http.py`
 4. `bash scripts/test/live-cli-ibcmd.sh`
+5. `bash scripts/test/live-cli-designer.sh`
 
 ### CI
 
@@ -231,6 +301,7 @@ bash scripts/test/ci-rust.sh
 bash scripts/test/live-cli.sh
 python3 scripts/test/live-mcp-http.py
 bash scripts/test/live-cli-ibcmd.sh
+bash scripts/test/live-cli-designer.sh
 ```
 
 Рекомендация:
@@ -246,6 +317,7 @@ bash scripts/test/live-cli-ibcmd.sh
 | `live-cli` | real | real | requires separate DESIGNER config | real | optional real | n/a |
 | `live-mcp-http` | real via MCP | real via MCP | n/a | real via MCP | n/a | real |
 | `live-cli-ibcmd` | real (`IBCMD`) | n/a | n/a | n/a | n/a | n/a |
+| `live-cli-designer` | real (`DESIGNER`) | n/a | real | n/a | real (`designer`) | n/a |
 
 ## Ограничения и риски
 
@@ -254,3 +326,4 @@ bash scripts/test/live-cli-ibcmd.sh
 - Smoke-модуль привязан к devkit-проекту; при переименовании нужно обновить `V8TR_SMOKE_MODULE`.
 - В обычный CI нельзя переносить live smoke без self-hosted runner и установленной 1С-инфраструктуры.
 - Для `live-cli-ibcmd` обязательный реальный стенд может отсутствовать; в этом случае сценарий штатно завершает прогон как `SKIPPED`.
+- Для `live-cli-designer` нужен отдельный fixture-based стенд с GUI-доступом для `launch --mode designer`; в generic CI этот контур запускать нельзя.

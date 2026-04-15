@@ -1,0 +1,27 @@
+# Fixture-based live smoke config for scripts/test/live-cli-designer.sh
+# Copy this file, adjust the absolute paths, and export it as V8TR_DESIGNER_REAL_CONFIG.
+
+basePath: /abs/path/to/repo/tests/fixtures/designer
+workPath: /abs/path/to/repo/target/manual-tests/live-cli-designer/work
+format: DESIGNER
+builder: DESIGNER
+connection: "File=/abs/path/to/dedicated/file-infobase"
+
+source-set:
+  - name: configuration
+    purpose: CONFIGURATION
+    path: configuration
+  - name: Расширение1
+    purpose: EXTENSION
+    path: extension
+  - name: external-processor
+    purpose: EXTERNAL_DATA_PROCESSORS
+    path: external/processor
+  - name: external-report
+    purpose: EXTERNAL_REPORTS
+    path: external/report
+
+tools:
+  platform:
+    # May point to 1cv8 directly, to a bin dir, or to an installation root.
+    path: /opt/1cv8/x86_64/8.3.27.1859/1cv8
