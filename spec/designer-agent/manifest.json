@@ -1,0 +1,206 @@
+[
+  {
+    "title": "Работа конфигуратора в режиме агента",
+    "kind": "overview",
+    "pagePath": "AgentMode",
+    "relativePath": "README.md",
+    "sourceUrl": "http://localhost:8080/ru/1%D0%A1%3A%D0%9F%D1%80%D0%B5%D0%B4%D0%BF%D1%80%D0%B8%D1%8F%D1%82%D0%B8%D0%B5?page=AgentMode",
+    "confirmationStatus": "confirmed-runtime",
+    "confirmationMethod": [
+      "runtime",
+      "local-help"
+    ],
+    "platformVersion": "8.3.27.1859",
+    "evidenceRef": [
+      "help:AgentMode",
+      "runtime:ssh-port-open"
+    ]
+  },
+  {
+    "title": "Request Surface",
+    "kind": "overview",
+    "pagePath": "runtime-request-surface",
+    "relativePath": "request-surface.md",
+    "sourceUrl": "runtime-observation://1cv8/8.3.27.1859/designer-agent/request-surface",
+    "confirmationStatus": "confirmed-runtime",
+    "confirmationMethod": [
+      "runtime"
+    ],
+    "platformVersion": "8.3.27.1859",
+    "evidenceRef": [
+      "runtime:ssh-banner",
+      "runtime:ssh-userauth-password-only"
+    ]
+  },
+  {
+    "title": "AgentMode",
+    "kind": "parameter",
+    "topGroup": "Команды работы в режиме агента",
+    "subgroup": "agent-mode",
+    "pagePath": "zif3_AgentMode",
+    "tocPath": [
+      "Команды пакетного режима запуска конфигуратора",
+      "Команды работы в режиме агента",
+      "AgentMode"
+    ],
+    "sourceUrl": "http://localhost:8080/ru/1%D0%A1%3A%D0%9F%D1%80%D0%B5%D0%B4%D0%BF%D1%80%D0%B8%D1%8F%D1%82%D0%B8%D0%B5?page=zif3_AgentMode",
+    "relativePath": "parameters/agent-mode/AgentMode.md",
+    "syntax": [
+      "/AgentMode"
+    ],
+    "aliases": [],
+    "confirmationStatus": "confirmed-runtime",
+    "confirmationMethod": [
+      "runtime",
+      "local-help"
+    ],
+    "platformVersion": "8.3.27.1859",
+    "evidenceRef": [
+      "help:zif3_AgentMode",
+      "runtime:startup-explicit",
+      "runtime:startup-auto"
+    ]
+  },
+  {
+    "title": "AgentPort",
+    "kind": "parameter",
+    "topGroup": "Команды работы в режиме агента",
+    "subgroup": "agent-mode",
+    "pagePath": "zif3_AgentPort",
+    "tocPath": [
+      "Команды пакетного режима запуска конфигуратора",
+      "Команды работы в режиме агента",
+      "AgentPort"
+    ],
+    "sourceUrl": "http://localhost:8080/ru/1%D0%A1%3A%D0%9F%D1%80%D0%B5%D0%B4%D0%BF%D1%80%D0%B8%D1%8F%D1%82%D0%B8%D0%B5?page=zif3_AgentPort",
+    "relativePath": "parameters/agent-mode/AgentPort.md",
+    "syntax": [
+      "/AgentPort <Порт>"
+    ],
+    "aliases": [],
+    "confirmationStatus": "confirmed-runtime",
+    "confirmationMethod": [
+      "runtime",
+      "local-help"
+    ],
+    "platformVersion": "8.3.27.1859",
+    "evidenceRef": [
+      "help:zif3_AgentPort",
+      "runtime:default-port-1543",
+      "runtime:custom-port-1544"
+    ]
+  },
+  {
+    "title": "AgentListenAddress",
+    "kind": "parameter",
+    "topGroup": "Команды работы в режиме агента",
+    "subgroup": "agent-mode",
+    "pagePath": "zif3_AgentListenAddress",
+    "tocPath": [
+      "Команды пакетного режима запуска конфигуратора",
+      "Команды работы в режиме агента",
+      "AgentListenAddress"
+    ],
+    "sourceUrl": "http://localhost:8080/ru/1%D0%A1%3A%D0%9F%D1%80%D0%B5%D0%B4%D0%BF%D1%80%D0%B8%D1%8F%D1%82%D0%B8%D0%B5?page=zif3_AgentListenAddress",
+    "relativePath": "parameters/agent-mode/AgentListenAddress.md",
+    "syntax": [
+      "/AgentListenAddress <Адрес>"
+    ],
+    "aliases": [],
+    "confirmationStatus": "confirmed-runtime",
+    "confirmationMethod": [
+      "runtime",
+      "local-help"
+    ],
+    "platformVersion": "8.3.27.1859",
+    "evidenceRef": [
+      "help:zif3_AgentListenAddress",
+      "runtime:default-listen-127.0.0.1",
+      "runtime:explicit-listen-127.0.0.1"
+    ]
+  },
+  {
+    "title": "AgentSSHHostKey",
+    "kind": "parameter",
+    "topGroup": "Команды работы в режиме агента",
+    "subgroup": "agent-mode",
+    "pagePath": "zif3_AgentSSHHostKey",
+    "tocPath": [
+      "Команды пакетного режима запуска конфигуратора",
+      "Команды работы в режиме агента",
+      "AgentSSHHostKey"
+    ],
+    "sourceUrl": "http://localhost:8080/ru/1%D0%A1%3A%D0%9F%D1%80%D0%B5%D0%B4%D0%BF%D1%80%D0%B8%D1%8F%D1%82%D0%B8%D0%B5?page=zif3_AgentSSHHostKey",
+    "relativePath": "parameters/agent-mode/AgentSSHHostKey.md",
+    "syntax": [
+      "/AgentSSHHostKey <приватный ключ>"
+    ],
+    "aliases": [],
+    "confirmationStatus": "confirmed-runtime",
+    "confirmationMethod": [
+      "runtime",
+      "local-help"
+    ],
+    "platformVersion": "8.3.27.1859",
+    "evidenceRef": [
+      "help:zif3_AgentSSHHostKey",
+      "runtime:explicit-host-key-ed25519"
+    ]
+  },
+  {
+    "title": "AgentSSHHostKeyAuto",
+    "kind": "parameter",
+    "topGroup": "Команды работы в режиме агента",
+    "subgroup": "agent-mode",
+    "pagePath": "zif3_AgentSSHHostKeyAuto",
+    "tocPath": [
+      "Команды пакетного режима запуска конфигуратора",
+      "Команды работы в режиме агента",
+      "AgentSSHHostKeyAuto"
+    ],
+    "sourceUrl": "http://localhost:8080/ru/1%D0%A1%3A%D0%9F%D1%80%D0%B5%D0%B4%D0%BF%D1%80%D0%B8%D1%8F%D1%82%D0%B8%D0%B5?page=zif3_AgentSSHHostKeyAuto",
+    "relativePath": "parameters/agent-mode/AgentSSHHostKeyAuto.md",
+    "syntax": [
+      "/AgentSSHHostKeyAuto"
+    ],
+    "aliases": [],
+    "confirmationStatus": "confirmed-runtime",
+    "confirmationMethod": [
+      "runtime",
+      "local-help"
+    ],
+    "platformVersion": "8.3.27.1859",
+    "evidenceRef": [
+      "help:zif3_AgentSSHHostKeyAuto",
+      "runtime:auto-host-key-host_id"
+    ]
+  },
+  {
+    "title": "AgentBaseDir",
+    "kind": "parameter",
+    "topGroup": "Команды работы в режиме агента",
+    "subgroup": "agent-mode",
+    "pagePath": "zif3_AgentBaseDir",
+    "tocPath": [
+      "Команды пакетного режима запуска конфигуратора",
+      "Команды работы в режиме агента",
+      "AgentBaseDir"
+    ],
+    "sourceUrl": "http://localhost:8080/ru/1%D0%A1%3A%D0%9F%D1%80%D0%B5%D0%B4%D0%BF%D1%80%D0%B8%D1%8F%D1%82%D0%B8%D0%B5?page=zif3_AgentBaseDir",
+    "relativePath": "parameters/agent-mode/AgentBaseDir.md",
+    "syntax": [
+      "/AgentBaseDir <рабочий каталог>"
+    ],
+    "aliases": [],
+    "confirmationStatus": "confirmed-help",
+    "confirmationMethod": [
+      "runtime",
+      "local-help"
+    ],
+    "platformVersion": "8.3.27.1859",
+    "evidenceRef": [
+      "help:zif3_AgentBaseDir",
+      "runtime:custom-agent-basedir-accepted"
+    ]
+  }
+]
