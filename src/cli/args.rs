@@ -47,6 +47,7 @@ pub enum Command {
     /// Dump configuration from infobase to files
     Dump(DumpArgs),
     /// Export configuration artifacts via Designer batch commands
+    #[command(name = "make", visible_alias = "artifacts")]
     Artifacts(ArtifactsArgs),
     /// Run syntax checks
     Syntax(SyntaxArgs),
@@ -452,9 +453,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_artifacts_cf_command() {
-        let cli = Cli::try_parse_from(["v8-test-runner", "artifacts", "--output", "dist/main.cf"])
-            .expect("parse artifacts");
+    fn parses_make_cf_command() {
+        let cli = Cli::try_parse_from(["v8-test-runner", "make", "--output", "dist/main.cf"])
+            .expect("parse make");
 
         match cli.command {
             Command::Artifacts(ArtifactsArgs {
@@ -471,10 +472,10 @@ mod tests {
     }
 
     #[test]
-    fn parses_artifacts_cfe_command_with_extension_and_source_set() {
+    fn parses_make_cfe_command_with_extension_and_source_set() {
         let cli = Cli::try_parse_from([
             "v8-test-runner",
-            "artifacts",
+            "make",
             "--output",
             "dist/ext.cfe",
             "--source-set",
@@ -482,7 +483,7 @@ mod tests {
             "--extension",
             "SalesAddon",
         ])
-        .expect("parse artifacts");
+        .expect("parse make");
 
         match cli.command {
             Command::Artifacts(ArtifactsArgs {
@@ -496,5 +497,13 @@ mod tests {
             }
             _ => panic!("unexpected command"),
         }
+    }
+
+    #[test]
+    fn parses_artifacts_alias_command() {
+        let cli = Cli::try_parse_from(["v8-test-runner", "artifacts", "--output", "dist/main.cf"])
+            .expect("parse artifacts alias");
+
+        assert!(matches!(cli.command, Command::Artifacts(_)));
     }
 }

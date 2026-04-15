@@ -24,7 +24,7 @@ impl CommandName {
             Self::Load => "load",
             Self::Test => "test",
             Self::Dump => "dump",
-            Self::Artifacts => "artifacts",
+            Self::Artifacts => "make",
             Self::Syntax => "syntax",
             Self::Launch => "launch",
         }

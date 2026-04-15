@@ -296,6 +296,41 @@ print_test_step() {
     echo "============================================================"
 }
 
+assert_load_json_ok() {
+    local json_path="$1"
+    local target_kind="$2"
+
+    python3 - "$json_path" "$target_kind" <<'PY'
+import json
+import sys
+
+json_path, target_kind = sys.argv[1], sys.argv[2]
+with open(json_path, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+
+if payload.get("ok") is not True:
+    raise SystemExit(f"load command failed: {payload}")
+
+if payload.get("command") != "load":
+    raise SystemExit(f"unexpected command in load output: {payload.get('command')}")
+
+data = payload.get("data", {})
+execution = data.get("execution", {})
+metadata = execution.get("payload", {})
+
+if data.get("target_kind") != target_kind:
+    raise SystemExit(
+        f"unexpected load target_kind '{data.get('target_kind')}', expected '{target_kind}'"
+    )
+
+if metadata.get("applied") is not True:
+    raise SystemExit(f"load output does not confirm applied=true: {payload}")
+
+if metadata.get("update_db_cfg_ran") is not True:
+    raise SystemExit(f"load output does not confirm UpdateDBCfg ran: {payload}")
+PY
+}
+
 materialize_live_config() {
     local source_config="$1"
     local target_config="$2"
@@ -496,28 +531,33 @@ run_cli syntax designer-config --all-extensions
 print_test_step "syntax designer modules"
 run_cli syntax designer-modules --server --all-extensions
 
-print_test_step "artifacts configuration cf"
-run_cli artifacts --output "$OUTPUT_ROOT/artifacts/configuration.cf"
+print_test_step "make configuration cf"
+run_cli make --output "$OUTPUT_ROOT/artifacts/configuration.cf"
 assert_file_nonempty "$OUTPUT_ROOT/artifacts/configuration.cf"
 
-print_test_step "artifacts extension cfe"
-run_cli artifacts \
+print_test_step "make extension cfe"
+run_cli make \
     --output "$OUTPUT_ROOT/artifacts/extension.cfe" \
     --source-set "$EXTENSION_SOURCE_SET_NAME" \
     --extension "$EXTENSION_SOURCE_SET_NAME"
 assert_file_nonempty "$OUTPUT_ROOT/artifacts/extension.cfe"
 
-print_test_step "artifacts external processor epf"
-run_cli artifacts \
+print_test_step "make external processor epf"
+run_cli make \
     --output "$OUTPUT_ROOT/artifacts/external-processor" \
     --source-set "$EXTERNAL_PROCESSOR_SOURCE_SET_NAME"
 assert_file_nonempty "$OUTPUT_ROOT/artifacts/external-processor/${EXTERNAL_PROCESSOR_ARTIFACT_NAME}.epf"
 
-print_test_step "artifacts external report erf"
-run_cli artifacts \
+print_test_step "make external report erf"
+run_cli make \
     --output "$OUTPUT_ROOT/artifacts/external-report" \
     --source-set "$EXTERNAL_REPORT_SOURCE_SET_NAME"
 assert_file_nonempty "$OUTPUT_ROOT/artifacts/external-report/${EXTERNAL_REPORT_ARTIFACT_NAME}.erf"
+
+load_cf_json="$OUTPUT_ROOT/json/load-configuration.json"
+print_test_step "load configuration cf"
+run_cli_json_to_file "$load_cf_json" load --path "$OUTPUT_ROOT/artifacts/configuration.cf"
+assert_load_json_ok "$load_cf_json" "configuration"
 
 launch_json="$OUTPUT_ROOT/json/launch-designer.json"
 print_test_step "launch designer"
