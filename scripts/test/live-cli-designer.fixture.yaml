@@ -1,0 +1,26 @@
+# Default live smoke config for scripts/test/live-cli-designer.sh.
+# The script resolves __ROOT_DIR__, __OUTPUT_ROOT__, and AUTO_PLATFORM automatically.
+
+basePath: __ROOT_DIR__/tests/fixtures/designer
+workPath: __OUTPUT_ROOT__/work
+format: DESIGNER
+builder: DESIGNER
+connection: "File=__OUTPUT_ROOT__/infobase"
+
+source-set:
+  - name: configuration
+    purpose: CONFIGURATION
+    path: configuration
+  - name: Расширение1
+    purpose: EXTENSION
+    path: extension
+  - name: external-processor
+    purpose: EXTERNAL_DATA_PROCESSORS
+    path: external/processor
+  - name: external-report
+    purpose: EXTERNAL_REPORTS
+    path: external/report
+
+tools:
+  platform:
+    path: AUTO_PLATFORM
