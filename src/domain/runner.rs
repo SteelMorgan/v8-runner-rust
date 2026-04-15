@@ -11,7 +11,8 @@ pub enum RunnerKind {
     Cf,
     Cfe,
     Epf,
-    Epr,
+    #[serde(alias = "epr")]
+    Erf,
     Custom(String),
 }
 

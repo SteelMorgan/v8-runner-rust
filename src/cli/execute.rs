@@ -6,7 +6,7 @@ use crate::cli::args::{
     ArtifactsArgs, BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs,
     DumpArgs, ExtensionsArgs, LaunchArgs, SyntaxArgs, SyntaxTarget, TestArgs, TestScope,
 };
-use crate::config::model::AppConfig;
+use crate::config::model::{AppConfig, SourceSetPurpose};
 use crate::domain::artifacts::{ArtifactBuildMode, ArtifactsResult};
 use crate::domain::build::{BuildMode, BuildResult};
 use crate::domain::dump::{DumpMode, DumpResult};
@@ -20,19 +20,19 @@ use crate::output::presenter::Presenter;
 use crate::support::error::AppError;
 use crate::support::fs::clean_dir;
 use crate::support::temp::platform_logs_dir;
+use crate::use_cases::artifacts;
 use crate::use_cases::build_project;
 use crate::use_cases::check_syntax;
 use crate::use_cases::configure_extensions;
 use crate::use_cases::context::{CommandName, ExecutionContext};
 use crate::use_cases::dump_config;
-use crate::use_cases::artifacts;
 use crate::use_cases::init_project;
 use crate::use_cases::launch_app;
 use crate::use_cases::request::{
     ArtifactsModeRequest, ArtifactsRequest, BuildRequest, ConfigureExtensionsRequest,
     DesignerConfigSyntaxRequest, DesignerModulesSyntaxRequest, DumpModeRequest, DumpRequest,
-    InitRequest, LaunchModeRequest, LaunchRequest, SyntaxRequest, SyntaxTargetRequest,
-    TestRequest, TestScopeRequest,
+    InitRequest, LaunchModeRequest, LaunchRequest, SyntaxRequest, SyntaxTargetRequest, TestRequest,
+    TestScopeRequest,
 };
 use crate::use_cases::result::{UseCaseError, UseCaseErrorKind};
 use crate::use_cases::run_tests;
@@ -315,7 +315,7 @@ fn execute_artifacts(
     presenter: &Presenter,
     clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
-    let request = map_artifacts_request(args);
+    let request = map_artifacts_request_with_config(config, args)?;
     let context = ExecutionContext::cli(CommandName::Artifacts);
     with_cli_workspace_lock(
         config,
@@ -551,20 +551,42 @@ fn map_dump_request(args: &DumpArgs) -> Result<DumpRequest, UseCaseError> {
     })
 }
 
-fn map_artifacts_request(args: &ArtifactsArgs) -> ArtifactsRequest {
-    let mode = if args.extension.is_some() {
-        ArtifactsModeRequest::ExtensionCfe
-    } else {
-        ArtifactsModeRequest::ConfigurationCf
+fn map_artifacts_request_with_config(
+    config: &AppConfig,
+    args: &ArtifactsArgs,
+) -> Result<ArtifactsRequest, UseCaseError> {
+    let mode = match (args.source_set.as_deref(), args.extension.is_some()) {
+        (_, true) => ArtifactsModeRequest::ExtensionCfe,
+        (Some(source_set_name), false) => {
+            let source_set = config
+                .source_sets
+                .iter()
+                .find(|source_set| source_set.name == source_set_name)
+                .ok_or_else(|| {
+                    UseCaseError::new(
+                        UseCaseErrorKind::Validation,
+                        format!("unknown source-set '{source_set_name}'"),
+                    )
+                })?;
+            match source_set.purpose {
+                SourceSetPurpose::Configuration => ArtifactsModeRequest::ConfigurationCf,
+                SourceSetPurpose::Extension => ArtifactsModeRequest::ExtensionCfe,
+                SourceSetPurpose::ExternalDataProcessors => {
+                    ArtifactsModeRequest::ExternalDataProcessorEpf
+                }
+                SourceSetPurpose::ExternalReports => ArtifactsModeRequest::ExternalReportErf,
+            }
+        }
+        (None, false) => ArtifactsModeRequest::ConfigurationCf,
     };
 
-    ArtifactsRequest {
+    Ok(ArtifactsRequest {
         execution: ArtifactsRequest::default_execution(mode),
         mode,
         output_path: args.output.clone(),
         source_set: args.source_set.clone(),
         extension: args.extension.clone(),
-    }
+    })
 }
 
 fn map_syntax_request(args: &SyntaxArgs) -> SyntaxRequest {
@@ -776,11 +798,22 @@ fn render_artifacts_text(result: &ArtifactsResult, presenter: &Presenter, succee
     let mode = match result.mode {
         ArtifactBuildMode::ConfigurationCf => "cf",
         ArtifactBuildMode::ExtensionCfe => "cfe",
+        ArtifactBuildMode::ExternalDataProcessorEpf => "epf",
+        ArtifactBuildMode::ExternalReportErf => "erf",
     };
     let source_set = result.source_set.as_deref().unwrap_or("<unresolved>");
     let mut summary = format!("{source_set}: {mode} -> {}", result.output_path.display());
     if let Some(extension) = result.extension.as_deref() {
         summary.push_str(&format!(" (extension: {extension})"));
+    }
+    let published_count = result
+        .artifacts
+        .items
+        .iter()
+        .filter(|artifact| artifact.role.as_deref() == Some("package_file"))
+        .count();
+    if published_count > 1 {
+        summary.push_str(&format!(" ({published_count} files)"));
     }
     if succeeded {
         presenter.print_success_item(&summary);
@@ -933,9 +966,9 @@ fn status_label(status: &TestStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_name, execute_command, map_artifacts_request, map_build_request,
-        map_designer_config_request, map_dump_request, map_extensions_request,
-        map_launch_request, map_syntax_request, map_test_request, pre_dispatch_error_envelope,
+        command_name, execute_command, map_artifacts_request_with_config, map_build_request,
+        map_designer_config_request, map_dump_request, map_extensions_request, map_launch_request,
+        map_syntax_request, map_test_request, pre_dispatch_error_envelope,
     };
     use crate::cli::args::{
         ArtifactsArgs, BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs,
@@ -1061,11 +1094,15 @@ mod tests {
             .mode,
             LaunchModeRequest::Thin
         );
-        let artifacts = map_artifacts_request(&ArtifactsArgs {
-            output: "dist/ext.cfe".to_owned(),
-            source_set: Some("ext-sales".to_owned()),
-            extension: Some("SalesAddon".to_owned()),
-        });
+        let artifacts = map_artifacts_request_with_config(
+            &sample_config(Path::new("/tmp/work")),
+            &ArtifactsArgs {
+                output: "dist/ext.cfe".to_owned(),
+                source_set: Some("ext-sales".to_owned()),
+                extension: Some("SalesAddon".to_owned()),
+            },
+        )
+        .expect("request");
         assert_eq!(artifacts.mode, ArtifactsModeRequest::ExtensionCfe);
         assert_eq!(artifacts.source_set.as_deref(), Some("ext-sales"));
         assert_eq!(artifacts.extension.as_deref(), Some("SalesAddon"));
@@ -1073,11 +1110,15 @@ mod tests {
 
     #[test]
     fn maps_artifacts_request_keeps_blank_extension_in_cfe_mode() {
-        let artifacts = map_artifacts_request(&ArtifactsArgs {
-            output: "dist/main.cf".to_owned(),
-            source_set: Some("main".to_owned()),
-            extension: Some("   ".to_owned()),
-        });
+        let artifacts = map_artifacts_request_with_config(
+            &sample_config(Path::new("/tmp/work")),
+            &ArtifactsArgs {
+                output: "dist/main.cf".to_owned(),
+                source_set: Some("main".to_owned()),
+                extension: Some("   ".to_owned()),
+            },
+        )
+        .expect("request");
 
         assert_eq!(artifacts.mode, ArtifactsModeRequest::ExtensionCfe);
         assert_eq!(artifacts.extension.as_deref(), Some("   "));
@@ -1170,11 +1211,23 @@ mod tests {
             builder: BuilderBackend::Designer,
             connection: "File=/tmp/ib".to_owned(),
             credentials: Default::default(),
-            source_sets: vec![SourceSetConfig {
-                name: "main".to_owned(),
-                purpose: SourceSetPurpose::Configuration,
-                path: PathBuf::from("main"),
-            }],
+            source_sets: vec![
+                SourceSetConfig {
+                    name: "main".to_owned(),
+                    purpose: SourceSetPurpose::Configuration,
+                    path: PathBuf::from("main"),
+                },
+                SourceSetConfig {
+                    name: "ext-sales".to_owned(),
+                    purpose: SourceSetPurpose::Extension,
+                    path: PathBuf::from("ext-sales"),
+                },
+                SourceSetConfig {
+                    name: "external-processors".to_owned(),
+                    purpose: SourceSetPurpose::ExternalDataProcessors,
+                    path: PathBuf::from("external-processors"),
+                },
+            ],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
             mcp: Default::default(),

@@ -135,6 +135,32 @@ impl<'a> DesignerDsl<'a> {
         self.run(&args)
     }
 
+    /// `/DumpExternalDataProcessorOrReportToFiles <binary> <root-xml>`
+    pub fn dump_external_data_processor_or_report_to_files(
+        &self,
+        binary_file: &Path,
+        root_xml_path: &Path,
+    ) -> Result<PlatformCommandResult, DesignerError> {
+        let mut args = self.base_args();
+        args.push("/DumpExternalDataProcessorOrReportToFiles".to_owned());
+        args.push(binary_file.display().to_string());
+        args.push(root_xml_path.display().to_string());
+        self.run(&args)
+    }
+
+    /// `/LoadExternalDataProcessorOrReportFromFiles <root-xml> <binary>`
+    pub fn load_external_data_processor_or_report_from_files(
+        &self,
+        root_xml_path: &Path,
+        binary_file: &Path,
+    ) -> Result<PlatformCommandResult, DesignerError> {
+        let mut args = self.base_args();
+        args.push("/LoadExternalDataProcessorOrReportFromFiles".to_owned());
+        args.push(root_xml_path.display().to_string());
+        args.push(binary_file.display().to_string());
+        self.run(&args)
+    }
+
     /// `/DumpConfigToFiles <dir> -partial -listFile <list_file> -updateConfigDumpInfo`
     /// `[-Extension <name>]`
     pub fn dump_config_to_files_partial(
@@ -450,5 +476,44 @@ mod tests {
         assert!(args.contains("-Extension SalesAddon"));
         assert!(args.contains(&format!("/Out {}", log_path.display())));
         assert_eq!(result.platform_log_path, Some(log_path));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_dump_and_load_commands_shape_arguments() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("1cv8");
+        let args_log = dir.path().join("args.log");
+        write_script(
+            &script,
+            &format!("printf '%s\\n' \"$@\" > \"{}\"\nexit 0", args_log.display()),
+        );
+        let runner = ProcessExecutor;
+        let dsl = DesignerDsl::new(
+            script,
+            V8Connection::from_connection_string("File=/tmp/ib"),
+            &runner as &dyn ProcessRunner,
+            None,
+        );
+
+        dsl.dump_external_data_processor_or_report_to_files(
+            &dir.path().join("artifact.epf"),
+            &dir.path().join("dump/Artifact.xml"),
+        )
+        .expect("external dump");
+        let args = fs::read_to_string(&args_log).expect("args log");
+        assert!(args.contains("/DumpExternalDataProcessorOrReportToFiles"));
+        assert!(args.contains("artifact.epf"));
+        assert!(args.contains("Artifact.xml"));
+
+        dsl.load_external_data_processor_or_report_from_files(
+            &dir.path().join("dump/Artifact.xml"),
+            &dir.path().join("artifact.epf"),
+        )
+        .expect("external load");
+        let args = fs::read_to_string(&args_log).expect("args log");
+        assert!(args.contains("/LoadExternalDataProcessorOrReportFromFiles"));
+        assert!(args.contains("artifact.epf"));
+        assert!(args.contains("Artifact.xml"));
     }
 }

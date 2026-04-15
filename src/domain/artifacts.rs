@@ -7,12 +7,16 @@ use crate::domain::execution::ExecutionOutcome;
 
 pub const CF_RUNNER_ID: &str = "designer-cf";
 pub const CFE_RUNNER_ID: &str = "designer-cfe";
+pub const EPF_RUNNER_ID: &str = "designer-epf";
+pub const ERF_RUNNER_ID: &str = "designer-erf";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactBuildMode {
     ConfigurationCf,
     ExtensionCfe,
+    ExternalDataProcessorEpf,
+    ExternalReportErf,
 }
 
 impl ArtifactBuildMode {
@@ -20,6 +24,8 @@ impl ArtifactBuildMode {
         match self {
             Self::ConfigurationCf => "cf",
             Self::ExtensionCfe => "cfe",
+            Self::ExternalDataProcessorEpf => "epf",
+            Self::ExternalReportErf => "erf",
         }
     }
 }
@@ -28,7 +34,8 @@ impl ArtifactBuildMode {
 pub struct ArtifactBuildMetadata {
     pub artifact_type: ArtifactBuildMode,
     pub output_path: PathBuf,
-    pub file_name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_names: Vec<String>,
     pub published: bool,
 }
 

@@ -109,7 +109,7 @@ pub struct DumpArgs {
 
 #[derive(Args, Debug)]
 pub struct ArtifactsArgs {
-    /// Final output file path (.cf or .cfe)
+    /// Final output path (.cf/.cfe file or publish directory for external artifacts)
     #[arg(long)]
     pub output: String,
 

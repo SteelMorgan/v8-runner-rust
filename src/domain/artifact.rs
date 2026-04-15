@@ -17,6 +17,7 @@ pub const ARTIFACT_ROLE_STAGE_FILE: &str = "stage_file";
 pub enum ArtifactKind {
     RunDirectory,
     Config,
+    Package,
     Report,
     RunnerLog,
     PlatformLog,

@@ -3,8 +3,7 @@ use std::path::PathBuf;
 
 use crate::domain::artifact::{
     ArtifactKind, ArtifactRef, ArtifactSet, ARTIFACT_ROLE_CONFIG, ARTIFACT_ROLE_PLATFORM_LOG,
-    ARTIFACT_ROLE_REPORT, ARTIFACT_ROLE_RUN_DIR, ARTIFACT_ROLE_RUNNER_LOG,
-    ARTIFACT_ROLE_SENTINEL,
+    ARTIFACT_ROLE_REPORT, ARTIFACT_ROLE_RUNNER_LOG, ARTIFACT_ROLE_RUN_DIR, ARTIFACT_ROLE_SENTINEL,
 };
 use crate::domain::execution::{
     ExecutionError, ExecutionMetrics, ExecutionOutcome, ExecutionStatus, StepResult,
@@ -93,8 +92,13 @@ impl RetainedPaths {
             ArtifactRef::new(ArtifactKind::RunDirectory, self.run_dir)
                 .with_role(ARTIFACT_ROLE_RUN_DIR),
         );
-        set.push(ArtifactRef::new(ArtifactKind::Config, self.config_json).with_role(ARTIFACT_ROLE_CONFIG));
-        set.push(ArtifactRef::new(ArtifactKind::Report, self.junit_xml).with_role(ARTIFACT_ROLE_REPORT));
+        set.push(
+            ArtifactRef::new(ArtifactKind::Config, self.config_json)
+                .with_role(ARTIFACT_ROLE_CONFIG),
+        );
+        set.push(
+            ArtifactRef::new(ArtifactKind::Report, self.junit_xml).with_role(ARTIFACT_ROLE_REPORT),
+        );
         set.push(
             ArtifactRef::new(ArtifactKind::RunnerLog, self.yaxunit_log)
                 .with_role(ARTIFACT_ROLE_RUNNER_LOG),
@@ -104,7 +108,8 @@ impl RetainedPaths {
                 .with_role(ARTIFACT_ROLE_PLATFORM_LOG),
         );
         set.push(
-            ArtifactRef::new(ArtifactKind::Sentinel, self.sentinel).with_role(ARTIFACT_ROLE_SENTINEL),
+            ArtifactRef::new(ArtifactKind::Sentinel, self.sentinel)
+                .with_role(ARTIFACT_ROLE_SENTINEL),
         );
         set
     }
@@ -164,7 +169,10 @@ impl TestRunResult {
                 .first()
                 .and_then(|error| TestErrorKind::from_code(&error.code)),
             diagnostics: outcome.diagnostics.clone(),
-            retained_paths: outcome.artifacts.as_ref().and_then(RetainedPaths::from_artifact_set),
+            retained_paths: outcome
+                .artifacts
+                .as_ref()
+                .and_then(RetainedPaths::from_artifact_set),
             report,
             warnings,
             steps,
@@ -269,9 +277,14 @@ pub fn test_execution_status(kind: Option<TestErrorKind>, ok: bool) -> Execution
     match (ok, kind) {
         (true, _) => ExecutionStatus::Succeeded,
         (_, Some(TestErrorKind::EnterpriseTimedOut)) => ExecutionStatus::TimedOut,
-        (_, Some(TestErrorKind::JunitMalformed | TestErrorKind::JunitEmpty | TestErrorKind::JunitNotProduced)) => {
-            ExecutionStatus::InvalidOutput
-        }
+        (
+            _,
+            Some(
+                TestErrorKind::JunitMalformed
+                | TestErrorKind::JunitEmpty
+                | TestErrorKind::JunitNotProduced,
+            ),
+        ) => ExecutionStatus::InvalidOutput,
         _ => ExecutionStatus::Failed,
     }
 }

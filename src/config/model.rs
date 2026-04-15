@@ -71,14 +71,14 @@ fn default_builder() -> BuilderBackend {
     BuilderBackend::Designer
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SourceFormat {
     Designer,
     Edt,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum BuilderBackend {
     Designer,
@@ -89,18 +89,26 @@ pub enum BuilderBackend {
 pub struct SourceSetConfig {
     pub name: String,
 
-    /// CONFIGURATION or EXTENSION
+    /// CONFIGURATION, EXTENSION, EXTERNAL_DATA_PROCESSORS, or EXTERNAL_REPORTS
     pub purpose: SourceSetPurpose,
 
     /// Path relative to basePath (for DESIGNER) or EDT project path
     pub path: PathBuf,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SourceSetPurpose {
     Configuration,
     Extension,
+    ExternalDataProcessors,
+    ExternalReports,
+}
+
+impl SourceSetPurpose {
+    pub const fn is_external(self) -> bool {
+        matches!(self, Self::ExternalDataProcessors | Self::ExternalReports)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

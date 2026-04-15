@@ -25,9 +25,12 @@ use crate::support::fs::{
 };
 use crate::support::temp::{dump_object_list_file, platform_logs_dir};
 use crate::use_cases::context::ExecutionContext;
+use crate::use_cases::external_artifacts::ExternalArtifactKind;
 use crate::use_cases::ibcmd_diagnostics::format_ibcmd_failure_details;
 use crate::use_cases::request::{DumpModeRequest, DumpRequest as DumpArgs};
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
+use quick_xml::events::Event;
+use quick_xml::Reader;
 use tracing::info;
 
 #[cfg(test)]
@@ -507,6 +510,148 @@ fn run_partial_dump_ibcmd(
     }
 }
 
+pub(crate) fn run_external_dump_designer(
+    dsl: &DesignerDsl<'_>,
+    binary_path: &Path,
+    root_xml_path: &Path,
+    expected_kind: ExternalArtifactKind,
+    expected_logical_name: &str,
+) -> Result<(PlatformCommandResult, PathBuf), (AppError, Option<PathBuf>)> {
+    let parent = root_xml_path.parent().ok_or_else(|| {
+        (
+            AppError::Runtime(format!(
+                "external dump target has no parent: {}",
+                root_xml_path.display()
+            )),
+            None,
+        )
+    })?;
+    ensure_dir(parent).map_err(|error| {
+        (
+            AppError::Runtime(format!("failed to create external dump dir: {error}")),
+            None,
+        )
+    })?;
+    remove_path_if_exists(root_xml_path).map_err(|error| {
+        (
+            AppError::Runtime(format!("failed to clean external root xml: {error}")),
+            None,
+        )
+    })?;
+    let result = dsl
+        .dump_external_data_processor_or_report_to_files(binary_path, root_xml_path)
+        .map_err(|error| (AppError::Platform(error.to_string()), None))?;
+    if result.process.exit_code != 0 {
+        return Err((
+            AppError::Platform(format!(
+                "external dump failed with exit code {}",
+                result.process.exit_code
+            )),
+            result.platform_log_path.clone(),
+        ));
+    }
+    let contents = std::fs::read_to_string(root_xml_path).map_err(|error| {
+        (
+            AppError::Runtime(format!(
+                "failed to read external dump root xml '{}': {error}",
+                root_xml_path.display()
+            )),
+            result.platform_log_path.clone(),
+        )
+    })?;
+    let (root_tag, logical_name) = parse_external_dump_descriptor(&contents, root_xml_path)
+        .map_err(|error| (error, result.platform_log_path.clone()))?;
+    if root_tag != expected_kind.root_tag() {
+        return Err((
+            AppError::Validation(format!(
+                "external dump '{}' has unexpected root element",
+                root_xml_path.display()
+            )),
+            result.platform_log_path.clone(),
+        ));
+    }
+    if logical_name != expected_logical_name {
+        return Err((
+            AppError::Validation(format!(
+                "external dump '{}' has unexpected logical name",
+                root_xml_path.display()
+            )),
+            result.platform_log_path.clone(),
+        ));
+    }
+    Ok((result, root_xml_path.to_path_buf()))
+}
+
+fn parse_external_dump_descriptor(
+    contents: &str,
+    path: &Path,
+) -> Result<(String, String), AppError> {
+    let mut reader = Reader::from_str(contents);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut root_tag = None;
+    let mut seen_properties = false;
+    let mut seen_name = false;
+    let mut logical_name = None;
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(event)) => {
+                let tag = String::from_utf8_lossy(event.name().as_ref()).into_owned();
+                if root_tag.is_none() {
+                    root_tag = Some(tag);
+                } else if tag == "Properties" {
+                    seen_properties = true;
+                } else if seen_properties && tag == "Name" {
+                    seen_name = true;
+                }
+            }
+            Ok(Event::Text(text)) if seen_name && logical_name.is_none() => {
+                logical_name = Some(
+                    text.unescape()
+                        .map_err(|error| {
+                            AppError::Validation(format!(
+                                "failed to decode external dump logical name in '{}': {error}",
+                                path.display()
+                            ))
+                        })?
+                        .into_owned(),
+                );
+            }
+            Ok(Event::End(event)) => {
+                let tag = String::from_utf8_lossy(event.name().as_ref()).into_owned();
+                if tag == "Name" {
+                    seen_name = false;
+                } else if tag == "Properties" {
+                    seen_properties = false;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => {
+                return Err(AppError::Validation(format!(
+                    "failed to parse external dump xml '{}': {error}",
+                    path.display()
+                )));
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    let root_tag = root_tag.ok_or_else(|| {
+        AppError::Validation(format!("missing root XML element in '{}'", path.display()))
+    })?;
+    let logical_name = logical_name
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AppError::Validation(format!(
+                "external dump '{}' must contain Properties/Name",
+                path.display()
+            ))
+        })?;
+    Ok((root_tag, logical_name))
+}
+
 fn cleanup_staging_on_platform_failure(staging_dir: &Path, error: AppError) -> AppError {
     let sidecar = metadata_sidecar_path(staging_dir);
     let _ = remove_path_if_exists(staging_dir);
@@ -984,8 +1129,8 @@ fn make_run_id() -> String {
 mod tests {
     use super::{
         build_designer_dsl, cleanup_orphan_dirs, create_dump_object_list_file_with, hash_path,
-        metadata_sidecar_path, nearest_existing_canonical_path, resolve_target, run_dump,
-        validate_publish_target, validate_supported_matrix, DUMP_COMMAND,
+        metadata_sidecar_path, nearest_existing_canonical_path, parse_external_dump_descriptor,
+        resolve_target, run_dump, validate_publish_target, validate_supported_matrix, DUMP_COMMAND,
         NON_PARTIAL_OBJECTS_ERROR, ORPHAN_TTL, PARTIAL_OBJECTS_REQUIRED_ERROR,
         PARTIAL_OBJECT_BLANK_ERROR, PARTIAL_OBJECT_CONTROL_ERROR, SUPPORTED_DUMP_ERROR,
     };
@@ -2068,5 +2213,15 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("designer log"));
+    }
+
+    #[test]
+    fn parse_external_dump_descriptor_decodes_escaped_name() {
+        let xml = "<ExternalDataProcessor><Properties><Name>Foo &amp; Bar</Name></Properties></ExternalDataProcessor>";
+        let (root, logical_name) =
+            parse_external_dump_descriptor(xml, Path::new("/tmp/dump.xml")).expect("parse");
+
+        assert_eq!(root, "ExternalDataProcessor");
+        assert_eq!(logical_name, "Foo & Bar");
     }
 }

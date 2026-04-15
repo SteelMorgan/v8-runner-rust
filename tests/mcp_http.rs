@@ -651,8 +651,7 @@ async fn mcp_http_dump_config_partial_ibcmd_returns_degraded_success() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_http_dump_config_partial_ibcmd_preserves_partial_mode_on_failure() {
-    let (_dir, config_path, url, calls_log) =
-        setup_http_ibcmd_dump_project(Some("--sync"), 4, 900);
+    let (_dir, config_path, url, calls_log) = setup_http_ibcmd_dump_project(Some("--sync"), 4, 900);
     let mut server = HttpServerProcess::spawn(&config_path, &url).await;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
@@ -684,14 +683,18 @@ async fn mcp_http_dump_config_partial_ibcmd_preserves_partial_mode_on_failure() 
         payload["result"]["structuredContent"]["response"]["mode"],
         "PARTIAL"
     );
-    assert!(payload["result"]["structuredContent"]["response"]["message"]
-        .as_str()
-        .expect("message")
-        .contains("IBCMD does not support object-scoped partial dump"));
-    assert!(payload["result"]["structuredContent"]["response"]["message"]
-        .as_str()
-        .expect("message")
-        .contains("dump failed for source-set 'main' with exit code 17"));
+    assert!(
+        payload["result"]["structuredContent"]["response"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("IBCMD does not support object-scoped partial dump")
+    );
+    assert!(
+        payload["result"]["structuredContent"]["response"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("dump failed for source-set 'main' with exit code 17")
+    );
     assert!(fs::read_to_string(calls_log)
         .expect("ibcmd calls")
         .contains("--sync"));

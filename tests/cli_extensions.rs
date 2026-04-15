@@ -115,10 +115,7 @@ fn extensions_command_filters_by_requested_source_set_names() {
 #[test]
 fn extensions_command_json_failure_reports_operation_target_and_exit_code() {
     let (_dir, config_path, _calls_log, ibcmd_path) = setup_extensions_project();
-    write_script(
-        &ibcmd_path,
-        "echo 'cannot update extension' >&2\nexit 17",
-    );
+    write_script(&ibcmd_path, "echo 'cannot update extension' >&2\nexit 17");
 
     let output = std::process::Command::cargo_bin("v8-test-runner")
         .expect("binary")
@@ -140,7 +137,9 @@ fn extensions_command_json_failure_reports_operation_target_and_exit_code() {
     assert!(payload["data"]["steps"][0]["message"]
         .as_str()
         .expect("message")
-        .contains("infobase extensions update failed for extension 'client_mcp' with exit code 17"));
+        .contains(
+            "infobase extensions update failed for extension 'client_mcp' with exit code 17"
+        ));
     assert!(payload["data"]["steps"][0]["message"]
         .as_str()
         .expect("message")

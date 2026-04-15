@@ -15,8 +15,11 @@ pub enum ConfigValidationError {
     #[error("workPath could not be created: {0}")]
     WorkPathInvalid(String),
 
-    #[error("source-set must contain at least one CONFIGURATION entry")]
-    NoConfigurationSourceSet,
+    #[error("source-set must contain at least one supported entry")]
+    NoSupportedSourceSet,
+
+    #[error("EXTENSION source-set requires at least one CONFIGURATION source-set")]
+    ExtensionRequiresConfiguration,
 
     #[error("source-set entry '{name}' path does not exist: {path}")]
     SourceSetPathInvalid { name: String, path: String },
@@ -44,6 +47,14 @@ pub enum ConfigValidationError {
 
     #[error("format EDT requires at least one source-set with a valid EDT project path")]
     EdtNoProjects,
+
+    #[error("external source-set '{name}' requires builder=DESIGNER")]
+    ExternalSourceSetRequiresDesigner { name: String },
+
+    #[error(
+        "external EDT source-set '{name}' must contain at least one child project with .project"
+    )]
+    ExternalEdtSourceSetHasNoProjects { name: String },
 
     #[error(
         "EDT source-set '{source_set}' path overlaps generated work target for '{generated_for}': source={source_path}, target={generated_path}"
@@ -127,13 +138,23 @@ fn validate_source_sets(config: &AppConfig) -> Result<(), ConfigValidationError>
         return Err(ConfigValidationError::EdtNoProjects);
     }
 
+    let has_supported = !config.source_sets.is_empty();
+    if !has_supported {
+        return Err(ConfigValidationError::NoSupportedSourceSet);
+    }
+
     let has_config = config
         .source_sets
         .iter()
         .any(|s| s.purpose == SourceSetPurpose::Configuration);
 
-    if !has_config {
-        return Err(ConfigValidationError::NoConfigurationSourceSet);
+    let has_extension = config
+        .source_sets
+        .iter()
+        .any(|s| s.purpose == SourceSetPurpose::Extension);
+
+    if has_extension && !has_config {
+        return Err(ConfigValidationError::ExtensionRequiresConfiguration);
     }
 
     let mut names = HashSet::<String>::new();
@@ -159,12 +180,26 @@ fn validate_source_sets(config: &AppConfig) -> Result<(), ConfigValidationError>
             config.base_path.join(&ss.path)
         };
 
-        // DESIGNER source-set paths also serve as dump targets and may be created by the dump
-        // use case on demand. EDT source-sets must still resolve to existing project paths.
-        if config.format == SourceFormat::Edt && !full_path.exists() {
+        let path_must_exist = config.format == SourceFormat::Edt || ss.purpose.is_external();
+        if path_must_exist && !full_path.exists() {
             return Err(ConfigValidationError::SourceSetPathInvalid {
                 name: ss.name.clone(),
                 path: full_path.display().to_string(),
+            });
+        }
+
+        if ss.purpose.is_external() && config.builder != BuilderBackend::Designer {
+            return Err(ConfigValidationError::ExternalSourceSetRequiresDesigner {
+                name: ss.name.clone(),
+            });
+        }
+
+        if config.format == SourceFormat::Edt
+            && ss.purpose.is_external()
+            && !contains_child_project(&full_path)?
+        {
+            return Err(ConfigValidationError::ExternalEdtSourceSetHasNoProjects {
+                name: ss.name.clone(),
             });
         }
 
@@ -186,6 +221,21 @@ fn validate_source_sets(config: &AppConfig) -> Result<(), ConfigValidationError>
     }
 
     Ok(())
+}
+
+fn contains_child_project(path: &Path) -> Result<bool, ConfigValidationError> {
+    let entries =
+        std::fs::read_dir(path).map_err(|_| ConfigValidationError::SourceSetPathInvalid {
+            name: path.display().to_string(),
+            path: path.display().to_string(),
+        })?;
+    for entry in entries.flatten() {
+        let child = entry.path();
+        if child.is_dir() && child.join(".project").is_file() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn validate_source_set_name(name: &str) -> Result<(), ConfigValidationError> {

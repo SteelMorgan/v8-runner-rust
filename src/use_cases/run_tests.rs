@@ -276,9 +276,10 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
                 message: Some(app_error.to_string()),
             });
             let retained_paths = retain_run_artifacts(config, &artifacts).ok();
-            let mut outcome = ExecutionOutcome::new(test_execution_status(Some(kind.clone()), false))
-                .with_diagnostics(vec![app_error.to_string()])
-                .with_errors(vec![test_execution_error(kind, app_error.to_string())]);
+            let mut outcome =
+                ExecutionOutcome::new(test_execution_status(Some(kind.clone()), false))
+                    .with_diagnostics(vec![app_error.to_string()])
+                    .with_errors(vec![test_execution_error(kind, app_error.to_string())]);
             if let Some(retained_paths) = retained_paths {
                 outcome = outcome.with_artifacts(retained_paths);
             }
@@ -313,7 +314,8 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
                 .first()
                 .cloned()
                 .expect("junit parse error");
-            let kind = TestErrorKind::from_code(&error.code).unwrap_or(TestErrorKind::JunitMalformed);
+            let kind =
+                TestErrorKind::from_code(&error.code).unwrap_or(TestErrorKind::JunitMalformed);
             let message = error.message.clone();
             steps.push(StepResult {
                 name: "parse_junit".to_owned(),
@@ -323,9 +325,10 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
             });
             let retained_paths = retain_run_artifacts(config, &artifacts).ok();
             let diagnostics = collect_diagnostics(&platform_result, vec![message.clone()], config);
-            let mut outcome = ExecutionOutcome::new(test_execution_status(Some(kind.clone()), false))
-                .with_diagnostics(diagnostics)
-                .with_errors(vec![error.with_details(junit_parse.diagnostics)]);
+            let mut outcome =
+                ExecutionOutcome::new(test_execution_status(Some(kind.clone()), false))
+                    .with_diagnostics(diagnostics)
+                    .with_errors(vec![error.with_details(junit_parse.diagnostics)]);
             if let Some(retained_paths) = retained_paths {
                 outcome = outcome.with_artifacts(retained_paths);
             }
@@ -552,12 +555,10 @@ fn write_json_file(path: &Path, payload: &impl Serialize) -> std::io::Result<()>
 
 fn parse_junit_report(artifacts: &RunArtifacts) -> crate::parsers::NormalizedParse<TestReport> {
     if !artifacts.junit_xml.exists() {
-        return crate::parsers::NormalizedParse::default().with_errors(vec![
-            test_execution_error(
-                TestErrorKind::JunitNotProduced,
-                "JUnit report was not produced",
-            ),
-        ]);
+        return crate::parsers::NormalizedParse::default().with_errors(vec![test_execution_error(
+            TestErrorKind::JunitNotProduced,
+            "JUnit report was not produced",
+        )]);
     }
     if fs::metadata(&artifacts.junit_xml)
         .map(|meta| meta.len() == 0)
@@ -568,8 +569,7 @@ fn parse_junit_report(artifacts: &RunArtifacts) -> crate::parsers::NormalizedPar
             "JUnit report is empty",
         )]);
     }
-    let file = fs::File::open(&artifacts.junit_xml)
-        .map_err(|error| error.to_string());
+    let file = fs::File::open(&artifacts.junit_xml).map_err(|error| error.to_string());
     let file = match file {
         Ok(file) => file,
         Err(error) => {

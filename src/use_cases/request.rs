@@ -1,8 +1,8 @@
+use crate::domain::artifacts::{CFE_RUNNER_ID, CF_RUNNER_ID, EPF_RUNNER_ID, ERF_RUNNER_ID};
 use crate::domain::execution::ExecutionTimeouts;
 use crate::domain::runner::{
     ExecutionPolicy, RunnerKind, RunnerOutputFormat, RunnerProfile, ScenarioExecutionRequest,
 };
-use crate::domain::artifacts::{CF_RUNNER_ID, CFE_RUNNER_ID};
 use crate::domain::test::TEST_RUNNER_ID;
 
 /// Transport-neutral request for the `build` use case.
@@ -83,6 +83,8 @@ pub struct DumpRequest {
 pub enum ArtifactsModeRequest {
     ConfigurationCf,
     ExtensionCfe,
+    ExternalDataProcessorEpf,
+    ExternalReportErf,
 }
 
 /// Transport-neutral request for the `artifacts` use case.
@@ -105,6 +107,8 @@ impl ArtifactsRequest {
         let (id, kind) = match mode {
             ArtifactsModeRequest::ConfigurationCf => (CF_RUNNER_ID, RunnerKind::Cf),
             ArtifactsModeRequest::ExtensionCfe => (CFE_RUNNER_ID, RunnerKind::Cfe),
+            ArtifactsModeRequest::ExternalDataProcessorEpf => (EPF_RUNNER_ID, RunnerKind::Epf),
+            ArtifactsModeRequest::ExternalReportErf => (ERF_RUNNER_ID, RunnerKind::Erf),
         };
 
         ScenarioExecutionRequest {

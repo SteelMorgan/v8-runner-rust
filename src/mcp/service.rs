@@ -2163,7 +2163,9 @@ mod tests {
         } else {
             crate::domain::execution::ExecutionStatus::Failed
         })
-        .with_metrics(crate::domain::execution::ExecutionMetrics::from(&report.summary))
+        .with_metrics(crate::domain::execution::ExecutionMetrics::from(
+            &report.summary,
+        ))
         .with_payload(report);
         if !ok {
             outcome = outcome.with_errors(vec![crate::domain::test::test_execution_error(

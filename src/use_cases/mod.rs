@@ -10,6 +10,8 @@ pub mod configure_extensions;
 pub mod context;
 /// Dump orchestration use case.
 pub mod dump_config;
+/// Shared discovery and preparation helpers for external artifacts.
+pub mod external_artifacts;
 /// Shared formatting helpers for IBCMD diagnostics.
 pub mod ibcmd_diagnostics;
 /// Init orchestration use case.

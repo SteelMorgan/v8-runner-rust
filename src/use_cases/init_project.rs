@@ -379,15 +379,21 @@ fn resolve_source_set_path(config: &AppConfig, source_set: &SourceSetConfig) -> 
 fn ordered_source_sets(config: &AppConfig) -> Vec<&SourceSetConfig> {
     let mut configuration = Vec::new();
     let mut extensions = Vec::new();
+    let mut external_processors = Vec::new();
+    let mut external_reports = Vec::new();
 
     for source_set in &config.source_sets {
         match source_set.purpose {
             SourceSetPurpose::Configuration => configuration.push(source_set),
             SourceSetPurpose::Extension => extensions.push(source_set),
+            SourceSetPurpose::ExternalDataProcessors => external_processors.push(source_set),
+            SourceSetPurpose::ExternalReports => external_reports.push(source_set),
         }
     }
 
     configuration.extend(extensions);
+    configuration.extend(external_processors);
+    configuration.extend(external_reports);
     configuration
 }
 

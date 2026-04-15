@@ -316,11 +316,12 @@ mod tests {
         .expect_err("failure");
 
         assert_eq!(failure.error.kind(), UseCaseErrorKind::Platform);
+        assert!(failure.error.message().contains(
+            "infobase extensions update failed for extension 'client_mcp' with exit code 17"
+        ));
         assert!(failure
             .error
             .message()
-            .contains("infobase extensions update failed for extension 'client_mcp' with exit code 17"));
-        assert!(failure.error.message().contains("stderr: bad extension state"));
+            .contains("stderr: bad extension state"));
     }
-
 }

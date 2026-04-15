@@ -22,6 +22,10 @@ use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::support::temp::{partial_list_file, platform_logs_dir, reserved_source_set_dir};
 use crate::use_cases::context::ExecutionContext;
+use crate::use_cases::external_artifacts::{
+    discover_designer_external_artifacts, prepare_edt_external_artifacts, resolve_source_set_path,
+    source_set_external_kind,
+};
 use crate::use_cases::ibcmd_diagnostics::format_ibcmd_failure_details;
 use crate::use_cases::request::BuildRequest as BuildArgs;
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
@@ -130,6 +134,43 @@ fn run_build_designer(
         let Some(context) = contexts_by_name.get(&source_set.name).cloned() else {
             continue;
         };
+
+        if source_set.purpose.is_external() {
+            let step_started = Instant::now();
+            let result = discover_designer_external_artifacts(
+                &source_set.name,
+                &resolve_source_set_path(config, source_set),
+                source_set_external_kind(source_set).expect("external kind"),
+            );
+            match result {
+                Ok(descriptors) => steps.push(BuildStep {
+                    source_set: source_set.name.clone(),
+                    mode: BuildMode::Skipped,
+                    ok: true,
+                    message: Some(format!(
+                        "prepared {} external artifact(s) for packaging",
+                        descriptors.len()
+                    )),
+                    duration_ms: step_started.elapsed().as_millis() as u64,
+                }),
+                Err(error) => {
+                    let result = fail_with_remaining_steps(
+                        started,
+                        steps,
+                        ordered_source_sets
+                            .iter()
+                            .skip(index)
+                            .copied()
+                            .collect::<Vec<_>>(),
+                        source_set,
+                        BuildMode::Skipped,
+                        error.to_string(),
+                    );
+                    return Err(BuildExecutionFailure::with_payload(error, result));
+                }
+            }
+            continue;
+        }
 
         let plan = if args.full_rebuild {
             StepPlan::Execute {
@@ -740,6 +781,162 @@ fn run_build_edt(
             }
         };
 
+        if source_set.purpose.is_external() {
+            let edt = match edt_binary.clone() {
+                Some(path) => path,
+                None => {
+                    let location = match utilities.locate(UtilityType::EdtCli) {
+                        Ok(location) => location,
+                        Err(error) => {
+                            let result = fail_with_remaining_steps(
+                                started,
+                                steps,
+                                ordered_source_sets
+                                    .iter()
+                                    .skip(index)
+                                    .copied()
+                                    .collect::<Vec<_>>(),
+                                source_set,
+                                BuildMode::EdtExport,
+                                error.to_string(),
+                            );
+                            return Err(BuildExecutionFailure::with_payload(
+                                AppError::Platform(error.to_string()),
+                                result,
+                            ));
+                        }
+                    };
+                    edt_binary = Some(location.path.clone());
+                    location.path
+                }
+            };
+            let export_started = Instant::now();
+            let export_result = if config.tools.edt_cli.interactive_mode {
+                if interactive_edt.is_none() {
+                    interactive_edt = Some(
+                        match EdtDsl::new_interactive(
+                            edt.clone(),
+                            config.work_path.join("edt-workspace"),
+                            Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
+                            Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
+                        ) {
+                            Ok(dsl) => dsl,
+                            Err(error) => {
+                                let app_error = AppError::Platform(error.to_string());
+                                let result = fail_with_remaining_steps(
+                                    started,
+                                    steps,
+                                    ordered_source_sets
+                                        .iter()
+                                        .skip(index)
+                                        .copied()
+                                        .collect::<Vec<_>>(),
+                                    source_set,
+                                    BuildMode::EdtExport,
+                                    app_error.to_string(),
+                                );
+                                return Err(BuildExecutionFailure::with_payload(app_error, result));
+                            }
+                        },
+                    );
+                }
+                prepare_edt_external_artifacts(
+                    config,
+                    source_set,
+                    interactive_edt.as_ref().expect("interactive edt dsl"),
+                )
+            } else {
+                let one_shot_edt = EdtDsl::new(
+                    edt.clone(),
+                    config.work_path.join("edt-workspace"),
+                    utilities.runner_for(UtilityType::EdtCli),
+                );
+                prepare_edt_external_artifacts(config, source_set, &one_shot_edt)
+            };
+            match export_result {
+                Ok(descriptors) => {
+                    match &plan {
+                        StepPlan::Execute { commit, .. } => match commit {
+                            StepCommit::Prepared(prepared) => {
+                                if let Err(error) = analyzer::commit_success(
+                                    &edt_context,
+                                    &config.work_path,
+                                    prepared,
+                                ) {
+                                    let app_error = AppError::Runtime(error.to_string());
+                                    let result = fail_with_remaining_steps(
+                                        started,
+                                        steps,
+                                        ordered_source_sets
+                                            .iter()
+                                            .skip(index)
+                                            .copied()
+                                            .collect::<Vec<_>>(),
+                                        source_set,
+                                        BuildMode::EdtExport,
+                                        app_error.to_string(),
+                                    );
+                                    return Err(BuildExecutionFailure::with_payload(
+                                        app_error, result,
+                                    ));
+                                }
+                            }
+                            StepCommit::RescanFull { recover_storage } => {
+                                if let Err(app_error) = commit_full_rescan(
+                                    &edt_context,
+                                    &config.work_path,
+                                    *recover_storage,
+                                ) {
+                                    let result = fail_with_remaining_steps(
+                                        started,
+                                        steps,
+                                        ordered_source_sets
+                                            .iter()
+                                            .skip(index)
+                                            .copied()
+                                            .collect::<Vec<_>>(),
+                                        source_set,
+                                        BuildMode::EdtExport,
+                                        app_error.to_string(),
+                                    );
+                                    return Err(BuildExecutionFailure::with_payload(
+                                        app_error, result,
+                                    ));
+                                }
+                            }
+                        },
+                        StepPlan::Skip { .. } => {}
+                    }
+                    steps.push(BuildStep {
+                        source_set: source_set.name.clone(),
+                        mode: BuildMode::EdtExport,
+                        ok: true,
+                        message: Some(format!(
+                            "exported {} external artifact(s) to designer runtime",
+                            descriptors.len()
+                        )),
+                        duration_ms: export_started.elapsed().as_millis() as u64,
+                    })
+                }
+                Err(error) => {
+                    let result = fail_with_remaining_steps(
+                        started,
+                        steps,
+                        ordered_source_sets
+                            .iter()
+                            .skip(index)
+                            .copied()
+                            .collect::<Vec<_>>(),
+                        source_set,
+                        BuildMode::EdtExport,
+                        error.to_string(),
+                    );
+                    return Err(BuildExecutionFailure::with_payload(error, result));
+                }
+            }
+            continue;
+        }
+
         match plan {
             StepPlan::Skip { message, ok } => {
                 steps.push(BuildStep {
@@ -955,15 +1152,21 @@ fn analyze_contexts_by_name(
 fn ordered_source_sets(config: &AppConfig) -> Vec<&SourceSetConfig> {
     let mut configuration = Vec::new();
     let mut extensions = Vec::new();
+    let mut external_processors = Vec::new();
+    let mut external_reports = Vec::new();
 
     for source_set in &config.source_sets {
         match source_set.purpose {
             SourceSetPurpose::Configuration => configuration.push(source_set),
             SourceSetPurpose::Extension => extensions.push(source_set),
+            SourceSetPurpose::ExternalDataProcessors => external_processors.push(source_set),
+            SourceSetPurpose::ExternalReports => external_reports.push(source_set),
         }
     }
 
     configuration.extend(extensions);
+    configuration.extend(external_processors);
+    configuration.extend(external_reports);
     configuration
 }
 
@@ -1237,10 +1440,11 @@ fn extension_name(source_set: &SourceSetConfig) -> Option<&str> {
     match source_set.purpose {
         SourceSetPurpose::Configuration => None,
         SourceSetPurpose::Extension => Some(source_set.name.as_str()),
+        SourceSetPurpose::ExternalDataProcessors | SourceSetPurpose::ExternalReports => None,
     }
 }
 
-fn ensure_platform_success(
+pub(crate) fn ensure_platform_success(
     action: &str,
     source_set: &SourceSetConfig,
     result: &PlatformCommandResult,
