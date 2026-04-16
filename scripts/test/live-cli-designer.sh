@@ -9,6 +9,9 @@ DESIGNER_CONFIG_PATH="${V8TR_DESIGNER_REAL_CONFIG:-$DEFAULT_DESIGNER_CONFIG_PATH
 BIN_PATH="${V8TR_BIN:-$ROOT_DIR/target/debug/v8-test-runner}"
 OUTPUT_ROOT="$ROOT_DIR/target/manual-tests/live-cli-designer"
 FIXTURE_BASE_PATH="$ROOT_DIR/tests/fixtures/designer"
+VANESSA_EPF_PATH="${V8TR_VA_EPF:-$ROOT_DIR/target/vanessa-automation-single.epf}"
+VANESSA_PARAMS_TEMPLATE_PATH="${V8TR_VA_PARAMS_TEMPLATE:-$ROOT_DIR/scripts/test/live-cli-designer.va-params.json}"
+VANESSA_FEATURE_PATH="${V8TR_VA_FEATURE_PATH:-$ROOT_DIR/scripts/test/features/live-cli-designer}"
 
 die() {
     echo "$*" >&2
@@ -331,6 +334,54 @@ if metadata.get("update_db_cfg_ran") is not True:
 PY
 }
 
+assert_test_json_ok() {
+    local json_path="$1"
+    local expected_min_total="${2:-1}"
+
+    python3 - "$json_path" "$expected_min_total" <<'PY'
+import json
+import sys
+
+json_path = sys.argv[1]
+expected_min_total = int(sys.argv[2])
+
+with open(json_path, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+
+if payload.get("ok") is not True:
+    raise SystemExit(f"test command failed: {payload}")
+
+if payload.get("command") != "test":
+    raise SystemExit(f"unexpected command in test output: {payload.get('command')}")
+
+data = payload.get("data", {})
+if data.get("ok") is not True:
+    raise SystemExit(f"test payload does not confirm success: {payload}")
+
+report = data.get("report")
+if not isinstance(report, dict):
+    raise SystemExit(f"test payload does not contain report: {payload}")
+
+summary = report.get("summary")
+if not isinstance(summary, dict):
+    raise SystemExit(f"test report does not contain summary: {payload}")
+
+total = summary.get("total")
+if not isinstance(total, int) or total < expected_min_total:
+    raise SystemExit(
+        f"test summary total must be >= {expected_min_total}, got {total}: {payload}"
+    )
+
+retained_paths = data.get("retained_paths")
+if not isinstance(retained_paths, dict):
+    raise SystemExit(f"test payload does not contain retained_paths: {payload}")
+
+runner_log = retained_paths.get("yaxunit_log")
+if not isinstance(runner_log, str) or not runner_log:
+    raise SystemExit(f"test retained_paths does not include runner log: {payload}")
+PY
+}
+
 materialize_live_config() {
     local source_config="$1"
     local target_config="$2"
@@ -338,7 +389,7 @@ materialize_live_config() {
     local output_root="$4"
     local work_base_path="$5"
 
-    python3 - "$source_config" "$target_config" "$ROOT_DIR" "$output_root" "$work_base_path" "$platform_path" <<'PY'
+    python3 - "$source_config" "$target_config" "$ROOT_DIR" "$output_root" "$work_base_path" "$platform_path" "$VANESSA_EPF_PATH" "$VANESSA_PARAMS_TEMPLATE_PATH" "$VANESSA_FEATURE_PATH" <<'PY'
 import pathlib
 import re
 import sys
@@ -349,12 +400,18 @@ root_dir = pathlib.Path(sys.argv[3])
 output_root = pathlib.Path(sys.argv[4])
 work_base_path = pathlib.Path(sys.argv[5])
 platform_path = sys.argv[6]
+vanessa_epf = pathlib.Path(sys.argv[7])
+vanessa_params_template = pathlib.Path(sys.argv[8])
+vanessa_feature_path = pathlib.Path(sys.argv[9])
 text = source.read_text(encoding="utf-8")
 
 replacements = {
     "__ROOT_DIR__": root_dir.as_posix(),
     "__OUTPUT_ROOT__": output_root.as_posix(),
     "AUTO_PLATFORM": platform_path,
+    "__VANESSA_EPF__": vanessa_epf.as_posix(),
+    "__VANESSA_PARAMS_TEMPLATE__": vanessa_params_template.as_posix(),
+    "__VANESSA_FEATURE_PATH__": vanessa_feature_path.as_posix(),
 }
 
 for needle, replacement in replacements.items():
@@ -385,6 +442,18 @@ trap cleanup EXIT
 
 if [[ ! -f "$DESIGNER_CONFIG_PATH" ]]; then
     die "Live Designer config not found: $DESIGNER_CONFIG_PATH"
+fi
+
+if [[ ! -f "$VANESSA_EPF_PATH" ]]; then
+    die "Vanessa Automation EPF not found: $VANESSA_EPF_PATH"
+fi
+
+if [[ ! -f "$VANESSA_PARAMS_TEMPLATE_PATH" ]]; then
+    die "Vanessa params template not found: $VANESSA_PARAMS_TEMPLATE_PATH"
+fi
+
+if [[ ! -d "$VANESSA_FEATURE_PATH" ]]; then
+    die "Vanessa feature path not found: $VANESSA_FEATURE_PATH"
 fi
 
 if ! config_matches "^format:\\s*DESIGNER\\s*$" "$DESIGNER_CONFIG_PATH"; then
@@ -558,6 +627,11 @@ load_cf_json="$OUTPUT_ROOT/json/load-configuration.json"
 print_test_step "load configuration cf"
 run_cli_json_to_file "$load_cf_json" load --path "$OUTPUT_ROOT/artifacts/configuration.cf"
 assert_load_json_ok "$load_cf_json" "configuration"
+
+test_va_json="$OUTPUT_ROOT/json/test-va.json"
+print_test_step "test vanessa automation"
+run_cli_json_to_file "$test_va_json" test va
+assert_test_json_ok "$test_va_json" 1
 
 launch_json="$OUTPUT_ROOT/json/launch-designer.json"
 print_test_step "launch designer"
