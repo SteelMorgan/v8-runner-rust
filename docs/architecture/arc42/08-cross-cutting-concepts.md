@@ -1,5 +1,7 @@
 ## 8. Сквозные концепции
 
+Свод правил, которые должны оставаться верными при развитии проекта, вынесен в [архитектурные инварианты](../invariants.md).
+
 ### 8.1 Модель конфигурации
 
 - `v8project.yaml` — главный входной контракт.
@@ -18,6 +20,7 @@
 
 - Use case возвращают структурированные результаты или `UseCaseFailure<T>` с transport-neutral error metadata.
 - CLI решает на адаптерной границе, печатать ли `Envelope<T>`, text rendering или top-level error.
+- CLI output дополнительно разделяет human-oriented highlights и agent-oriented minimal signal; это presentation concern, а не use-case behavior.
 - MCP дополнительно разделяет `McpBusinessFailure<T>` и `McpInternalError`, чтобы агент видел предсказуемые business failures, но не получал как business-response ошибки неправильного transport/runtime usage.
 - Это разделение является ключевым architectural invariant: orchestration не должна знать про конкретный transport payload format.
 

@@ -6,6 +6,8 @@
 
 `v8-runner` is a Rust CLI for orchestrating local 1C platform operations. The current codebase is organized into eight main layers:
 
+Architecture decisions live in [docs/decisions](docs/decisions/README.md), and agent-facing invariants are summarized in [docs/architecture/invariants.md](docs/architecture/invariants.md).
+
 1. `cli` parses arguments, maps them into transport-neutral requests, and owns command-level text/json rendering.
 2. `config` loads and validates YAML configuration.
 3. `domain` defines structured result types for commands plus shared execution step structs.
