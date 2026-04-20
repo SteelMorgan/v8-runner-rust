@@ -2,7 +2,7 @@
 
 Локальная автоматизация 1С для разработчиков и AI-ассистентов.
 
-`v8-runner` — это CLI-приложение на Rust и MCP-сервер для рутинных операций в разработке на 1С: загрузки исходников в информационную базу, запуска YaXUnit- и Vanessa Automation-тестов, выгрузки конфигурации обратно в файлы, синтаксических проверок и запуска инструментов 1С.
+`v8-runner` — это CLI-приложение на Rust и MCP-сервер для рутинных операций в разработке на 1С: загрузки исходников в информационную базу, запуска YaXUnit- и Vanessa Automation-тестов, выгрузки конфигурации обратно в файлы, сборки и загрузки релизных артефактов, синтаксических проверок и запуска инструментов 1С.
 
 Инструмент закрывает сразу два типа сценариев:
 
@@ -11,7 +11,7 @@
 
 ## Зачем использовать
 
-- Один инструмент для `init`, `extensions`, `build`, `test`, `dump`, `syntax`, `launch` и доступа по MCP.
+- Один инструмент для `init`, `extensions`, `build`, `load`, `test`, `dump`, `make`/`artifacts`, `syntax`, `launch` и доступа по MCP.
 - Инкрементальные сценарии вместо полной пересборки на каждое изменение.
 - Удобная работа и с основной конфигурацией, и с расширениями.
 - Структурированные результаты, понятные и человеку, и MCP-клиенту.
@@ -24,9 +24,11 @@
 - `extensions`: обновлять свойства расширений в информационной базе по настроенным `source-set`.
 - `test yaxunit`: сначала выполнять `build`, затем запускать все YaXUnit-тесты или один модуль.
 - `test va`: сначала выполнять `build`, затем запускать Vanessa Automation по выбранному профилю.
+- `load`: загружать готовые `.cf` и `.cfe` артефакты в ИБ через Designer в режимах `load` и `merge`.
 - `dump`: выгружать состояние конфигурации или расширения обратно в файлы в режимах `full`, `incremental` и `partial`.
+- `make`/`artifacts`: экспортировать релизные `.cf` и `.cfe`, а также публиковать внешние обработки `.epf` и отчёты `.erf`.
 - `syntax`: запускать проверки через Designer для Designer-исходников и `1cedtcli validate` для EDT-проектов.
-- `launch`: открывать Designer, тонкий клиент или толстый клиент.
+- `launch`: открывать Designer, тонкий клиент, толстый клиент или обычное приложение с типизированными и raw-параметрами запуска.
 - `mcp serve`: отдавать те же сценарии MCP-клиентам по stdio или по протоколу `streamable HTTP`.
 
 ## Быстрый старт
@@ -50,6 +52,12 @@ source-set:
   - name: main
     purpose: CONFIGURATION
     path: .
+  # - name: ext
+  #   purpose: EXTENSION
+  #   path: ext
+  # - name: tools
+  #   purpose: EXTERNAL_DATA_PROCESSORS
+  #   path: tools
 
 tests:
   yaxunit:
@@ -74,6 +82,8 @@ tests:
 ./target/release/v8-runner init
 ./target/release/v8-runner test yaxunit all
 ./target/release/v8-runner test va
+./target/release/v8-runner make --output dist/main.cf
+./target/release/v8-runner load --path dist/main.cf
 ./target/release/v8-runner mcp serve stdio
 ```
 
@@ -86,12 +96,45 @@ tests:
 | `init` | `format=DESIGNER` с `builder=DESIGNER` или `IBCMD`; `format=EDT` с `builder=DESIGNER` |
 | `extensions` | Обновление свойств расширений для EDT и Designer-проектов по настроенным extension `source-set`; только файловая ИБ |
 | `build` | `format=DESIGNER` с `builder=DESIGNER` или `IBCMD`; `format=EDT` с `builder=DESIGNER` |
+| `load` | `.cf` и `.cfe` артефакты; только `format=DESIGNER` с `builder=DESIGNER`; `--mode load` и `--mode merge` |
 | `test yaxunit` | Следует матрице `build` и всегда сначала запускает `build` |
 | `test va` | `tests.va` с выбранным профилем, `epf_path` и `params_path`; всегда сначала запускает `build` |
 | `dump` | `format=DESIGNER` с `builder=DESIGNER` или `IBCMD` |
+| `make` / `artifacts` | Экспорт `.cf` и `.cfe` через Designer; публикация `.epf`/`.erf` для внешних `source-set`; требуется `builder=DESIGNER` |
 | `syntax` | Проверки через Designer для `DESIGNER`-исходников и валидация EDT для `EDT` |
-| `launch` | Designer, тонкий клиент, толстый клиент |
+| `launch` | Designer, тонкий клиент, толстый клиент, обычное приложение; поддерживает `--c`, `--execute`, `--use-privileged-mode`, `--out`, `--raw-key` |
 | MCP | stdio и HTTP-транспорты с 8 опубликованными инструментами |
+
+## Новые CLI-сценарии
+
+### Загрузка релизных артефактов
+
+```bash
+v8-runner load --path dist/main.cf
+v8-runner load --path dist/sales.cfe --extension SalesAddon
+v8-runner load --path dist/sales.cfe --mode merge --settings merge.xml --extension SalesAddon
+```
+
+`load` работает через Designer и сейчас поддерживает только `.cf` и `.cfe`. Для `.cfe` обязательно указывается имя расширения, а режим `merge` требует файл настроек слияния. После загрузки команда выполняет обновление конфигурации базы данных.
+
+### Экспорт артефактов
+
+```bash
+v8-runner make --output dist/main.cf
+v8-runner make --output dist/sales.cfe --source-set ext-sales --extension SalesAddon
+v8-runner artifacts --output dist/tools --source-set tools
+```
+
+`make` и видимый alias `artifacts` используют одну команду. Тип экспорта выводится из `--output` и выбранного `source-set`: `.cf` для основной конфигурации, `.cfe` для расширений, каталог публикации для внешних обработок и отчётов. Для внешних артефактов `source-set` должен иметь `purpose=EXTERNAL_DATA_PROCESSORS` или `purpose=EXTERNAL_REPORTS`.
+
+### Расширенный запуск 1С
+
+```bash
+v8-runner launch --mode ordinary --execute tool.epf --c DoWork --use-privileged-mode
+v8-runner launch --mode thin --raw-key /WA- --raw-key /DisplayAllFunctions
+```
+
+`launch` и `test` используют общий набор дополнительных параметров запуска: `--c`, `--execute`, `--use-privileged-mode`, `--out` и повторяемый `--raw-key`. Для команды `test` значения `--c` и `--execute` зарезервированы под внутренний runner payload и будут отклонены.
 
 ## Опубликованные MCP-инструменты
 
@@ -122,6 +165,9 @@ tests:
 
 - `IBCMD` требует файловое подключение к информационной базе.
 - `IBCMD` поддерживается как ограниченный backend для сценариев `init`, `build`, `dump`, `extensions`.
+- `load` не поддерживает `IBCMD`, EDT-формат, `.epf` и `.erf`.
+- `load --mode update` зарезервирован CLI-интерфейсом, но текущая реализация его отклоняет; используйте `load` или `merge`.
+- MCP-поверхность намеренно уже CLI: `init`, `extensions`, `load` и `make`/`artifacts` не опубликованы как MCP-инструменты.
 - `init` считает файловую ИБ существующей только по наличию файла `1Cv8.1CD` в каталоге базы и не валидирует содержимое глубже.
 - `init` для EDT считает workspace завершённым только после успешного полного импорта; незавершённый каталог без внутреннего marker-файла будет импортирован повторно.
 - Точечная частичная выгрузка по объектам нативно не реализована для `IBCMD`; запрос `partial` деградирует в инкрементальную выгрузку с предупреждением.
