@@ -87,8 +87,9 @@ tests:
 Запустите первые команды:
 
 ```bash
-./target/release/v8-runner build
+./target/release/v8-runner config init
 ./target/release/v8-runner init
+./target/release/v8-runner build
 ./target/release/v8-runner test yaxunit all
 ./target/release/v8-runner test va
 ./target/release/v8-runner make --output dist/main.cf
@@ -140,11 +141,12 @@ v8-runner artifacts --output dist/tools --source-set tools
 ### Расширенный запуск 1С
 
 ```bash
-v8-runner launch --mode ordinary --execute tool.epf --c DoWork --use-privileged-mode
-v8-runner launch --mode thin --raw-key /WA- --raw-key /DisplayAllFunctions
+v8-runner launch designer
+v8-runner launch ordinary --execute tool.epf --c DoWork --use-privileged-mode
+v8-runner launch thin --raw-key /WA- --raw-key /DisplayAllFunctions
 ```
 
-`launch` и `test` используют общий набор дополнительных параметров запуска: `--c`, `--execute`, `--use-privileged-mode`, `--out` и повторяемый `--raw-key`. Для команды `test` значения `--c` и `--execute` зарезервированы под внутренний runner payload и будут отклонены.
+`launch` также принимает старый вариант `--mode <designer|thin|thick|ordinary>`. `launch` и `test` используют общий набор дополнительных параметров запуска: `--c`, `--execute`, `--use-privileged-mode`, `--out` и повторяемый `--raw-key`. Для команды `test` значения `--c` и `--execute` зарезервированы под внутренний runner payload и будут отклонены.
 
 ## Опубликованные MCP-инструменты
 

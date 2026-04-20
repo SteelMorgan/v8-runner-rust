@@ -896,8 +896,15 @@ fn map_designer_modules_request(args: &DesignerModulesSyntaxArgs) -> DesignerMod
 }
 
 fn map_launch_request(args: &LaunchArgs) -> Result<LaunchRequest, UseCaseError> {
+    let Some(mode) = args.mode.as_deref().or(args.target.as_deref()) else {
+        return Err(UseCaseError::new(
+            UseCaseErrorKind::Validation,
+            "launch mode is required",
+        ));
+    };
+
     Ok(LaunchRequest {
-        mode: match args.mode.as_str() {
+        mode: match mode {
             "designer" => LaunchModeRequest::Designer,
             "thin" => LaunchModeRequest::Thin,
             "thick" => LaunchModeRequest::Thick,
@@ -1449,7 +1456,8 @@ mod tests {
         );
         assert_eq!(
             map_launch_request(&LaunchArgs {
-                mode: "thin".to_owned(),
+                target: None,
+                mode: Some("thin".to_owned()),
                 launch: LaunchOptionsArgs {
                     c: Some("Command".to_owned()),
                     execute: Some("tool.epf".to_owned()),
@@ -1473,7 +1481,8 @@ mod tests {
         );
         assert_eq!(
             map_launch_request(&LaunchArgs {
-                mode: "ordinary".to_owned(),
+                target: Some("ordinary".to_owned()),
+                mode: None,
                 launch: LaunchOptionsArgs::default(),
             })
             .expect("request")
@@ -1482,7 +1491,8 @@ mod tests {
         );
         assert_eq!(
             map_launch_request(&LaunchArgs {
-                mode: "thin".to_owned(),
+                target: None,
+                mode: Some("thin".to_owned()),
                 launch: LaunchOptionsArgs::default(),
             })
             .expect("request")
@@ -1541,7 +1551,8 @@ mod tests {
         })
         .expect_err("dump mode should be rejected");
         let launch_error = map_launch_request(&LaunchArgs {
-            mode: "garbage".to_owned(),
+            target: None,
+            mode: Some("garbage".to_owned()),
             launch: LaunchOptionsArgs::default(),
         })
         .expect_err("launch mode should be rejected");
@@ -1734,7 +1745,8 @@ mod tests {
         let error = execute_command(
             &config,
             &Command::Launch(LaunchArgs {
-                mode: "garbage".to_owned(),
+                target: None,
+                mode: Some("garbage".to_owned()),
                 launch: LaunchOptionsArgs::default(),
             }),
             &presenter,

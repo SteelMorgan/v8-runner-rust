@@ -198,13 +198,14 @@ v8-runner syntax edt [--project <PROJECT>...]
 ## Команда `launch`
 
 ```bash
-v8-runner launch --mode <designer|thin|thick>
+v8-runner launch <designer|thin|thick|ordinary>
 ```
 
 Поведение:
 
 - `designer` запускается через `1cv8`.
 - `thin` запускается через `1cv8c`.
+- старый вариант `v8-runner launch --mode <...>` сохранён для совместимости.
 - `thick` запускается через `1cv8`.
 - Успешный результат включает статус запуска и сведения о процессе, например PID и определённый путь к бинарю.
 

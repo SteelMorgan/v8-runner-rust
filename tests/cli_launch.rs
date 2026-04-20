@@ -166,6 +166,31 @@ fn launch_text_includes_binary_pid_and_cleans_platform_logs() {
 }
 
 #[test]
+fn launch_designer_accepts_positional_mode() {
+    let (_dir, config_path, install_dir, _work_path) = setup_project();
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "launch",
+            "designer",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["data"]["mode"], "designer");
+    assert_eq!(
+        payload["data"]["binary"].as_str().expect("binary"),
+        install_dir.join("bin").join("1cv8").to_string_lossy()
+    );
+}
+
+#[test]
 fn launch_thick_uses_v8_binary() {
     let (_dir, config_path, install_dir, _work_path) = setup_project();
     let output = std::process::Command::cargo_bin("v8-runner")
