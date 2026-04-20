@@ -52,10 +52,10 @@ cargo build --release
 
 ```yaml
 basePath: /path/to/project/sources
-workPath: /tmp/v8-runner/my-project
+workPath: build
 format: DESIGNER
 builder: DESIGNER
-connection: "File=/path/to/infobase"
+connection: "File=build/ib"
 
 source-set:
   - name: main

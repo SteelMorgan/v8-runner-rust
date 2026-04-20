@@ -36,10 +36,10 @@ v8-runner config init --format edt
 
 ```yaml
 basePath: /path/to/project
-workPath: /tmp/v8-runner/project
+workPath: build
 format: EDT
 builder: DESIGNER
-connection: "File=/path/to/ib"
+connection: "File=build/ib"
 
 credentials:
   user: Admin

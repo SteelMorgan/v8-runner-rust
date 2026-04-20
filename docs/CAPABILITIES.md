@@ -2,7 +2,7 @@
 
 Публичный справочник по тому, что `v8-runner` поддерживает на текущий момент.
 
-Последняя факт-проверка: `2026-03-25` по свежей локальной сборке `cargo build`, актуальному CLI `--help`, `src/config/model.rs` и реальной MCP-поверхности запросов в `src/mcp/request.rs` / `src/mcp/service.rs`.
+Последняя факт-проверка: `2026-04-20` по свежей локальной сборке `cargo test`, актуальному CLI `--help`, `src/config/model.rs` и реальной MCP-поверхности запросов в `src/mcp/request.rs` / `src/mcp/service.rs`.
 
 Если этот документ расходится со старыми внутренними заметками в `spec/*`, доверяйте текущему коду и CLI-интерфейсу.
 
@@ -12,6 +12,7 @@
 
 | Сценарий | Поддерживаемые комбинации | Примечания |
 | --- | --- | --- |
+| `config init` | Работает без существующего конфига | Создаёт `v8project.yaml`, ищет Designer/EDT-исходники и пишет `source-set[].type` |
 | `init` | `format=DESIGNER` + `builder=DESIGNER` | Создаёт файловую ИБ через `1cv8 CREATEINFOBASE`, если отсутствует |
 | `init` | `format=DESIGNER` + `builder=IBCMD` | Создаёт файловую ИБ через `ibcmd infobase create`, если отсутствует |
 | `init` | `format=EDT` + `builder=DESIGNER` | Создаёт файловую ИБ и, если workspace отсутствует, импортирует все EDT `source-set` в `workPath/edt-workspace` |
@@ -39,6 +40,20 @@
 | `--clean-before-execution` | Очистить лог-файлы перед запуском команды |
 | `--no-color` | Отключить ANSI-цвета |
 | `--workdir <WORKDIR>` | Переопределить `workPath` из конфига |
+
+## Команда `config init`
+
+```bash
+v8-runner config init [--force] [--file <FILE>] [--connection <CONNECTION>] [--format <auto|designer|edt>] [--builder <DESIGNER|IBCMD>]
+```
+
+Поведение:
+
+- Не требует существующего `v8project.yaml`.
+- По умолчанию создаёт конфиг в текущем каталоге; путь можно переопределить через `--file` или глобальный `--config`.
+- Не перезаписывает существующий файл без `--force`.
+- Ищет Designer-исходники по `Configuration.xml`, EDT-проекты по `.project`.
+- Генерирует `workPath: 'build'`, `connection: 'File=build/ib'` и элементы `source-set` с ключом `type`.
 
 ## Команда `build`
 

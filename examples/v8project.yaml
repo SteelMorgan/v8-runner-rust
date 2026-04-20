@@ -5,7 +5,7 @@
 basePath: /path/to/project/sources
 
 # Working directory for temp files and hash storages
-workPath: /tmp/v8-runner/my-project
+workPath: build
 
 # Source format: DESIGNER or EDT
 format: DESIGNER
@@ -14,7 +14,7 @@ format: DESIGNER
 builder: DESIGNER
 
 # 1C infobase connection string
-connection: "File=/path/to/infobase"
+connection: "File=build/ib"
 
 # Source sets: list of configurations and extensions
 source-set:
@@ -76,7 +76,7 @@ tests:
       smoke:
         feature_path: /path/to/features
 
-# MCP transport defaults (parsed and validated now; transport wiring comes later)
+# MCP transport defaults
 mcp:
   http:
     bind_address: 127.0.0.1:3000

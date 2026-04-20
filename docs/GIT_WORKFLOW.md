@@ -111,7 +111,7 @@
 Последовательность:
 
 1. `build`
-2. при необходимости `launch --mode designer|thin|thick`
+2. при необходимости `launch designer|thin|thick`
 
 Почему:
 
@@ -145,7 +145,7 @@
 
 Последовательность:
 
-1. `test all`
+1. `test yaxunit all`
 
 Почему:
 
@@ -161,7 +161,7 @@
 
 Последовательность:
 
-1. `test module <MODULE_NAME>`
+1. `test yaxunit module <MODULE_NAME>`
 
 Почему:
 
@@ -179,7 +179,7 @@
 Последовательность:
 
 1. `build --full-rebuild`
-2. при необходимости `test all`
+2. при необходимости `test yaxunit all`
 
 Почему:
 
@@ -231,10 +231,11 @@
 
 Последовательность:
 
-1. `init`
-2. `build`
-3. `syntax`
-4. `test all`
+1. `config init`, если в рабочем каталоге ещё нет `v8project.yaml`
+2. `init`
+3. `build`
+4. `syntax`
+5. `test yaxunit all`
 
 Почему:
 
