@@ -175,7 +175,7 @@
 
 - [x] Перевести `scripts/test/ci-rust.sh` на контрактные scope'ы `contract|runtime-locks|happy-path`.
 - [x] Добавить helper entrypoint `scripts/test/ci-happy-path.sh` для одинаковой Linux/Windows цепочки `build -> syntax/check -> test -> package -> deploy-ready artifacts`.
-- [x] Перевести `scripts/test/live-cli-designer.sh` на mandatory profile без `load/apply/launch` и с подтверждением непустых `.cf/.cfe/.epf/.erf`.
+- [x] Перевести `scripts/test/live-cli-fixture.sh` на mandatory profile без `load/apply/launch` и с подтверждением непустых `.cf/.cfe/.epf/.erf`.
 - [x] Убрать fixture-config fallback как неявный "live" default; mandatory designer smoke теперь требует явный `V8TR_DESIGNER_REAL_CONFIG`, а soft-skip разрешается только через hook `V8TR_DESIGNER_ALLOW_MISSING_CONFIG=1`.
 - [x] Зафиксировать в `spec/REAL_ENV_TEST_PLAN.md`, что будущий GitHub Actions matrix на `ubuntu-latest` и `windows-latest` является source of truth, а `live-mcp-http` и `live-cli-ibcmd` остаются non-blocking.
 - [ ] Добавить workflow wiring для установки 1С на GitHub-hosted runner'ах, bootstrap файловой ИБ через `ibsrv`, trusted/fork gating и upload deploy-ready артефактов.

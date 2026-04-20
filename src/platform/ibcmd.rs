@@ -87,7 +87,11 @@ impl<'a> IbcmdDsl<'a> {
         source_dir: &Path,
         extension: Option<&str>,
     ) -> Result<PlatformCommandResult, IbcmdError> {
-        let mut args = vec!["config".to_owned(), "import".to_owned()];
+        let mut args = vec![
+            "infobase".to_owned(),
+            "config".to_owned(),
+            "import".to_owned(),
+        ];
         args.extend(self.base_args());
         if let Some(extension) = extension {
             args.push(format!("--extension={extension}"));
@@ -132,7 +136,12 @@ impl<'a> IbcmdDsl<'a> {
         files: &[PathBuf],
         extension: Option<&str>,
     ) -> Result<PlatformCommandResult, IbcmdError> {
-        let mut args = vec!["config".to_owned(), "import".to_owned(), "files".to_owned()];
+        let mut args = vec![
+            "infobase".to_owned(),
+            "config".to_owned(),
+            "import".to_owned(),
+            "files".to_owned(),
+        ];
         args.extend(self.base_args());
         if let Some(extension) = extension {
             args.push(format!("--extension={extension}"));
@@ -148,11 +157,16 @@ impl<'a> IbcmdDsl<'a> {
         extension: Option<&str>,
         dynamic: DynamicUpdateMode,
     ) -> Result<PlatformCommandResult, IbcmdError> {
-        let mut args = vec!["config".to_owned(), "apply".to_owned()];
+        let mut args = vec![
+            "infobase".to_owned(),
+            "config".to_owned(),
+            "apply".to_owned(),
+        ];
         args.extend(self.base_args());
         if let Some(extension) = extension {
             args.push(format!("--extension={extension}"));
         }
+        args.push("--force".to_owned());
         args.push(format!("--dynamic={}", dynamic.as_str()));
         self.run(&args)
     }
@@ -162,7 +176,11 @@ impl<'a> IbcmdDsl<'a> {
         target_dir: &Path,
         extension: Option<&str>,
     ) -> Result<PlatformCommandResult, IbcmdError> {
-        let mut args = vec!["config".to_owned(), "export".to_owned()];
+        let mut args = vec![
+            "infobase".to_owned(),
+            "config".to_owned(),
+            "export".to_owned(),
+        ];
         args.extend(self.base_args());
         if let Some(extension) = extension {
             args.push(format!("--extension={extension}"));
@@ -177,7 +195,11 @@ impl<'a> IbcmdDsl<'a> {
         target_dir: &Path,
         extension: Option<&str>,
     ) -> Result<PlatformCommandResult, IbcmdError> {
-        let mut args = vec!["config".to_owned(), "export".to_owned()];
+        let mut args = vec![
+            "infobase".to_owned(),
+            "config".to_owned(),
+            "export".to_owned(),
+        ];
         args.extend(self.base_args());
         if let Some(extension) = extension {
             args.push(format!("--extension={extension}"));
@@ -357,6 +379,7 @@ mod tests {
 
         let args = fs::read_to_string(args_log).expect("args");
         assert!(args.contains("apply"));
+        assert!(args.contains("--force"));
         assert!(args.contains("--dynamic=auto"));
     }
 

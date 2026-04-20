@@ -1,4 +1,4 @@
-# Default live smoke config for scripts/test/live-cli-designer.sh.
+# Default live smoke config for scripts/test/live-cli-fixture.sh.
 # The script resolves __ROOT_DIR__, __OUTPUT_ROOT__, and AUTO_PLATFORM automatically.
 
 basePath: __ROOT_DIR__/tests/fixtures/designer

@@ -21,13 +21,13 @@
 
 Ни `load`, ни обратное `apply` в mandatory happy-path не входят.
 
-Default mandatory `live-cli-designer` не запускает интерактивный 1С test runner: в фикстурной ИБ репозитория нет надежного headless раннера, который обязан завершаться на всех ОС. Реальная 1С test-stage остается явным opt-in через `V8TR_DESIGNER_TEST_MODE=va|yaxunit-all|module`.
+Default mandatory `live-cli-fixture` не запускает интерактивный 1С test runner: в фикстурной ИБ репозитория нет надежного headless раннера, который обязан завершаться на всех ОС. Реальная 1С test-stage остается явным opt-in через `V8TR_DESIGNER_TEST_MODE=va|yaxunit-all|module`.
 
 Для `V8TR_DESIGNER_TEST_MODE=va` дополнительно нужны:
 
 - `tests/fixtures/vanessa-automation-single.epf` или `V8TR_VA_EPF`
 - `scripts/test/live-cli-designer.va-params.json` или `V8TR_VA_PARAMS_TEMPLATE`
-- `scripts/test/features/live-cli-designer` или `V8TR_VA_FEATURE_PATH`
+- `scripts/test/features/live-cli-fixture` или `V8TR_VA_FEATURE_PATH`
 
 ## Контуры
 
@@ -62,9 +62,9 @@ V8_RUNNER_CI_SCOPE=happy-path bash scripts/test/ci-rust.sh
 1. `cargo build --locked --bin v8-runner`
 2. `cargo check --locked --all-targets`
 3. `cargo test --locked`
-4. `bash scripts/test/live-cli-designer.sh`
+4. `bash scripts/test/live-cli-fixture.sh`
 
-`scripts/test/live-cli-designer.sh` в mandatory профиле обязан выполнить одинаковые стадии для обеих ОС:
+`scripts/test/live-cli-fixture.sh` в mandatory профиле обязан выполнить одинаковые стадии для обеих ОС:
 
 1. `init/setup infobase`
 2. `build --full-rebuild`
@@ -96,14 +96,14 @@ Mandatory happy-path должен быть blocking только для:
 
 - mandatory designer smoke требует `V8TR_DESIGNER_REAL_CONFIG`
 - workflow может разрешить soft-skip только через `V8TR_DESIGNER_ALLOW_MISSING_CONFIG=1`
-- без этого hook `scripts/test/live-cli-designer.sh` падает, если `V8TR_DESIGNER_REAL_CONFIG` не задан
+- без этого hook `scripts/test/live-cli-fixture.sh` падает, если `V8TR_DESIGNER_REAL_CONFIG` не задан
 
-## Контракт `live-cli-designer`
+## Контракт `live-cli-fixture`
 
 Команда:
 
 ```bash
-bash scripts/test/live-cli-designer.sh
+bash scripts/test/live-cli-fixture.sh
 ```
 
 Обязательные переменные окружения:
@@ -185,6 +185,6 @@ Windows runner contract for this helper layer is explicit:
 
 - В репозитории пока нет новых `.github/workflows/*.yml`; здесь зафиксированы только matrix/contract/TODO hooks.
 - Установка 1С, bootstrap файловой ИБ через `ibsrv`, artifact upload и branch/fork gating остаются внешним workflow wiring.
-- `live-cli-designer` по умолчанию не запускает 1С test-stage; `va`, `yaxunit-all` и `module` остаются opt-in режимами для стендов, где установлен и проверен соответствующий headless runner.
+- `live-cli-fixture` по умолчанию не запускает 1С test-stage; `va`, `yaxunit-all` и `module` остаются opt-in режимами для стендов, где установлен и проверен соответствующий headless runner.
 - `live-mcp-http` и `live-cli-ibcmd` остаются отдельными non-blocking контурами.
 - Mandatory designer smoke requires `V8TR_DESIGNER_REAL_CONFIG`; `V8TR_DESIGNER_ALLOW_MISSING_CONFIG=1` is reserved for fork/non-blocking soft-skip contexts.

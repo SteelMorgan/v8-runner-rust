@@ -47,4 +47,4 @@ stage "package deploy-ready 1C artifacts"
 # run this entrypoint from bash with python3 available in PATH.
 # Mandatory smoke requires V8TR_DESIGNER_REAL_CONFIG; set
 # V8TR_DESIGNER_ALLOW_MISSING_CONFIG=1 only for non-blocking soft-skip runs.
-bash "$ROOT_DIR/scripts/test/live-cli-designer.sh"
+bash "$ROOT_DIR/scripts/test/live-cli-fixture.sh"
