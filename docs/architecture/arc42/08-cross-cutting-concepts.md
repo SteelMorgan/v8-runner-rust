@@ -7,7 +7,9 @@
 - `v8project.yaml` — главный входной контракт.
 - Валидация конфигурации заранее отклоняет неподдерживаемые комбинации.
 - `source-set` — базовая единица оркестрации.
+- Поддержанные `source-set[].type`: `CONFIGURATION`, `EXTENSION`, `EXTERNAL_DATA_PROCESSORS`, `EXTERNAL_REPORTS`.
 - `source-set.name` — stable identity для runtime state, generated directories, diagnostics и selection logic.
+- Для EDT/external source-set validation должна проверять layout, reserved names и пересечение пользовательских paths с generated work targets.
 - Поддержанный config contract описан в ADR-0017; legacy YAML keys не должны становиться публичным контрактом без отдельного решения.
 - `ExecutionContext` дополняет конфигурацию invocation-метаданными: команда, transport, correlation metadata и transport-specific flags.
 
@@ -28,6 +30,8 @@
 - Команды рассматриваются как pipeline из стандартных блоков: validation, resolve target, prepare workspace, platform command, parse output, publish, cleanup and diagnostics.
 - Pipeline composition находится в use case слое; adapters не собирают blocks, а только мапят request/response.
 - Blocks должны обмениваться typed context/input/output и оставлять step/outcome trail для skipped/degraded/failure behavior.
+- `ExecutionStatus::TimedOut` допустим только после terminal-state semantics из ADR-0014; cancellation должен получить stable representation при реализации общей policy.
+- Degraded success, например cleanup warning после успешного publish, не должен маскироваться как полностью чистый success.
 - CLI решает на адаптерной границе, печатать ли `Envelope<T>`, text rendering или top-level error.
 - CLI output дополнительно разделяет human-oriented highlights и agent-oriented minimal signal; это presentation concern, а не use-case behavior.
 - MCP дополнительно разделяет `McpBusinessFailure<T>` и `McpInternalError`, чтобы агент видел предсказуемые business failures, но не получал как business-response ошибки неправильного transport/runtime usage.
@@ -45,6 +49,8 @@
 - Full replacement dump/artifacts сначала пишутся в staging path рядом с target.
 - При замене существующего target старое состояние временно переносится в backup и используется для rollback при publish failure.
 - Cleanup backup/staging после успешной публикации выполняется best-effort и может вернуться как warning.
+- Staging/backup cleanup опирается на metadata sidecar: `tool`, `kind`, `run_id`, `target_path`, `target_identity`, `created_at`.
+- Orphan cleanup не должен удалять malformed, foreign или recent temp paths.
 - Incremental/partial dump остаются non-atomic update modes.
 - Правила staging/backup publication описаны в ADR-0015.
 
@@ -52,10 +58,13 @@
 
 - MCP tool-вызовы используют общие admission-лимиты.
 - CLI/MCP команды, которые работают с `workPath`, сериализуются через workspace lock по canonical `workPath`.
+- Lock sidecar является diagnostic-only metadata; ошибка sidecar не разрешает конкурентное выполнение.
 - MCP admission limits не заменяют workspace lock: они ограничивают общую нагрузку, а не ownership конкретного рабочего каталога.
 - HTTP MCP session capacity является отдельным transport guardrail и не равна execution admission.
-- Timeout/cancellation являются общим CLI/MCP command contract; result возвращается только после terminal state underlying operation.
+- Timeout/cancellation являются общим CLI/MCP целевым command contract; result должен возвращаться только после terminal state underlying operation.
 - Mutating DB operations должны иметь critical phase, где hard kill запрещён по умолчанию.
+- Timeout budget покрывает очередь/admission, подготовку, platform process, log collection, cleanup и result mapping.
+- Queued cancellation может завершиться до запуска work; running cancellation должна идти через controlled interruption flow.
 - HTTP MCP-сессии ограничены по ёмкости и управляются через TTL.
 - Для интерактивного EDT-исполнения заданы отдельные ограничения на startup и command timeout.
 - Серверные отмены и shutdown строятся вокруг cooperative cancellation и bounded drain, а не вокруг мгновенного прерывания любой внешней работы.

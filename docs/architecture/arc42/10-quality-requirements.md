@@ -10,6 +10,8 @@
 - Надёжность
   - ошибки должны быть явными, структурированными и по возможности восстановимыми;
   - деградация должна быть безопасной, даже если часть внешних инструментов работает нестабильно;
+  - операции над одним `workPath` не должны портить runtime state конкурентным выполнением;
+  - full replacement publication не должна оставлять пользовательский target в смешанном состоянии при обычном platform/publish failure;
 - Производительность
   - инкрементальные rebuild и выборочный export должны сокращать лишнюю работу;
   - повторные EDT syntax вызовы по MCP не должны требовать полного cold start каждый раз;
@@ -17,7 +19,8 @@
   - границы модулей должны удерживать адаптеры и оркестрацию разделёнными;
   - архитектурные факты должны быть достаточно явными, чтобы AI-агенты не делали неверных выводов из случайных деталей реализации;
 - Эксплуатационная пригодность
-  - логи, временные артефакты и настройки сессий должны делать сбои диагностируемыми.
+  - логи, временные артефакты и настройки сессий должны делать сбои диагностируемыми;
+  - cancellation/timeout должны сообщать stage, phase, interruption action и diagnostic paths, когда они влияют на выполнение.
 
 ### 10.2 Сценарии качества
 
@@ -31,3 +34,9 @@
 | Q-5 | HTTP MCP достигает лимита по числу сессий | Новые `initialize`-запросы детерминированно отклоняются, а не перегружают ёмкость |
 | Q-6 | AI-агент пытается вызвать CLI-only сценарий как MCP tool | Поверхность transport layer явно не обещает этот сценарий; агент должен опираться на published tool list, а не на наличие похожего use case в коде |
 | Q-7 | Повреждено хранилище change-detection для одного `source-set` | Система переходит к безопасной деградации и не распространяет порчу состояния на остальные source-set |
+| Q-8 | Две команды одновременно используют один canonical `workPath` | Одна команда владеет workspace lock, вторая сериализуется или получает понятную ошибку занятости до dispatch use case |
+| Q-9 | Full dump или artifact export падает до publish | Старый target остаётся неизменённым, а failure указывает staging/log diagnostics |
+| Q-10 | Publish падает после переноса старого target в backup | Система пытается rollback backup -> target и сообщает rollback context, если ручная проверка нужна |
+| Q-11 | Cancellation приходит во время mutating DB critical phase | Команда не выполняет default hard kill, дожидается terminal outcome и сообщает, что cancellation/timeout был requested during critical phase |
+| Q-12 | Новый runner-like сценарий добавляет артефакты, parse step и cleanup | Доменный результат использует `ExecutionOutcome<T>`, step entries, diagnostics/artifacts и не создаёт новый ad hoc shape для тех же данных |
+| Q-13 | Конфигурация содержит unsafe source-set path или unsupported external/backend combination | `config::validate` отклоняет её до platform DSL с user-facing validation error |

@@ -5,14 +5,14 @@
 Система организована в следующие крупные блоки:
 
 - `cli`: разбор аргументов и CLI-специфичное представление результатов.
-- `config`: загрузка и валидация YAML.
-- `use_cases`: транспортно-нейтральная оркестрация и контекст выполнения.
+- `config`: загрузка typed YAML-контракта, defaults и ранняя валидация unsafe combinations.
+- `use_cases`: транспортно-нейтральная оркестрация, контекст выполнения, workspace lock helpers и command-specific flows.
 - `mcp`: MCP DTO, сервисная граница, транспорты, параллелизм и управление сессиями.
-- `platform`: поиск внешних инструментов и выполнение команд против утилит 1С.
+- `platform`: поиск внешних инструментов по версии/маске и выполнение команд против утилит 1С.
 - `change_detection`: инкрементальный анализ и сохранённое файловое состояние.
 - `parsers`: преобразование сырых логов и отчётов в структурированные результаты.
-- `domain` и `output`: общие модели результатов и CLI-примитивы представления.
-- `support`: сквозные утилиты для файловой системы, логирования, temp и ошибок.
+- `domain` и `output`: общие модели результатов, `ExecutionOutcome<T>` и CLI-примитивы представления.
+- `support`: сквозные утилиты для файловой системы, staging/backup publication, логирования, temp и ошибок.
 
 ```mermaid
 flowchart TB
@@ -37,18 +37,20 @@ flowchart TB
 
 - Преобразует аргументы `clap` в транспортно-нейтральные запросы.
 - Отвечает за разбор аргументов и CLI-специфичный рендеринг результатов.
-- Публикует команды `config init`, `init`, `extensions`, `build`, `test`, `dump`, `syntax`, `launch` и `mcp`.
+- Публикует команды `config init`, `init`, `extensions`, `build`, `load`, `test`, `dump`, `make`/`artifacts`, `syntax`, `launch` и `mcp`.
 
 #### `use_cases`
 
-- Центральная оркестрация для `config init`, `init`, `extensions`, `build`, `test`, `dump`, `syntax` и `launch`.
+- Центральная оркестрация для `config init`, `init`, `extensions`, `build`, `load`, `test`, `dump`, `artifacts`, `syntax` и `launch`.
 - Определяет transport-neutral request/result contracts, которые должны оставаться стабильной внутренней опорой для адаптеров и AI-агентов, работающих через эти адаптеры.
+- Предоставляет workspace lock helper и internal unlocked entrypoints для nested flows вроде `test -> build`; public lock boundary остаётся в CLI/MCP adapters.
+- Для runner-like сценариев собирает typed pipeline-like flow и заполняет `ExecutionOutcome<T>` вместо нового ad hoc result shape.
 
 #### `mcp`
 
 - Преобразует MCP tool-запросы в запросы use case.
 - Публикует восемь текущих MCP-инструментов.
-- Обрабатывает stdio- и HTTP-транспорты, трекинг сессий, лимиты параллелизма и общий EDT actor-path.
+- Обрабатывает stdio- и HTTP-транспорты, трекинг сессий, execution admission, HTTP session capacity и общий EDT actor-path.
 - Намеренно не публикует весь CLI: `config init`, `init`, `extensions`, `load` и `make`/`artifacts` остаются CLI-only сценариями.
 
 #### `platform`
@@ -57,6 +59,7 @@ flowchart TB
 - Строит аргументы подключения.
 - Выполняет команды Designer, Enterprise, IBCMD и EDT.
 - Изолирует реальную интеграцию с нестабильной внешней средой: файловой системой, процессами и локально установленными утилитами 1С.
+- Возвращает platform-level results так, чтобы use case анализировали доменный итог, а не собирали сырые process arguments.
 
 #### `change_detection`
 
@@ -71,5 +74,10 @@ flowchart TB
 
 #### `domain` и `output`
 
-- `domain` фиксирует общие структуры результата, используемые как минимум внутри use case и CLI.
+- `domain` фиксирует общие структуры результата, включая `ExecutionOutcome<T>`, `ExecutionStatus`, `ExecutionError`, metrics, artifacts и минимальный `StepResult`.
 - `output` содержит только presentation-layer примитивы и не должен становиться бизнес-слоем.
+
+#### `support`
+
+- Содержит filesystem helpers для atomic-like replacement через staging/backup.
+- Хранит metadata sidecars для staging/backup cleanup и не должен превращать internal temp naming в публичный API.

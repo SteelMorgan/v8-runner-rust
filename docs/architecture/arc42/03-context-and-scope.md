@@ -14,6 +14,7 @@ flowchart LR
     Core --> Work["Состояние workPath\nлоги, temp, хеши"]
     Core --> Utilities["Утилиты 1С\n1cv8 / 1cv8c / ibcmd / 1cedtcli"]
     Utilities --> Infobase["Файловая или серверная ИБ 1С"]
+    Core --> Targets["Публикуемые targets\ndump, cf/cfe, epf/erf"]
     Core --> Reports["Структурированные результаты\nCLI text/json, MCP DTO"]
 ```
 
@@ -25,6 +26,7 @@ flowchart LR
 - вызовы MCP tool по stdio и streamable HTTP;
 - YAML-конфигурация;
 - доступ к файловой системе для исходников проекта и `workPath`;
+- target paths для `dump`, `load` и `artifacts`;
 - запуск дочерних процессов для локальных утилит 1С;
 - файловая или серверная строка подключения к информационной базе 1С.
 
@@ -37,7 +39,9 @@ flowchart LR
 - оркестрация сценариев `build` / `test` / `dump` / `syntax` / `launch` / `init` / `extensions`;
 - парсинг результатов тестов и синтаксических проверок;
 - обработка транспортов и сессий MCP;
-- анализ изменений и управление временными артефактами.
+- анализ изменений и управление временными артефактами;
+- workspace lock, execution admission и HTTP session guardrails;
+- безопасная staging/backup публикация full replacement результатов.
 
 За пределами границы:
 
@@ -45,3 +49,4 @@ flowchart LR
 - внутреннее устройство YaXUnit;
 - планирование процессов операционной системой;
 - установка и жизненный цикл локальных утилит 1С.
+- создание серверного кластера, серверной ИБ, пользователей и прав доступа.
