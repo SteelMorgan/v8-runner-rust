@@ -343,6 +343,37 @@ fn build_ibcmd_full_rebuild_invokes_import_and_apply() {
 }
 
 #[test]
+fn build_ibcmd_passes_credentials_to_import_and_apply() {
+    let (dir, config_path, binary_path, work_path, base_path, calls_log) = setup_ibcmd_project();
+    let config = format!(
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\nconnection: 'File=/tmp/ib'\ncredentials:\n  user: Admin\n  password: secret\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
+        base_path.display(),
+        work_path.display(),
+        binary_path.display(),
+    );
+    fs::write(&config_path, config).expect("config");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "build",
+            "--full-rebuild",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let calls = fs::read_to_string(calls_log).expect("calls");
+    assert!(calls.contains("infobase config import"));
+    assert!(calls.contains("infobase config apply"));
+    assert!(calls.contains("--user=Admin"));
+    assert!(calls.contains("--password=secret"));
+}
+
+#[test]
 fn build_ibcmd_partial_uses_relative_positional_args_and_base_dir() {
     let (_dir, config_path, _binary_path, _work_path, base_path, calls_log) = setup_ibcmd_project();
 

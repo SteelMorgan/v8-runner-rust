@@ -1,8 +1,9 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::config::model::AppConfig;
 use crate::config::validate::{validate, ConfigValidationError};
+use crate::support::path::normalize_windows_verbatim_path;
 
 const DEFAULT_CONFIG_FILE_NAME: &str = "v8project.yaml";
 
@@ -26,12 +27,16 @@ pub fn load_config(
     workdir_override: Option<&str>,
 ) -> Result<AppConfig, ConfigLoadError> {
     let path = resolve_config_path(config_path)?;
+    let path = normalize_windows_verbatim_path(&std::fs::canonicalize(&path)?);
     let content = std::fs::read_to_string(&path)?;
     let mut config: AppConfig = serde_yaml::from_str(&content)?;
     normalize_config_paths(&mut config, path.parent().unwrap_or_else(|| Path::new(".")));
 
     if let Some(wd) = workdir_override {
-        config.work_path = Path::new(wd).to_path_buf();
+        config.work_path = normalize_optional_path(
+            Path::new(wd),
+            path.parent().unwrap_or_else(|| Path::new(".")),
+        );
     }
 
     validate(&config)?;
@@ -39,6 +44,10 @@ pub fn load_config(
 }
 
 fn normalize_config_paths(config: &mut AppConfig, config_dir: &Path) {
+    config.base_path = normalize_optional_path(&config.base_path, config_dir);
+    config.work_path = normalize_optional_path(&config.work_path, config_dir);
+    config.connection = normalize_connection_string(&config.connection, config_dir);
+
     let va = &mut config.tests.va;
     if let Some(path) = va.epf_path.as_mut() {
         *path = normalize_optional_path(path, config_dir);
@@ -53,15 +62,132 @@ fn normalize_config_paths(config: &mut AppConfig, config_dir: &Path) {
     }
 }
 
-fn normalize_optional_path(path: &Path, config_dir: &Path) -> std::path::PathBuf {
-    if path.is_absolute() {
+fn normalize_optional_path(path: &Path, config_dir: &Path) -> PathBuf {
+    let normalized = if path.is_absolute() {
         path.to_path_buf()
     } else {
         config_dir.join(path)
+    };
+    normalize_windows_verbatim_path(&normalized)
+}
+
+fn normalize_connection_string(connection: &str, config_dir: &Path) -> String {
+    let trimmed = connection.trim();
+    if trimmed.starts_with('/') || trimmed.starts_with('-') {
+        return normalize_raw_connection_args(trimmed, config_dir);
+    }
+
+    let mut changed = false;
+    let parts: Vec<_> = connection
+        .split(';')
+        .map(|part| {
+            let part = part.trim();
+            let lower = part.to_ascii_lowercase();
+            if lower.starts_with("file=") {
+                let normalized = normalize_connection_file_path(&part[5..], config_dir);
+                changed |= normalized != part[5..];
+                format!("{}{}", &part[..5], normalized)
+            } else {
+                part.to_owned()
+            }
+        })
+        .collect();
+
+    if changed {
+        parts.join(";")
+    } else {
+        connection.to_owned()
     }
 }
 
-fn resolve_config_path(config_path: Option<&str>) -> Result<std::path::PathBuf, ConfigLoadError> {
+fn normalize_raw_connection_args(connection: &str, config_dir: &Path) -> String {
+    let mut args = split_arg_string(connection);
+    let mut changed = false;
+    let mut index = 0;
+    while index + 1 < args.len() {
+        if args[index].eq_ignore_ascii_case("/f") || args[index].eq_ignore_ascii_case("-f") {
+            let normalized = normalize_connection_file_path(&args[index + 1], config_dir);
+            changed |= normalized != args[index + 1];
+            args[index + 1] = normalized;
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+
+    if changed {
+        join_arg_string(&args)
+    } else {
+        connection.to_owned()
+    }
+}
+
+fn normalize_connection_file_path(path: &str, config_dir: &Path) -> String {
+    let path = path.trim();
+    let path = strip_matching_quotes(path).unwrap_or(path);
+    let path = Path::new(path);
+    let normalized = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        config_dir.join(path)
+    };
+    normalize_windows_verbatim_path(&normalized)
+        .display()
+        .to_string()
+}
+
+fn strip_matching_quotes(value: &str) -> Option<&str> {
+    if value.len() < 2 {
+        return None;
+    }
+
+    let quote = value.as_bytes()[0];
+    let last = *value.as_bytes().last()?;
+    if (quote == b'\'' || quote == b'"') && quote == last {
+        Some(&value[1..value.len() - 1])
+    } else {
+        None
+    }
+}
+
+fn split_arg_string(raw: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+
+    for ch in raw.chars() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            ch if ch.is_whitespace() && !in_quotes => {
+                if !current.is_empty() {
+                    args.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if !current.is_empty() {
+        args.push(current);
+    }
+
+    args
+}
+
+fn join_arg_string(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| {
+            if arg.is_empty() || arg.chars().any(char::is_whitespace) {
+                format!("\"{}\"", arg.replace('"', "\\\""))
+            } else {
+                arg.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn resolve_config_path(config_path: Option<&str>) -> Result<PathBuf, ConfigLoadError> {
     if let Some(p) = config_path {
         let path = Path::new(p);
         if !path.exists() {
@@ -203,6 +329,50 @@ mod tests {
                 .and_then(|profile| profile.feature_path.clone())
                 .expect("feature path"),
             config_dir.join("features")
+        );
+    }
+
+    #[test]
+    fn load_config_absolutizes_relative_core_paths_from_config_dir() {
+        let dir = tempdir().expect("tempdir");
+        let config_dir = dir.path().join("project");
+        let base = config_dir.join("sources");
+        std::fs::create_dir_all(&base).expect("base dir");
+        let config_path = config_dir.join("v8project.yaml");
+        std::fs::write(
+            &config_path,
+            "basePath: sources\nworkPath: build\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: \"File=build/ib\"\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
+        )
+        .expect("write config");
+
+        let config = load_config(config_path.to_str(), None).expect("load config");
+
+        assert_eq!(config.base_path, base);
+        assert_eq!(config.work_path, config_dir.join("build"));
+        assert_eq!(
+            config.connection,
+            format!("File={}", config_dir.join("build/ib").display())
+        );
+    }
+
+    #[test]
+    fn load_config_absolutizes_raw_file_connection_from_config_dir() {
+        let dir = tempdir().expect("tempdir");
+        let config_dir = dir.path().join("project");
+        let base = config_dir.join("sources");
+        std::fs::create_dir_all(&base).expect("base dir");
+        let config_path = config_dir.join("v8project.yaml");
+        std::fs::write(
+            &config_path,
+            "basePath: sources\nworkPath: build\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: '/F \"build/my ib\"'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
+        )
+        .expect("write config");
+
+        let config = load_config(config_path.to_str(), None).expect("load config");
+
+        assert_eq!(
+            config.v8_connection().file_path(),
+            Some(config_dir.join("build/my ib").to_string_lossy().as_ref())
         );
     }
 

@@ -93,12 +93,30 @@ pub fn is_filesystem_root(path: &Path) -> bool {
     path.parent().is_none()
 }
 
+pub fn strip_windows_verbatim_prefix(value: &str) -> String {
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+
+    if let Some(rest) = value.strip_prefix(r"\\?\") {
+        return rest.to_owned();
+    }
+
+    value.to_owned()
+}
+
+pub fn normalize_windows_verbatim_path(path: &Path) -> PathBuf {
+    PathBuf::from(strip_windows_verbatim_prefix(&path.display().to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        hashed_lock_path, is_filesystem_root, nearest_existing_canonical_path, stable_path_identity,
+        hashed_lock_path, is_filesystem_root, nearest_existing_canonical_path,
+        normalize_windows_verbatim_path, stable_path_identity, strip_windows_verbatim_prefix,
     };
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     #[test]
@@ -145,5 +163,28 @@ mod tests {
     fn filesystem_root_detection_matches_non_root_paths() {
         let dir = tempdir().expect("tempdir");
         assert!(!is_filesystem_root(dir.path()));
+    }
+
+    #[test]
+    fn strips_windows_verbatim_drive_prefix() {
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\E:\Git_reps\MDM\src\cf"),
+            r"E:\Git_reps\MDM\src\cf"
+        );
+    }
+
+    #[test]
+    fn strips_windows_verbatim_unc_prefix() {
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\UNC\server\share\ib"),
+            r"\\server\share\ib"
+        );
+    }
+
+    #[test]
+    fn normalize_windows_verbatim_path_leaves_regular_paths_unchanged() {
+        let path = PathBuf::from("/tmp/project");
+
+        assert_eq!(normalize_windows_verbatim_path(&path), path);
     }
 }
