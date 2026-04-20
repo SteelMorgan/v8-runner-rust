@@ -8,6 +8,30 @@
 - отделить реально работающие настройки от задела на будущее;
 - явно ответить на вопросы про интерактивный EDT и дополнительные параметры запуска клиента 1С.
 
+## Автонастройка
+
+Создать стартовый конфиг можно командой:
+
+```bash
+v8-runner config init
+```
+
+Команда работает без существующего `v8project.yaml`, создаёт файл в текущем каталоге и заполняет `source-set` найденными исходниками:
+
+- Designer-исходники находятся по файлу `Configuration.xml`;
+- расширения Designer распознаются по маркерам расширения внутри `Configuration.xml`;
+- EDT-проекты находятся по файлу `.project`;
+- существующий файл не перезаписывается без `--force`.
+
+Полезные параметры:
+
+```bash
+v8-runner config init --connection "File=/path/to/ib"
+v8-runner --config custom.yaml config init
+v8-runner config init --file custom.yaml --force
+v8-runner config init --format edt
+```
+
 ## Полный пример
 
 ```yaml
@@ -23,10 +47,10 @@ credentials:
 
 source-set:
   - name: main
-    purpose: CONFIGURATION
+    type: CONFIGURATION
     path: main
   - name: ext
-    purpose: EXTENSION
+    type: EXTENSION
     path: ext
 
 build:
@@ -121,7 +145,7 @@ tests:
 Каждый элемент:
 
 - `name`: логическое имя набора исходников
-- `purpose`: `CONFIGURATION` или `EXTENSION`
+- `type`: `CONFIGURATION`, `EXTENSION`, `EXTERNAL_DATA_PROCESSORS` или `EXTERNAL_REPORTS`
 - `path`: путь к исходникам
 
 Поведение:

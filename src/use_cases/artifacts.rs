@@ -693,7 +693,7 @@ fn resolve_target(
             };
             if source_set.purpose != expected_purpose {
                 return Err(AppError::Validation(format!(
-                    "source-set '{source_set_name}' has incompatible purpose for requested external export"
+                    "source-set '{source_set_name}' has incompatible type for requested external export"
                 )));
             }
             (source_set, None)

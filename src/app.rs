@@ -1,10 +1,14 @@
 use clap::Parser;
 use tracing::{debug, error};
 
-use crate::cli::args::{Cli, Command, McpCommand, McpServeTransport};
+use crate::cli::args::{
+    Cli, Command, ConfigCommand, ConfigInitArgs, McpCommand, McpServeTransport,
+};
 use crate::cli::execute;
 use crate::config::loader::load_config;
+use crate::output::json::Envelope;
 use crate::output::presenter::Presenter;
+use crate::use_cases::config_init::{ConfigBuilderRequest, ConfigFormatRequest, ConfigInitRequest};
 
 pub fn run() -> i32 {
     let cli = Cli::parse();
@@ -19,6 +23,10 @@ pub fn run() -> i32 {
         crate::output::presenter::ColorMode::Enabled
     };
     let presenter = Presenter::new(cli.output.clone(), color_mode);
+
+    if let Command::Config(args) = &cli.command {
+        return run_config_command(&cli, args, &presenter);
+    }
 
     let config = match load_config(cli.config.as_deref(), cli.workdir.as_deref()) {
         Ok(c) => c,
@@ -54,6 +62,7 @@ pub fn run() -> i32 {
 
     let result = match &cli.command {
         Command::Init
+        | Command::Config(_)
         | Command::Extensions(_)
         | Command::Build(_)
         | Command::Load(_)
@@ -86,7 +95,85 @@ pub fn run() -> i32 {
 }
 
 fn command_name(command: &Command) -> &'static str {
-    execute::command_name(command).as_str()
+    match command {
+        Command::Config(_) => "config",
+        _ => execute::command_name(command).as_str(),
+    }
+}
+
+fn run_config_command(
+    cli: &Cli,
+    args: &crate::cli::args::ConfigArgs,
+    presenter: &Presenter,
+) -> i32 {
+    match &args.command {
+        ConfigCommand::Init(init_args) => run_config_init(cli, init_args, presenter),
+    }
+}
+
+fn run_config_init(cli: &Cli, args: &ConfigInitArgs, presenter: &Presenter) -> i32 {
+    let project_dir = match std::env::current_dir() {
+        Ok(path) => path,
+        Err(error) => {
+            presenter.print_error(&format!("failed to resolve current directory: {error}"));
+            return crate::output::exit_codes::RUNTIME_ERROR;
+        }
+    };
+    let output_path = args
+        .file
+        .as_deref()
+        .or(cli.config.as_deref())
+        .unwrap_or("v8project.yaml");
+
+    let request = ConfigInitRequest {
+        project_dir,
+        output_path: output_path.into(),
+        force: args.force,
+        connection: args.connection.clone(),
+        format: map_config_format(&args.format),
+        builder: map_config_builder(&args.builder),
+    };
+
+    match crate::use_cases::config_init::execute(&request) {
+        Ok(result) => {
+            if presenter.is_json() {
+                presenter.print_envelope(&Envelope::ok("config init", result.duration_ms, result));
+            } else {
+                presenter.print_ok(&format!("Config written: {}", result.path));
+                for source_set in &result.source_sets {
+                    presenter.print_success_item(&format!(
+                        "{}: {} ({})",
+                        source_set.name, source_set.path, source_set.source_type
+                    ));
+                }
+            }
+            0
+        }
+        Err(error) => {
+            presenter.print_error(&error.to_string());
+            match error {
+                crate::support::error::AppError::Validation(_) => {
+                    crate::output::exit_codes::VALIDATION_ERROR
+                }
+                _ => crate::output::exit_codes::RUNTIME_ERROR,
+            }
+        }
+    }
+}
+
+fn map_config_format(value: &str) -> ConfigFormatRequest {
+    match value {
+        "designer" | "DESIGNER" => ConfigFormatRequest::Designer,
+        "edt" | "EDT" => ConfigFormatRequest::Edt,
+        _ => ConfigFormatRequest::Auto,
+    }
+}
+
+fn map_config_builder(value: &str) -> ConfigBuilderRequest {
+    match value {
+        "ibcmd" | "IBCMD" => ConfigBuilderRequest::Ibcmd,
+        _ => ConfigBuilderRequest::Designer,
+    }
 }
 
 fn run_mcp_command(cli: &Cli, args: &crate::cli::args::McpArgs) -> i32 {

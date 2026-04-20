@@ -92,7 +92,8 @@ pub enum BuilderBackend {
 pub struct SourceSetConfig {
     pub name: String,
 
-    /// CONFIGURATION, EXTENSION, EXTERNAL_DATA_PROCESSORS, or EXTERNAL_REPORTS
+    /// YAML `type`: CONFIGURATION, EXTENSION, EXTERNAL_DATA_PROCESSORS, or EXTERNAL_REPORTS.
+    #[serde(rename = "type", alias = "purpose")]
     pub purpose: SourceSetPurpose,
 
     /// Path relative to basePath (for DESIGNER) or EDT project path

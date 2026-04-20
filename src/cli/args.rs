@@ -34,6 +34,8 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Create or update v8project.yaml from detected sources
+    Config(ConfigArgs),
     /// Initialize infobase and EDT workspace
     Init,
     /// Update extension properties in infobase
@@ -55,6 +57,41 @@ pub enum Command {
     Launch(LaunchArgs),
     /// Run Model Context Protocol transports
     Mcp(McpArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ConfigArgs {
+    #[command(subcommand)]
+    pub command: ConfigCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConfigCommand {
+    /// Create a config file in the current directory and add detected sources
+    Init(ConfigInitArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ConfigInitArgs {
+    /// Overwrite an existing config file
+    #[arg(long)]
+    pub force: bool,
+
+    /// Output file path. Defaults to --config or ./v8project.yaml
+    #[arg(long)]
+    pub file: Option<String>,
+
+    /// Infobase connection string written to config
+    #[arg(long)]
+    pub connection: Option<String>,
+
+    /// Source format to write
+    #[arg(long, default_value = "auto", value_parser = ["auto", "designer", "edt"])]
+    pub format: String,
+
+    /// Builder backend to write
+    #[arg(long, default_value = "DESIGNER", value_parser = ["DESIGNER", "IBCMD", "designer", "ibcmd"])]
+    pub builder: String,
 }
 
 #[derive(Args, Debug)]

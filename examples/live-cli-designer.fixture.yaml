@@ -9,16 +9,16 @@ connection: "File=/abs/path/to/dedicated/file-infobase"
 
 source-set:
   - name: configuration
-    purpose: CONFIGURATION
+    type: CONFIGURATION
     path: configuration
   - name: Расширение1
-    purpose: EXTENSION
+    type: EXTENSION
     path: extension
   - name: external-processor
-    purpose: EXTERNAL_DATA_PROCESSORS
+    type: EXTERNAL_DATA_PROCESSORS
     path: external/processor
   - name: external-report
-    purpose: EXTERNAL_REPORTS
+    type: EXTERNAL_REPORTS
     path: external/report
 
 tools:

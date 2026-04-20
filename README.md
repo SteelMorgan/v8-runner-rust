@@ -11,7 +11,7 @@
 
 ## Зачем использовать
 
-- Один инструмент для `init`, `extensions`, `build`, `load`, `test`, `dump`, `make`/`artifacts`, `syntax`, `launch` и доступа по MCP.
+- Один инструмент для `config init`, `init`, `extensions`, `build`, `load`, `test`, `dump`, `make`/`artifacts`, `syntax`, `launch` и доступа по MCP.
 - Инкрементальные сценарии вместо полной пересборки на каждое изменение.
 - Удобная работа и с основной конфигурацией, и с расширениями.
 - Структурированные результаты, понятные и человеку, и MCP-клиенту.
@@ -20,6 +20,7 @@
 ## Что умеет
 
 - `build`: загружать изменённые исходники в ИБ, выбирая частичное или полное выполнение в зависимости от формата исходников и бэкенда.
+- `config init`: создавать `v8project.yaml` в текущем каталоге и добавлять найденные исходники в `source-set`.
 - `init`: первично создавать файловую ИБ и, для EDT-проектов, инициализировать workspace импортом всех настроенных `source-set`.
 - `extensions`: обновлять свойства расширений в информационной базе по настроенным `source-set`.
 - `test yaxunit`: сначала выполнять `build`, затем запускать все YaXUnit-тесты или один модуль.
@@ -39,7 +40,15 @@
 cargo build --release
 ```
 
-Создайте минимальный `v8project.yaml`:
+Создайте `v8project.yaml` автоматически:
+
+```bash
+./target/release/v8-runner config init
+```
+
+Команда сканирует текущий каталог, ищет Designer-исходники по `Configuration.xml`, EDT-проекты по `.project`, добавляет найденные источники в `source-set` и не перезаписывает существующий файл без `--force`.
+
+Или создайте минимальный `v8project.yaml` вручную:
 
 ```yaml
 basePath: /path/to/project/sources
@@ -50,13 +59,13 @@ connection: "File=/path/to/infobase"
 
 source-set:
   - name: main
-    purpose: CONFIGURATION
+    type: CONFIGURATION
     path: .
   # - name: ext
-  #   purpose: EXTENSION
+  #   type: EXTENSION
   #   path: ext
   # - name: tools
-  #   purpose: EXTERNAL_DATA_PROCESSORS
+  #   type: EXTERNAL_DATA_PROCESSORS
   #   path: tools
 
 tests:
@@ -93,6 +102,7 @@ tests:
 
 | Сценарий | Текущая поддержка |
 | --- | --- |
+| `config init` | Создание `v8project.yaml` в текущем каталоге; автопоиск Designer/EDT source-set; `--force` для перезаписи |
 | `init` | `format=DESIGNER` с `builder=DESIGNER` или `IBCMD`; `format=EDT` с `builder=DESIGNER` |
 | `extensions` | Обновление свойств расширений для EDT и Designer-проектов по настроенным extension `source-set`; только файловая ИБ |
 | `build` | `format=DESIGNER` с `builder=DESIGNER` или `IBCMD`; `format=EDT` с `builder=DESIGNER` |
@@ -125,7 +135,7 @@ v8-runner make --output dist/sales.cfe --source-set ext-sales --extension SalesA
 v8-runner artifacts --output dist/tools --source-set tools
 ```
 
-`make` и видимый alias `artifacts` используют одну команду. Тип экспорта выводится из `--output` и выбранного `source-set`: `.cf` для основной конфигурации, `.cfe` для расширений, каталог публикации для внешних обработок и отчётов. Для внешних артефактов `source-set` должен иметь `purpose=EXTERNAL_DATA_PROCESSORS` или `purpose=EXTERNAL_REPORTS`.
+`make` и видимый alias `artifacts` используют одну команду. Тип экспорта выводится из `--output` и выбранного `source-set`: `.cf` для основной конфигурации, `.cfe` для расширений, каталог публикации для внешних обработок и отчётов. Для внешних артефактов `source-set` должен иметь `type=EXTERNAL_DATA_PROCESSORS` или `type=EXTERNAL_REPORTS`.
 
 ### Расширенный запуск 1С
 

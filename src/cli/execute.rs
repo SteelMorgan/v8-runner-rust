@@ -56,6 +56,7 @@ pub fn execute_command(
     clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
     match command {
+        Command::Config(_) => unreachable!("config commands are handled outside cli::execute"),
         Command::Init => execute_init(config, presenter, clean_before_execution),
         Command::Extensions(args) => {
             execute_extensions(config, args, presenter, clean_before_execution)
@@ -76,6 +77,7 @@ pub fn execute_command(
 /// Returns the canonical command identifier for a parsed CLI command.
 pub fn command_name(command: &Command) -> CommandName {
     match command {
+        Command::Config(_) => unreachable!("config commands do not map to execution use cases"),
         Command::Init => CommandName::Init,
         Command::Extensions(_) => CommandName::Extensions,
         Command::Build(_) => CommandName::Build,

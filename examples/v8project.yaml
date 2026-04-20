@@ -19,12 +19,12 @@ connection: "File=/path/to/infobase"
 # Source sets: list of configurations and extensions
 source-set:
   - name: main
-    purpose: CONFIGURATION
+    type: CONFIGURATION
     path: .  # relative to basePath
 
   # Uncomment to add an extension:
   # - name: my-extension
-  #   purpose: EXTENSION
+  #   type: EXTENSION
   #   path: extensions/my-extension
 
 # Build pipeline settings (optional)
