@@ -33,24 +33,28 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
+            make_task: build-release-linux-musl
             artifact_name: v8-runner-linux-x86_64-musl
             bin_suffix: ""
             archive_ext: tar.gz
             linux_deps: musl-tools
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            make_task: build-release-windows-64
             artifact_name: v8-runner-windows-x86_64
             bin_suffix: ".exe"
             archive_ext: zip
             linux_deps: ""
           - os: macos-15-intel
             target: x86_64-apple-darwin
+            make_task: build-release-macos-x64
             artifact_name: v8-runner-macos-x86_64
             bin_suffix: ""
             archive_ext: tar.gz
             linux_deps: ""
           - os: macos-latest
             target: aarch64-apple-darwin
+            make_task: build-release-macos-arm64
             artifact_name: v8-runner-macos-aarch64
             bin_suffix: ""
             archive_ext: tar.gz
@@ -76,8 +80,11 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - name: Install cargo-make
+        uses: taiki-e/install-action@cargo-make
+
       - name: Build release binary
-        run: cargo build --locked --release --target "${{ matrix.target }}"
+        run: cargo make "${{ matrix.make_task }}"
 
       - name: Package portable artifact
         shell: bash

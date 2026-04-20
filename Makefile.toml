@@ -12,6 +12,7 @@ args = [
   "target",
   "add",
   "x86_64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
   "x86_64-pc-windows-gnu",
   "x86_64-apple-darwin",
   "aarch64-apple-darwin",
@@ -24,6 +25,7 @@ args = [
   "add",
   "x86_64-pc-windows-msvc",
   "x86_64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
   "x86_64-apple-darwin",
   "aarch64-apple-darwin",
 ]
@@ -36,6 +38,7 @@ args = [
   "x86_64-apple-darwin",
   "aarch64-apple-darwin",
   "x86_64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
   "x86_64-pc-windows-gnu",
 ]
 
@@ -57,6 +60,10 @@ Remove-Item -LiteralPath $env:OUT_DIR -Force -Recurse -ErrorAction SilentlyConti
 [tasks.build-release-linux-64]
 command = "cargo"
 args = ["build", "--release", "--locked", "--bin", "${BINARY_NAME}", "--target", "x86_64-unknown-linux-gnu"]
+
+[tasks.build-release-linux-musl]
+command = "cargo"
+args = ["build", "--release", "--locked", "--bin", "${BINARY_NAME}", "--target", "x86_64-unknown-linux-musl"]
 
 [tasks.build-release-windows-64.linux]
 command = "cargo"
@@ -128,6 +135,7 @@ copy_artifact() {
 }
 
 copy_artifact "target/x86_64-unknown-linux-gnu/release/$BINARY_NAME" "$BINARY_NAME-linux-x86_64-$VERSION"
+copy_artifact "target/x86_64-unknown-linux-musl/release/$BINARY_NAME" "$BINARY_NAME-linux-x86_64-musl-$VERSION"
 copy_artifact "target/x86_64-pc-windows-gnu/release/$BINARY_NAME.exe" "$BINARY_NAME-windows-x86_64-$VERSION.exe"
 copy_artifact "target/x86_64-apple-darwin/release/$BINARY_NAME" "$BINARY_NAME-macos-x86_64-$VERSION"
 copy_artifact "target/aarch64-apple-darwin/release/$BINARY_NAME" "$BINARY_NAME-macos-aarch64-$VERSION"
@@ -152,6 +160,7 @@ copy_artifact() {
 }
 
 copy_artifact "target/x86_64-unknown-linux-gnu/release/$BINARY_NAME" "$BINARY_NAME-linux-x86_64-$VERSION"
+copy_artifact "target/x86_64-unknown-linux-musl/release/$BINARY_NAME" "$BINARY_NAME-linux-x86_64-musl-$VERSION"
 copy_artifact "target/x86_64-pc-windows-gnu/release/$BINARY_NAME.exe" "$BINARY_NAME-windows-x86_64-$VERSION.exe"
 copy_artifact "target/x86_64-apple-darwin/release/$BINARY_NAME" "$BINARY_NAME-macos-x86_64-$VERSION"
 copy_artifact "target/aarch64-apple-darwin/release/$BINARY_NAME" "$BINARY_NAME-macos-aarch64-$VERSION"
@@ -178,6 +187,7 @@ function Copy-Artifact {
 }
 
 Copy-Artifact "target/x86_64-unknown-linux-gnu/release/$env:BINARY_NAME" "$env:BINARY_NAME-linux-x86_64-$Version"
+Copy-Artifact "target/x86_64-unknown-linux-musl/release/$env:BINARY_NAME" "$env:BINARY_NAME-linux-x86_64-musl-$Version"
 Copy-Artifact "target/x86_64-pc-windows-msvc/release/$env:BINARY_NAME.exe" "$env:BINARY_NAME-windows-x86_64-$Version.exe"
 Copy-Artifact "target/x86_64-apple-darwin/release/$env:BINARY_NAME" "$env:BINARY_NAME-macos-x86_64-$Version"
 Copy-Artifact "target/aarch64-apple-darwin/release/$env:BINARY_NAME" "$env:BINARY_NAME-macos-aarch64-$Version"
