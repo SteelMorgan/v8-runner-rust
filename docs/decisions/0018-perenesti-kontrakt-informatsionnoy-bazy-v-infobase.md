@@ -2,7 +2,7 @@
 
 - Статус: `accepted`
 - Дата: `2026-04-21`
-- Связанные решения: [ADR-0003](0003-podderzhivat-servernye-ib-dlya-vseh-instrumentov.md), [ADR-0017](0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md)
+- Связанные решения: [ADR-0003](0003-podderzhivat-servernye-ib-dlya-vseh-instrumentov.md), [ADR-0017](0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md), [ADR-0019](0019-sozdavat-servernuyu-infobazu-cherez-ibcmd-pri-init-pri-otsutstvii.md)
 
 ## Контекст
 
@@ -74,15 +74,15 @@ Mapping для платформенных adapters:
    - `infobase.dbms.password` -> `--database-password`
 5. `IBCMD` получает `infobase.user/password` как `--user` и `--password`.
 
-Для `init` server connection по-прежнему означает "использовать уже созданную серверную ИБ": шаг создания ИБ пропускается, а EDT workspace при `format=EDT` продолжает инициализироваться.
-Создание серверной БД через `ibcmd infobase create --create-database` не входит в это решение и требует отдельного explicit config field или ADR.
+Этот ADR сам по себе фиксирует config contract для уже существующей или создаваемой server-based ИБ, но не определяет `init` provisioning policy.
+Использование `ibcmd infobase create --create-database` как ensure-step для server-based ИБ в `init` вынесено в отдельный [ADR-0019](0019-sozdavat-servernuyu-infobazu-cherez-ibcmd-pri-init-pri-otsutstvii.md).
 
 ## Неграницы (Non-goals)
 
 1. Не поддерживать старые `connection` и `credentials` как legacy aliases.
 2. Не выводить DBMS-параметры из строки `Srvr=...;Ref=...`.
 3. Не добавлять `tools.ibcmd.database`, потому что DBMS contract относится к информационной базе, а не к binary discovery.
-4. Не реализовывать автоматическое создание серверной базы в `init`.
+4. Не определять внутри этого ADR политику автоматического создания server-based ИБ в `init`; она вынесена в ADR-0019.
 5. Не менять разделение CLI и MCP public surfaces.
 
 ## Последствия

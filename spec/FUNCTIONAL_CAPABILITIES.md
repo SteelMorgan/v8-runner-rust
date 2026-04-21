@@ -132,14 +132,15 @@
    - задан ли хотя бы один `CONFIGURATION` в `source-set`;
    - валидна ли строка подключения;
    - допустимы ли `format`, `builder` и прочие опции.
-4. Если проект в формате `EDT` и включен `app.tools.edt-cli.auto-start`, запускается фоновый старт `1cedtcli`.
+4. Если включён MCP server, `interactive_mode=true` и `app.tools.edt-cli.auto-start=true`, запускается фоновый prewarm shared `1cedtcli`.
 
 ### 4.2. Фоновая работа EDT CLI
 
-Если включен автозапуск EDT CLI:
+Если включен автозапуск EDT CLI для MCP host:
 
 - поднимается отдельный интерактивный процесс `1cedtcli`;
 - процесс инициализируется до появления prompt `1C:EDT>`;
+- в short-lived CLI процессе eager prewarm не выполняется: EDT стартует лениво при первом EDT-вызове.
 - сохраняется ссылка на готовый `InteractiveProcessExecutor`;
 - запускается фоновый монитор процесса;
 - монитор раз в 5 секунд проверяет, что процесс жив и отвечает;

@@ -84,7 +84,7 @@ Known gaps / follow-up:
 1. `replace_dir_atomically` использует `.dump-backup-*` prefix даже для artifacts directory publication; prefix нужно сделать neutral или caller-specific, либо оставить явно internal.
 2. External artifacts staging directory должен иметь metadata sidecar на cleanup unit, а не только на staged files, чтобы orphan cleanup мог удалить stale staging directory.
 3. Publication phase should be marked as `CriticalNonAbortable` после реализации общей execution policy из ADR-0014.
-4. Result payloads должны сохранить cleanup warning/degraded message для agent-oriented output.
+4. Result payloads должны сохранить cleanup warning/degraded message в едином CLI output contract и structured result.
 
 При дальнейших изменениях:
 

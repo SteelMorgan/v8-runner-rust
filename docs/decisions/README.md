@@ -13,7 +13,7 @@
 - [ADR-0007: Свести EDT execution к one-shot и shared interactive режимам](0007-vydelit-otdelnyy-pereklyuchatel-dlya-shared-edt.md) — `accepted`, `2026-04-20`
 - [ADR-0008: Держать платформенные backend DSL отдельно от orchestration](0008-derzhat-platformennye-backend-dsl-otdelno-ot-orchestration.md) — `accepted`, `2026-04-20`
 - [ADR-0009: Разделить structured business failures и transport/runtime failures](0009-razdelit-business-i-transport-runtime-failures.md) — `accepted`, `2026-04-20`
-- [ADR-0010: Разделить CLI output для человека и AI-агента](0010-razdelit-cli-output-dlya-cheloveka-i-ai-agenta.md) — `accepted`, `2026-04-20`
+- [ADR-0010: Единый CLI output для человека и AI-агента](0010-razdelit-cli-output-dlya-cheloveka-i-ai-agenta.md) — `accepted`, `2026-04-20`
 - [ADR-0011: Эксклюзивное владение `workPath` на время команды](0011-eksklyuzivnoe-vladenie-workpath-na-vremya-komandy.md) — `accepted`, `2026-04-20`
 - [ADR-0012: On-demand change detection и файловая partial-load стратегия](0012-on-demand-change-detection-i-faylovaya-partial-load-strategiya.md) — `accepted`, `2026-04-20`
 - [ADR-0013: MCP execution admission, timeout/cancellation routing и HTTP session capacity](0013-mcp-execution-admission-timeout-cancellation-routing-i-http-session-capacity.md) — `accepted`, `2026-04-20`
@@ -22,6 +22,7 @@
 - [ADR-0016: Единый `ExecutionOutcome` и pipeline steps для runner-like сценариев](0016-edinyy-executionoutcome-i-pipeline-steps-dlya-runner-like-stsenariev.md) — `accepted`, `2026-04-21`
 - [ADR-0017: `v8project.yaml` / `source-set` как главный конфигурационный контракт](0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md) — `accepted`, `2026-04-20`
 - [ADR-0018: Перенести контракт информационной базы в `infobase`](0018-perenesti-kontrakt-informatsionnoy-bazy-v-infobase.md) — `accepted`, `2026-04-21`
+- [ADR-0019: Обеспечивать наличие серверной ИБ через `ibcmd` в `init`](0019-sozdavat-servernuyu-infobazu-cherez-ibcmd-pri-init-pri-otsutstvii.md) — `accepted`, `2026-04-22`
 
 ## Правила обновления
 

@@ -11,6 +11,19 @@
 - `P2`: исследование, матрица поддержки или расширение покрытия тестами.
 - `P3`: постоянные guardrails для будущих изменений.
 
+## Сверка ADR с реализацией от 2026-04-22
+
+Проверены принятые ADR `0001`-`0018`, `docs/architecture/invariants.md`, активный TODO и текущий код в `src`, `tests`, `examples`, `README.md`.
+
+Подтвержденные gaps:
+
+- `ADR-0012`: `SourceSetsService` уже создает два context-а для EDT (`edt-*` и `designer-*`), но `run_build_edt` принимает load-решение по EDT-анализу до export. Generated Designer context после успешного EDT export не анализируется, partial load для EDT flow не используется, а `designer-*` snapshot коммитится через EDT `StepCommit`.
+- `ADR-0014`: общего command-level `execution_timeout`/deadline/cancellation context нет. `ExecutionContext` несет только EDT subprocess timeout, а MCP `server.rs` имеет отдельную bounded-модель и ранний running cancel/timeout response.
+- `ADR-0007`: shared EDT actor живет в `src/mcp/edt_session.rs`; CLI/use-case path при `interactive_mode=true` напрямую создает `EdtDsl::new_interactive`, то есть сохраняет non-shared interactive path.
+- `ADR-0018`: `docs/architecture/invariants.md` уже описывает `infobase.*` как supported contract, но `AppConfig`, `config init`, примеры и тестовые YAML продолжают использовать top-level `connection`/`credentials`; `IbcmdConnection` по-прежнему отклоняет server connection.
+- `ADR-0016`: `ExecutionOutcome<T>` есть, но `ExecutionStatus::Cancelled` отсутствует, `StepResult` остается минимальным, а MCP/CLI mapping всё еще опирается на command-specific top-level поля.
+- Guardrails частичные: есть `tests/use_case_boundaries.rs`, но он проверяет только небольшой список use-case файлов и не ловит, например, production-зависимость `src/use_cases/result.rs` от `crate::output::exit_codes`.
+
 ## Сводный список задач
 
 ### P0
@@ -35,6 +48,8 @@
 
    Готово, когда: после успешного EDT export коммитится `edt-*` snapshot; Designer analysis запускается всегда после успешной или skipped EDT stage; небольшой Designer diff ведет к partial load; `Configuration.xml`, deletion, unsafe expansion или threshold ведут к full load; отсутствие Designer diff ведет к skip; failure на EDT stage не запускает Designer stage; failure до successful load/apply не коммитит `designer-*` snapshot; tests покрывают Designer и IBCMD builders для EDT flow.
 
+   Сверка 2026-04-22: gap подтвержден в `run_build_edt`: `analysis_by_name` строится только по `edt_contexts`, `partial_paths` в EDT execute branch игнорируется, `execute_source_set_step*` получает `commit_context=&edt_context` для load stage.
+
 3. `ADR-TASK-003`: Ввести единую transport-neutral timeout/cancellation policy для CLI и MCP.
 
    Источники: `ADR-0013`, `ADR-0014`, `ADR-0016`.
@@ -44,6 +59,8 @@
    Затронутые области: `src/use_cases/context.rs`, `src/cli/execute.rs`, `src/mcp/server.rs`, `src/platform/process.rs`, mutating use cases (`build`, `test`, `dump`, `artifacts`, `load`), CLI/MCP tests.
 
    Готово, когда: каждая public CLI/MCP команда получает `deadline`; queued cancellation не запускает работу; running cancellation/timeout возвращается наружу только после terminal state; critical DB/filesystem phases не hard-kill by default; deferred cancellation/shutdown во время successful critical phase возвращает `Succeeded` с warning; nested flows наследуют remaining budget.
+
+   Сверка 2026-04-22: gap подтвержден: `ExecutionContext` содержит только `edt_timeout`, общего deadline/cancellation нет; MCP running cancellation/timeout в `McpToolServer::execute_tool` возвращает transport error до завершения worker, удерживая permit как transition mechanism.
 
 4. `ADR-TASK-004`: Свести CLI EDT interactive execution к shared interactive режиму.
 
@@ -55,35 +72,19 @@
 
    Готово, когда: `tools.edt_cli.interactive_mode=false` использует one-shot execution; `true` маршрутизирует поддержанные EDT-сценарии через shared actor/manager; tests проверяют отсутствие третьего публичного execution path, baseline reset/probe, restart and drain semantics.
 
-### P1
+   Сверка 2026-04-22: gap подтвержден: `src/mcp/edt_session.rs` прямо описан как actor reserved for MCP, а CLI/use-case файлы создают `EdtDsl::new_interactive` напрямую.
 
-5. `ADR-TASK-005`: Закрыть follow-up gaps атомарной публикации.
+5. `ADR-TASK-011`: Согласовать `ADR-0010` с backlog и целевой CLI output policy.
 
-   Источники: `ADR-0015`.
+   Статус: выполнено 2026-04-22.
 
-   Объем: сделать backup prefix в `replace_dir_atomically` neutral/caller-specific или явно internal; ставить metadata sidecar на cleanup unit для external artifacts staging directory; после `ADR-TASK-003` пометить publication phase как `CriticalNonAbortable`; сохранить cleanup warning/degraded message в agent-oriented output.
+   Источники: `ADR-0010`, `docs/architecture/invariants.md`, `ADR-TASK-007`.
 
-   Готово, когда: orphan cleanup удаляет только stale paths с matching target identity; external artifact staging directory не остается недоступным для безопасной cleanup-логики; tests покрывают stale/foreign/malformed/recent metadata.
+   Решение: зафиксировать одну public ось CLI output — `--output text|json`; не вводить отдельный audience/profile-переключатель; различия "человек vs агент" не оформлять как отдельную presentation-модель; JSON contract не менять без отдельного решения.
 
-6. `ADR-TASK-006`: Довести `ExecutionOutcome<T>` и step contract до целевого состояния.
+   Готово, когда: `ADR-0010`, `docs/architecture/invariants.md`, `spec/ADR_DERIVED_BACKLOG.md`, `spec/IMPLEMENTATION_TODO.md` и CLI docs описывают одну модель output policy; tests для rendering cases привязаны к этой модели.
 
-   Источники: `ADR-0016`, `ADR-0014`.
-
-   Объем: сделать `ExecutionOutcome<T>` сериализованным source of truth для `test` и runner-like сценариев; сократить дублирование top-level `ok/message/path` там, где позволяет compatibility; добавить `ExecutionStatus::Cancelled` для фактической terminal cancellation; держать interruption diagnostics на уровне command outcome/result, а не каждого step; расширить `StepResult` или ввести `ExecutionStep` с kind/status/target/diagnostics/artifacts.
-
-   Готово, когда: CLI JSON и MCP mapping tests проверяют outcome-driven status/errors/metrics/artifacts; новые runner-like сценарии стартуют от `ScenarioExecutionRequest` и `ExecutionOutcome<T>`; generic pipeline engine не вводится без повторяемой необходимости.
-
-7. `ADR-TASK-007`: Проработать CLI output как единый high-signal contract для человека и AI-агента.
-
-   Источники: `ADR-0010`, `ADR-0006`.
-
-   Объем: не добавлять отдельный `--audience`; оставить публичной осью только `--output text|json`, но пересмотреть rendering rules по критериям ниже так, чтобы clean success path был кратким, а ошибки, warnings, degraded behavior, artifacts, affected target, diagnostic paths и next actionable hints были видны и человеку, и агенту.
-
-   Готово, когда: text output остается удобным для ручного запуска, но не шумит подробным успешным журналом без необходимости; JSON output остается стабильным structured contract для автоматизации; оба формата не скрывают ошибки, warnings, degraded behavior, artifacts и diagnostic paths; use case слой не знает presentation rules.
-
-### P2
-
-8. `ADR-TASK-008`: Реализовать `infobase` config contract и IBCMD server support.
+6. `ADR-TASK-008`: Реализовать `infobase` config contract и IBCMD server support.
 
    Источники: `ADR-0001`, `ADR-0003`, `ADR-0018`.
 
@@ -91,7 +92,41 @@
 
    Готово, когда: старые top-level `connection`/`credentials` отклоняются; file connection для `IBCMD` использует `--db-path`; server connection для `IBCMD` использует `--dbms`, `--database-server`, `--database-name`, optional DBMS auth и отдельные `--user/--password` пользователя ИБ; Designer/Enterprise используют `infobase.connection` и `infobase.user/password`; docs и examples перешли на новый формат.
 
-9. `ADR-TASK-009`: Усилить regression coverage platform locator.
+   Сверка 2026-04-22: gap подтвержден: `AppConfig` содержит top-level `connection`/`credentials`, `config init`, `README.md`, `examples/v8project.yaml`, `config::loader` fixtures и CLI tests продолжают использовать старый формат, `IbcmdConnection::from_v8_connection` возвращает `ServerConnectionNotSupported` для server connection. По критерию этого документа это уже P0, потому что код и public docs расходятся с accepted `ADR-0018` и `docs/architecture/invariants.md`.
+
+### P1
+
+7. `ADR-TASK-005`: Закрыть follow-up gaps атомарной публикации.
+
+   Источники: `ADR-0015`.
+
+   Объем: сделать backup prefix в `replace_dir_atomically` neutral/caller-specific или явно internal; ставить metadata sidecar на cleanup unit для external artifacts staging directory; после `ADR-TASK-003` пометить publication phase как `CriticalNonAbortable`; сохранить cleanup warning/degraded message в едином CLI output contract.
+
+   Готово, когда: orphan cleanup удаляет только stale paths с matching target identity; external artifact staging directory не остается недоступным для безопасной cleanup-логики; tests покрывают stale/foreign/malformed/recent metadata.
+
+   Сверка 2026-04-22: gap подтвержден: `replace_dir_atomically` использует `.dump-backup-*` и для artifacts directory publication; external artifacts пишут metadata на staged files, но не на staging directory cleanup unit.
+
+8. `ADR-TASK-006`: Довести `ExecutionOutcome<T>` и step contract до целевого состояния.
+
+   Источники: `ADR-0016`, `ADR-0014`.
+
+   Объем: сделать `ExecutionOutcome<T>` сериализованным source of truth для `test` и runner-like сценариев; сократить дублирование top-level `ok/message/path` там, где позволяет compatibility; добавить `ExecutionStatus::Cancelled` для фактической terminal cancellation; держать interruption diagnostics на уровне command outcome/result, а не каждого step; расширить `StepResult` или ввести `ExecutionStep` с kind/status/target/diagnostics/artifacts.
+
+   Готово, когда: CLI JSON и MCP mapping tests проверяют outcome-driven status/errors/metrics/artifacts; новые runner-like сценарии стартуют от `ScenarioExecutionRequest` и `ExecutionOutcome<T>`; generic pipeline engine не вводится без повторяемой необходимости.
+
+   Сверка 2026-04-22: gap подтвержден: `ExecutionStatus` не содержит `Cancelled`, `StepResult` имеет только `name/ok/duration_ms/message`, а MCP `map_test_response` собирает response из top-level полей `TestRunResult`.
+
+9. `ADR-TASK-007`: Проработать CLI output как единый high-signal contract для человека и AI-агента.
+
+   Источники: `ADR-0010`, `ADR-0006`.
+
+   Объем: реализовать зафиксированную unified output policy и пересмотреть rendering rules по критериям ниже так, чтобы clean success path был кратким, а ошибки, warnings, degraded behavior, artifacts, affected target, diagnostic paths и next actionable hints были видны в обоих форматах без role-specific forks.
+
+   Готово, когда: text output остается удобным для ручного запуска, но не шумит подробным успешным журналом без необходимости; JSON output остается стабильным structured contract для автоматизации; оба формата не скрывают ошибки, warnings, degraded behavior, artifacts и diagnostic paths; use case слой не знает presentation rules.
+
+### P2
+
+10. `ADR-TASK-009`: Усилить regression coverage platform locator.
 
    Источники: `ADR-0004`.
 
@@ -99,9 +134,11 @@
 
    Готово, когда: tests фиксируют выбор максимальной версии под маску и единый locator/facade для всех platform utilities; docs обновляются при изменении поддержанных форм version requirement.
 
+   Сверка 2026-04-22: `src/platform/locator.rs` уже покрывает exact/prefix selection для `1cv8` и explicit hint cases для `1cv8c`; gap остается в явной regression matrix для `ibcmd` и в выравнивании version-mask coverage по всем platform utilities, а не только по `1cv8`.
+
 ### P3
 
-10. `ADR-TASK-010`: Добавить архитектурные guardrails для ADR-инвариантов.
+11. `ADR-TASK-010`: Добавить архитектурные guardrails для ADR-инвариантов.
 
     Источники: `ADR-0005`, `ADR-0006`, `ADR-0008`, `ADR-0009`, `ADR-0011`, `ADR-0017`.
 
@@ -109,9 +146,11 @@
 
     Готово, когда: новые public commands и config fields имеют понятный checklist; tests или статические проверки ловят самые частые нарушения; `docs/architecture/invariants.md` остается синхронизированным с ADR.
 
+    Сверка 2026-04-22: guardrails частичные. `tests/use_case_boundaries.rs` проверяет только несколько файлов и не сканирует весь production `src/use_cases`; `src/use_cases/result.rs` импортирует `crate::output::exit_codes`, что противоречит инварианту о независимости use-case слоя от output.
+
 ## Критерии корректного CLI output
 
-Эти критерии уточняют `ADR-TASK-007`: корректный CLI output дает минимальный достаточный сигнал для следующего действия и не требует отдельного `--audience`.
+Эти критерии уточняют `ADR-TASK-007`: корректный CLI output дает минимальный достаточный сигнал для следующего действия. Они зафиксированы для единственной public оси `--output text|json`; отдельная audience/profile-ось не вводится, а JSON contract не меняется без отдельного решения.
 
 1. Статус однозначен.
 
@@ -177,7 +216,7 @@
 | `ADR-0007` | Non-shared interactive EDT in CLI is documented implementation gap. | `ADR-TASK-004` |
 | `ADR-0008` | Граница platform DSL требует постоянных guardrails. | `ADR-TASK-010` |
 | `ADR-0009` | Business/runtime failure split реализован как contract и требует защиты при добавлении новых tools. | `ADR-TASK-010` |
-| `ADR-0010` | CLI output должен одновременно быть удобным человеку и достаточно кратким/предсказуемым для AI-агента без добавления отдельного audience-параметра. | `ADR-TASK-007` |
+| `ADR-0010` | Для CLI output зафиксирована единая high-signal policy без отдельной audience-оси; открытой остаётся только реализация rendering rules. | `ADR-TASK-007` |
 | `ADR-0011` | Workspace lock реализован; будущим public commands нужен lock guardrail. | `ADR-TASK-010` |
 | `ADR-0012` | EDT generated Designer partial-load decision remains key gap. | `ADR-TASK-002` |
 | `ADR-0013` | MCP admission/session capacity уже есть; cancellation/deadline должны идти через общую policy. | `ADR-TASK-003` |
@@ -189,6 +228,8 @@
 
 ## Следующий рекомендуемый порядок
 
-1. Закрыть `ADR-TASK-002`, потому что это конкретное расхождение с accepted ADR по EDT flow.
-2. После этого планировать `ADR-TASK-003` как отдельный крупный этап: он затрагивает CLI, MCP, process execution и доменную модель результата.
-3. Затем брать `ADR-TASK-004`, чтобы убрать оставшийся non-shared interactive EDT path из CLI.
+1. `ADR-TASK-011` закрыт 2026-04-22: output backlog больше не противоречит accepted `ADR-0010`.
+2. Затем закрыть `ADR-TASK-002`, потому что это конкретное runtime-расхождение с accepted ADR по EDT flow.
+3. Сразу после этого брать `ADR-TASK-008`: это уже не просто migration gap, а активное расхождение кода и public docs с accepted `ADR-0018`.
+4. После этого планировать `ADR-TASK-003` как отдельный крупный этап: он затрагивает CLI, MCP, process execution и доменную модель результата.
+5. Затем брать `ADR-TASK-004`, чтобы убрать оставшийся non-shared interactive EDT path из CLI.

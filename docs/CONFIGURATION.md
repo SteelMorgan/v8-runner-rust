@@ -326,9 +326,10 @@ tools:
 
 Если включён:
 
-- все EDT-операции (`init`, EDT export в `build`, `syntax edt`, MCP `check_syntax_edt`) идут через long-lived interactive `1cedtcli`;
-- shared MCP EDT session тоже работает в interactive-режиме;
-- `auto-start` начинает реально влиять на shared MCP EDT session.
+- поддержанные EDT-сценарии используют interactive `1cedtcli` вместо one-shot вызовов;
+- для MCP это означает shared actor/manager и одну shared interactive session;
+- в текущем CLI interactive EDT стартует лениво при первом EDT-вызове и живёт только в рамках текущего процесса команды;
+- `auto-start` влияет только на shared MCP EDT session.
 
 Если выключен:
 
@@ -340,11 +341,12 @@ tools:
 - Тип: boolean
 - По умолчанию: `false`
 
-Работает только вместе с `tools.edt_cli.interactive_mode=true`.
+Работает только вместе с `tools.edt_cli.interactive_mode=true` и только для long-lived host process с shared EDT session. На текущем этапе это MCP server.
 
 Поведение:
 
 - для shared MCP EDT session выполняет eager prewarm на старте сервера;
+- для CLI не выполняет eager prewarm: даже при `interactive_mode=true` EDT стартует лениво при первом EDT-вызове;
 - при `interactive_mode=false` не оказывает эффекта.
 
 ### `tools.edt_cli.working-directory`

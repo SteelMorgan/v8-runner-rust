@@ -26,14 +26,15 @@
 2. `infobase.connection` является обязательным supported ключом строки подключения; top-level `connection` не является публичным контрактом.
 3. `infobase.user/password` являются supported ключами пользователя ИБ; top-level `credentials` не является публичным контрактом.
 4. `infobase.dbms` описывает DBMS-level доступ для server-based ИБ; для `builder=IBCMD` + server connection обязательны `kind`, `server` и `name`.
-5. `infobase.dbms` не должен задаваться для file-based ИБ.
-6. `source-set[].type` является поддержанным ключом типа source-set; legacy `purpose` не является публичным контрактом.
-7. `source-set.name` является stable identity для ordering, diagnostics, runtime contexts, generated directories и selection logic.
-8. `source-set.name` должен быть уникальным и безопасным path segment; resolved paths должны быть уникальны после normalization.
-9. EDT/external source-set paths и generated work targets не должны пересекаться; reserved work directory names нельзя использовать как EDT source-set names.
-10. Unsupported или unsafe config combinations должны отклоняться на validation boundary до вызова platform DSL.
+5. Полный `infobase.dbms` contract является достаточным explicit authorization для server infobase provisioning path в `init` при `builder=IBCMD`; отдельный `tools.*` field для этого не требуется.
+6. `infobase.dbms` не должен задаваться для file-based ИБ.
+7. `source-set[].type` является поддержанным ключом типа source-set; legacy `purpose` не является публичным контрактом.
+8. `source-set.name` является stable identity для ordering, diagnostics, runtime contexts, generated directories и selection logic.
+9. `source-set.name` должен быть уникальным и безопасным path segment; resolved paths должны быть уникальны после normalization.
+10. EDT/external source-set paths и generated work targets не должны пересекаться; reserved work directory names нельзя использовать как EDT source-set names.
+11. Unsupported или unsafe config combinations должны отклоняться на validation boundary до вызова platform DSL.
 
-См. [ADR-0017](../decisions/0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md) и [ADR-0018](../decisions/0018-perenesti-kontrakt-informatsionnoy-bazy-v-infobase.md).
+См. [ADR-0017](../decisions/0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md), [ADR-0018](../decisions/0018-perenesti-kontrakt-informatsionnoy-bazy-v-infobase.md) и [ADR-0019](../decisions/0019-sozdavat-servernuyu-infobazu-cherez-ibcmd-pri-init-pri-otsutstvii.md).
 
 ## Workspace Lock
 
@@ -124,7 +125,9 @@
 3. `tools.edt_cli.interactive_mode=true` означает shared interactive EDT execution через общий actor/manager и общую interactive session.
 4. Non-shared interactive EDT не является долгосрочным публичным режимом; если он встречается в коде, это implementation gap.
 5. Shared interactive EDT должен сохранять baseline reset/probe, restart, shutdown/restart drain, typed errors and telemetry contract.
-6. Если shared interactive временно покрывает не все EDT-сценарии, gap должен быть зафиксирован в документации или ADR.
+6. `tools.edt_cli.auto_start` является eager prewarm-флагом только для long-lived shared EDT host process; на текущем этапе это MCP server.
+7. CLI при `tools.edt_cli.interactive_mode=true` стартует EDT лениво при первом EDT-вызове и не должен eagerly prewarm interactive session на старте процесса команды.
+8. Если shared interactive временно покрывает не все EDT-сценарии, gap должен быть зафиксирован в документации или ADR.
 
 См. [ADR-0007](../decisions/0007-vydelit-otdelnyy-pereklyuchatel-dlya-shared-edt.md).
 
@@ -148,10 +151,10 @@
 
 ## CLI Output
 
-1. CLI output проектируется для двух потребителей: человека и AI-агента.
-2. Human-oriented output должен акцентировать значимые места: итог, ошибки, предупреждения, degraded behavior, созданные артефакты, пути к диагностике и следующий actionable hint.
-3. Agent-oriented output должен быть кратким: при чистом успехе не выводить лишний пошаговый журнал, при ошибке давать только минимальный actionable signal.
-4. Формат вывода (`text`/`json`) и аудитория вывода (`human`/`agent`) являются разными осями; `json` не означает автоматически verbose output.
-5. Use case слой не знает audience-specific rendering rules.
+1. CLI output проектируется как единый high-signal contract для человека и AI-агента.
+2. Единственная публичная ось CLI output — формат вывода (`text`/`json`); отдельный audience/profile-переключатель не вводится.
+3. Clean success должен оставаться кратким, а ошибки, предупреждения, degraded behavior, created artifacts, пути к диагностике и следующий actionable hint не должны теряться.
+4. `json` остаётся стабильным structured contract для автоматизации; его schema не меняется только из-за различения ролей потребления.
+5. Use case слой не знает presentation rules и не различает роли потребителя output.
 
 См. [ADR-0010](../decisions/0010-razdelit-cli-output-dlya-cheloveka-i-ai-agenta.md).

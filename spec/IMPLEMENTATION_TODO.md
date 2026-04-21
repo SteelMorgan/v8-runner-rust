@@ -15,20 +15,21 @@
 
 ## P0
 
+- [x] `ADR-TASK-011`: Согласовать `ADR-0010` с backlog и целевой CLI output policy. Выполнено `2026-04-22`: зафиксирована единая output policy без отдельной audience/profile-оси; единственная public ось — `--output text|json`, JSON не меняется.
 - [ ] `ADR-TASK-002`: Закрыть EDT two-state build pipeline по `ADR-0002` и `ADR-0012`: EDT stage после successful export коммитит `edt-*` snapshot, Designer stage всегда анализирует `designer-<sourceSetName>` context, выполняет load/apply только при изменениях и коммитит `designer-*` snapshot только после successful load/apply.
+- [ ] `ADR-TASK-008`: Реализовать новый `infobase` config contract по `ADR-0018` и server provisioning path по `ADR-0019`: перенести `connection`/`credentials` в `infobase`, добавить `infobase.dbms`, убрать legacy top-level keys, покрыть Designer/Enterprise и IBCMD file/server mapping тестами, а для `builder=IBCMD` + server connection использовать `ibcmd infobase create --create-database` как ensure-step вместо unconditional skip, с benign `already exists` как non-error outcome.
 - [ ] `ADR-TASK-003`: Ввести единую transport-neutral policy таймаутов и отмены по `ADR-0013` и `ADR-0014`: общий публичный `execution_timeout`, `deadline` для каждой CLI/MCP команды, семантика terminal-state, классы interruption safety, command-boundary cancellation без state machine на каждом step, deferred warning при successful critical phase и наследование budget во вложенных сценариях.
 - [ ] `ADR-TASK-004`: Свести CLI EDT interactive execution к shared interactive режиму по `ADR-0007`: перенести shared EDT actor/manager в `src/platform` или общий execution слой, а MCP оставить controller/DTO/presenter boundary без собственной execution-логики.
 
 ## P1
 
-- [ ] `ADR-TASK-005`: Закрыть follow-up gaps атомарной публикации по `ADR-0015`: neutral/caller-specific backup prefix, metadata sidecar на cleanup unit для staging directory внешних артефактов, `CriticalNonAbortable` publication phase после общей execution policy, cleanup warning для agent-oriented output.
+- [ ] `ADR-TASK-005`: Закрыть follow-up gaps атомарной публикации по `ADR-0015`: neutral/caller-specific backup prefix, metadata sidecar на cleanup unit для staging directory внешних артефактов, `CriticalNonAbortable` publication phase после общей execution policy, cleanup warning в едином CLI output contract.
 - [ ] `ADR-TASK-006`: Довести `ExecutionOutcome<T>` и step contract до целевого состояния по `ADR-0016`: outcome-driven serialized status/errors/metrics/artifacts, `ExecutionStatus::Cancelled` для фактической terminal cancellation, command-level interruption diagnostics, richer `ExecutionStep` или расширенный `StepResult`.
-- [ ] `ADR-TASK-007`: Проработать CLI output по `ADR-0010` как единый high-signal contract для человека и AI-агента без отдельного audience-параметра: сохранить только ось `--output text|json`, применить критерии корректного output из `spec/ADR_DERIVED_BACKLOG.md`, убрать лишний шум из clean success path, явно показывать warnings/degraded/artifacts/diagnostics и покрыть rendering tests.
+- [ ] `ADR-TASK-007`: Проработать CLI output по `ADR-0010` как единый high-signal contract для человека и AI-агента: применить критерии корректного output из `spec/ADR_DERIVED_BACKLOG.md`, убрать лишний шум из clean success path, явно показывать warnings/degraded/artifacts/diagnostics и покрыть rendering tests, не меняя JSON contract без отдельного решения.
 
 ## P2
 
-- [ ] `ADR-TASK-008`: Реализовать новый `infobase` config contract по `ADR-0018` и закрыть IBCMD server support: перенести `connection`/`credentials` в `infobase`, добавить `infobase.dbms`, убрать legacy top-level keys, покрыть Designer/Enterprise и IBCMD file/server mapping тестами.
-- [ ] `ADR-TASK-009`: Усилить regression coverage platform locator по `ADR-0004`: exact/mask selection `8.3`, `8.3.20`, `8.3.27.1789` для `1cv8`, `1cv8c`, `ibcmd`, `tools.platform.path` как root/hint и стандартные корни поиска.
+- [ ] `ADR-TASK-009`: Усилить regression coverage platform locator по `ADR-0004`: exact/mask selection `8.3`, `8.3.20`, `8.3.27.1789` для всех platform utilities, особенно `ibcmd`; отдельно зафиксировать `tools.platform.path` как root/hint и не терять уже существующее покрытие для `1cv8` и `1cv8c`.
 - [ ] Добавить CI workflow wiring из `spec/REAL_ENV_TEST_PLAN.md`: установка 1С на GitHub-hosted runner'ах, bootstrap файловой ИБ через `ibsrv`, trusted/fork gating и upload deploy-ready артефактов.
 
 ## P3

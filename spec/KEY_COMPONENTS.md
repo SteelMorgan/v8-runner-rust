@@ -55,16 +55,17 @@
 
 Ответственность:
 
-- автозапуск `1cedtcli` при старте приложения;
+- eager prewarm `1cedtcli` при старте MCP host процесса;
 - создание и хранение единственного интерактивного executor;
 - single-flight инициализация процесса;
 - мониторинг и перезапуск EDT CLI при сбое.
 
 Критичные детали:
 
-- работает только если `app.format == EDT`;
-- включается только при `app.tools.edt-cli.auto-start == true`;
+- актуален только для long-lived host с shared EDT session, сейчас это MCP mode;
+- включается только при `app.tools.edt-cli.auto-start == true` и `interactive_mode == true`;
 - использует lazy/single-flight запуск через `Deferred`;
+- CLI не делает eager prewarm и стартует EDT лениво при первом EDT-вызове;
 - мониторинг живет отдельно от MCP-tool вызовов;
 - это единственный настоящий background-компонент в приложении.
 
@@ -485,7 +486,7 @@
 
 - подставляет фактическую версию платформы или EDT;
 - ищет binary нужного utility type;
-- для EDT при `auto-start=true` выдает интерактивный executor;
+- для EDT поддерживает one-shot и interactive execution; eager prewarm через `auto-start` относится только к shared MCP session, а CLI стартует interactive EDT лениво;
 - для остальных случаев выдает обычный `ProcessExecutor`.
 
 ### 11.2. `UtilityLocator` и `SearchStrategy`

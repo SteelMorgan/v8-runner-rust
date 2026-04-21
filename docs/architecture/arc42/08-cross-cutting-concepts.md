@@ -34,7 +34,7 @@
 - Если cancellation/shutdown/timeout был requested внутри successful `CriticalNonAbortable` phase, итог остаётся `Succeeded`, а result содержит warning/diagnostic о deferred interruption.
 - Degraded success, например cleanup warning после успешного publish, не должен маскироваться как полностью чистый success.
 - CLI решает на адаптерной границе, печатать ли `Envelope<T>`, text rendering или top-level error.
-- CLI output дополнительно разделяет human-oriented highlights и agent-oriented minimal signal; это presentation concern, а не use-case behavior.
+- CLI output использует единый high-signal contract для человека и AI-агента; различие между `text` и `json` остаётся presentation concern, а не use-case behavior.
 - MCP дополнительно разделяет `McpBusinessFailure<T>` и `McpInternalError`, чтобы агент видел предсказуемые business failures, но не получал как business-response ошибки неправильного transport/runtime usage.
 - Это разделение является ключевым architectural invariant: orchestration не должна знать про конкретный transport payload format.
 - Outcome/step contract описан в ADR-0016.

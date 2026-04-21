@@ -1,77 +1,76 @@
-# ADR-0010: Разделить CLI output для человека и AI-агента
+# ADR-0010: Единый CLI output для человека и AI-агента
 
 - Статус: `accepted`
 - Дата: `2026-04-20`
 
 ## Контекст
 
-CLI `v8-runner` будет потребляться двумя разными аудиториями:
+CLI `v8-runner` будет потребляться двумя разными ролями:
 
 1. Человек-разработчик запускает команды вручную и должен быстро увидеть значимые места: что изменилось, что пропущено, что требует внимания, где ошибка и какой следующий шаг.
-2. AI-агент запускает CLI как инструмент и должен получать краткий, предсказуемый вывод без лишнего шума. Если всё хорошо и ошибок нет, агенту не нужен подробный рассказ о каждом успешном шаге.
+2. AI-агент запускает CLI как инструмент и тоже нуждается в кратком, предсказуемом, high-signal выводе без лишнего шума.
 
-Текущий `--output text|json` задаёт формат сериализации, но не полностью описывает audience intent.
-`json` полезен для машинной обработки, но не должен автоматически означать "полный verbose dump", если потребитель — агент, которому нужен минимальный сигнал.
+В предыдущей формулировке решения возникла двусмысленность: нужно ли вводить отдельную public ось `audience/profile`, или достаточно существующей оси `--output text|json` и явных требований к содержанию output.
+Проекту нужен единый формат поведения CLI для обеих ролей, а не две разные presentation-модели.
+`json` уже является structured contract для автоматизации и не должен меняться только ради различения "человек vs агент".
 
 ## Решение
 
-Разделить требования к CLI presentation для человека и AI-агента.
+Зафиксировать единый high-signal CLI output contract для человека и AI-агента.
 
-1. Human-oriented CLI output должен акцентировать значимые места:
-- итог команды;
-- ошибки и предупреждения;
-- skipped/degraded/partial behavior;
-- изменённые или созданные артефакты;
-- важные пути к логам или отчётам;
-- следующий actionable hint, если без него человеку сложно продолжить.
-2. Agent-oriented CLI output должен быть кратким:
-- не выводить подробные успешные шаги, если нет ошибок, предупреждений, degraded behavior или созданных артефактов, которые агент должен использовать дальше;
-- при успехе без важных деталей возвращать минимальный success signal;
-- при ошибке возвращать только код/класс ошибки, краткое сообщение, affected target and next actionable diagnostic location;
-- не дублировать данные, которые уже доступны в structured result или логах.
-3. Формат вывода и аудитория вывода являются разными осями проектирования.
-4. `--output json` остаётся structured format, но не является синонимом verbose output.
-5. `--output text` остаётся human-readable format, но его текст не должен становиться единственным источником машинно значимой информации.
-6. Use case слой не знает, для человека или агента рендерится результат; audience-specific rendering остаётся в CLI/output adapter.
-7. Любой новый CLI output должен проверяться на два вопроса:
-- какую значимую информацию это даёт человеку;
-- нужен ли этот сигнал агенту при successful/no-warning path.
+1. Единственная публичная ось CLI output — `--output text|json`.
+2. Отдельный public параметр `--audience`, `--profile` или эквивалентный role switch для CLI output не вводится.
+3. Оба формата следуют одной и той же информационной политике:
+- clean success остаётся кратким и не печатает подробный успешный журнал без необходимости;
+- ошибки, warnings, degraded/skipped behavior, артефакты и diagnostic paths должны быть видимы;
+- output должен давать минимальный достаточный сигнал для следующего действия;
+- нельзя прятать значимые факты в одном формате и терять их в другом.
+4. `--output json` остаётся текущим structured format и не меняет свою роль из-за этого ADR.
+5. `--output text` остаётся human-readable format, но его текст не должен становиться единственным источником важной машинно значимой информации.
+6. Use case слой не знает о presentation rules; правила рендеринга остаются в CLI/output adapter.
+7. Любой новый CLI output должен проверяться на три вопроса:
+- помогает ли он следующему действию;
+- не добавляет ли шум в clean success path;
+- сохраняет ли он ошибки, warnings, degraded behavior, artifacts и diagnostics видимыми в `text` и `json`.
 
 ## Неграницы (Non-goals)
 
 1. Немедленное изменение всех текущих CLI сообщений в рамках этого ADR.
 2. Замена MCP на CLI для агентской автоматизации.
-3. Превращение human text output в стабильный machine protocol.
-4. Скрытие ошибок, предупреждений, degraded behavior или путей к диагностике ради краткости.
+3. Введение отдельного audience-переключателя.
+4. Изменение JSON schema только ради разделения ролей.
+5. Скрытие ошибок, предупреждений, degraded behavior или путей к диагностике ради краткости.
 
 ## Последствия
 
-1. CLI presentation должен иметь явную модель audience/profile или эквивалентное правило, чтобы не смешивать human highlights and agent minimalism.
-2. По умолчанию human output может оставаться удобным для ручного запуска, но agent-oriented режим должен быть доступен явно и документирован.
-3. Успешный happy path для agent output не должен печатать пошаговый журнал.
-4. Ошибки в agent output должны быть достаточно короткими для LLM context, но достаточно точными для следующего действия.
-5. Structured data for automation should remain in JSON/MCP contracts, while text highlights remain presentation only.
+1. ADR, backlog и пользовательская документация не должны больше описывать CLI output как две public оси.
+2. `--output` остаётся единственным публичным переключателем формата CLI output.
+3. Clean success path должен оставаться кратким в обоих форматах.
+4. JSON остаётся стабильным structured contract для автоматизации и не меняется только из-за различения ролей.
+5. Rendering tests должны проверять единый high-signal contract для `text` и `json`.
 
 ## План реализации
 
 1. Зафиксировать этот ADR в `docs/decisions`.
 2. Добавить invariant в `docs/architecture/invariants.md`.
-3. При реализации audience split обновить:
-- `src/cli/args.rs`
+3. Синхронизировать `ADR-0010`, `docs/architecture/invariants.md`, arc42 и backlog с единой моделью output policy.
+4. При реализации unified output policy обновить:
 - `src/output/presenter.rs`
 - `src/output/text.rs`
-- `src/output/json.rs`, если меняется JSON compact/full policy
-- `src/cli/execute.rs`
+- `src/cli/execute.rs`, если меняется wiring/selection rendering rules
 - `docs/CAPABILITIES.md`
 - `README.md`
-4. Ввести тесты CLI output для двух классов потребителей:
-- human text output highlights errors/warnings/degraded/artifacts;
-- agent output stays minimal on clean success and still reports errors/warnings/actionable diagnostics.
-5. При добавлении новой CLI команды или нового result field обновлять rendering tests before exposing the behavior.
+5. `src/output/json.rs` не менять без отдельной необходимости и отдельного решения о JSON contract.
+6. Ввести и поддерживать rendering tests для единого output contract:
+- clean success не шумит;
+- ошибки/warnings/degraded/artifacts/actionable diagnostics видимы;
+- `text` и `json` не противоречат друг другу по ключевым фактам.
+7. При добавлении новой CLI команды или нового result field обновлять rendering tests before exposing the behavior.
 
 ## Верификация
 
-- [x] ADR фиксирует, что CLI output потребляется человеком и AI-агентом.
-- [x] ADR фиксирует краткость agent output и отсутствие лишнего вывода при чистом успехе.
-- [x] ADR фиксирует human output emphasis on significant places.
+- [x] ADR фиксирует единый CLI output contract для человека и AI-агента.
+- [x] ADR фиксирует, что единственная public ось output — `--output text|json`.
+- [x] ADR явно отвергает отдельный audience/profile-переключатель для CLI output.
+- [x] ADR сохраняет текущую роль JSON как structured contract.
 - [x] ADR сохраняет транспортно-нейтральный use case слой согласно ADR-0006.
