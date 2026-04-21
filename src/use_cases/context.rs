@@ -1,4 +1,6 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use tokio_util::sync::CancellationToken;
 
 /// Identifies the logical command being executed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,76 +44,131 @@ pub enum ExecutionTransport {
     McpHttp,
 }
 
-/// Per-invocation metadata passed into transport-neutral use cases.
+/// Command-boundary interruption signal observed at safe points.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionInterruption {
+    Cancelled,
+    TimedOut,
+}
+
+impl ExecutionInterruption {
+    pub const fn message(self, command: CommandName) -> &'static str {
+        match (self, command) {
+            (Self::Cancelled, _) => "execution cancelled before reaching a safe completion point",
+            (Self::TimedOut, _) => {
+                "execution timeout expired before reaching a safe completion point"
+            }
+        }
+    }
+}
+
+/// Per-invocation metadata passed into transport-neutral use cases.
+#[derive(Debug, Clone)]
 pub struct ExecutionContext {
     command: CommandName,
     transport: ExecutionTransport,
     edt_timeout: Option<Duration>,
+    deadline: Option<Instant>,
+    cancellation: CancellationToken,
 }
 
 impl ExecutionContext {
     /// Creates an execution context for the specified command and transport.
-    pub const fn new(command: CommandName, transport: ExecutionTransport) -> Self {
+    pub fn new(command: CommandName, transport: ExecutionTransport) -> Self {
         Self {
             command,
             transport,
             edt_timeout: None,
+            deadline: None,
+            cancellation: CancellationToken::new(),
         }
     }
 
     /// Creates a CLI execution context for the specified command.
-    pub const fn cli(command: CommandName) -> Self {
+    pub fn cli(command: CommandName) -> Self {
         Self::new(command, ExecutionTransport::Cli)
     }
 
     /// Creates an MCP stdio execution context for the specified command.
     #[cfg(test)]
-    pub const fn mcp_stdio(command: CommandName) -> Self {
+    pub fn mcp_stdio(command: CommandName) -> Self {
         Self::new(command, ExecutionTransport::McpStdio)
     }
 
     /// Creates an MCP HTTP execution context for the specified command.
     #[cfg(test)]
-    pub const fn mcp_http(command: CommandName) -> Self {
+    pub fn mcp_http(command: CommandName) -> Self {
         Self::new(command, ExecutionTransport::McpHttp)
     }
 
     /// Returns the command being executed.
-    pub const fn command(self) -> CommandName {
+    pub const fn command(&self) -> CommandName {
         self.command
     }
 
     /// Returns the transport that initiated this execution.
-    pub const fn transport(self) -> ExecutionTransport {
+    pub const fn transport(&self) -> ExecutionTransport {
         self.transport
     }
 
     /// Attaches an EDT subprocess timeout budget to the execution context.
-    pub const fn with_edt_timeout(self, edt_timeout: Option<Duration>) -> Self {
-        Self {
-            command: self.command,
-            transport: self.transport,
-            edt_timeout,
-        }
+    pub fn with_edt_timeout(mut self, edt_timeout: Option<Duration>) -> Self {
+        self.edt_timeout = edt_timeout;
+        self
+    }
+
+    /// Attaches an absolute execution deadline to the context.
+    pub fn with_deadline(mut self, deadline: Option<Instant>) -> Self {
+        self.deadline = deadline;
+        self
+    }
+
+    /// Attaches a cancellation token shared with the caller transport.
+    pub fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
+        self.cancellation = cancellation;
+        self
     }
 
     /// Returns the EDT subprocess timeout budget for this execution.
-    pub const fn edt_timeout(self) -> Option<Duration> {
+    pub const fn edt_timeout(&self) -> Option<Duration> {
         self.edt_timeout
+    }
+
+    /// Returns the remaining command budget from the current moment.
+    pub fn remaining_budget(&self) -> Option<Duration> {
+        self.deadline
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+    }
+
+    /// Returns the pending command-boundary interruption, if any.
+    pub fn interruption(&self) -> Option<ExecutionInterruption> {
+        if self
+            .deadline
+            .is_some_and(|deadline| deadline <= Instant::now())
+        {
+            Some(ExecutionInterruption::TimedOut)
+        } else if self.cancellation.is_cancelled() {
+            Some(ExecutionInterruption::Cancelled)
+        } else {
+            None
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
-    use super::{CommandName, ExecutionContext, ExecutionTransport};
+    use tokio_util::sync::CancellationToken;
+
+    use super::{CommandName, ExecutionContext, ExecutionInterruption, ExecutionTransport};
 
     #[test]
     fn constructs_mcp_contexts() {
+        let cancellation = CancellationToken::new();
         let stdio = ExecutionContext::mcp_stdio(CommandName::Build)
-            .with_edt_timeout(Some(Duration::from_secs(5)));
+            .with_edt_timeout(Some(Duration::from_secs(5)))
+            .with_cancellation(cancellation.clone());
         let http = ExecutionContext::mcp_http(CommandName::Test);
 
         assert_eq!(stdio.command(), CommandName::Build);
@@ -120,5 +177,19 @@ mod tests {
         assert_eq!(http.command(), CommandName::Test);
         assert_eq!(http.transport(), ExecutionTransport::McpHttp);
         assert_eq!(http.edt_timeout(), None);
+        assert_eq!(stdio.interruption(), None);
+        cancellation.cancel();
+        assert_eq!(stdio.interruption(), Some(ExecutionInterruption::Cancelled));
+    }
+
+    #[test]
+    fn deadline_wins_over_cancellation_when_both_are_present() {
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let context = ExecutionContext::cli(CommandName::Test)
+            .with_cancellation(cancellation)
+            .with_deadline(Some(Instant::now() - Duration::from_millis(1)));
+
+        assert_eq!(context.interruption(), Some(ExecutionInterruption::TimedOut));
     }
 }

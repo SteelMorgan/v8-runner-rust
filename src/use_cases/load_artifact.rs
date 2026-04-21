@@ -807,6 +807,7 @@ mod tests {
         AppConfig {
             base_path: root.to_path_buf(),
             work_path: root.join("work"),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),

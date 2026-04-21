@@ -329,6 +329,29 @@ mod tests {
     }
 
     #[test]
+    fn load_config_reads_global_execution_timeout_from_public_yaml_key() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).expect("src dir");
+        let config_path = dir.path().join("v8project.yaml");
+        std::fs::write(
+            &config_path,
+            format!(
+                "basePath: {}\nworkPath: {}\nexecution_timeout: 4321\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
+                base.display(),
+                work.display()
+            ),
+        )
+        .expect("write config");
+
+        let config = load_config(config_path.to_str(), None).expect("load config");
+
+        assert_eq!(config.execution_timeout, 4321);
+    }
+
+    #[test]
     fn load_config_normalizes_vanessa_paths_relative_to_config_dir() {
         let dir = tempdir().expect("tempdir");
         let base = dir.path().join("base");

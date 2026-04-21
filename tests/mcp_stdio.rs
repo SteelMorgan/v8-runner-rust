@@ -18,7 +18,7 @@ use tempfile::tempdir;
 
 fn write_config(path: &Path, base_path: &Path, work_path: &Path, platform_path: &Path) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nexecution_timeout: 300000\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\ntools:\n  platform:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
         platform_path.display(),
@@ -35,9 +35,10 @@ fn write_edt_config_with_options(
     max_concurrent_calls: usize,
 ) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main-edt\nmcp:\n  execution:\n    max_concurrent_calls: {}\ntools:\n  edt_cli:\n    path: '{}'\n    interactive-mode: true\n    command_timeout_ms: {}\n",
+        "basePath: '{}'\nworkPath: '{}'\nexecution_timeout: {}\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main-edt\nmcp:\n  execution:\n    max_concurrent_calls: {}\ntools:\n  edt_cli:\n    path: '{}'\n    interactive-mode: true\n    command_timeout_ms: {}\n",
         base_path.display(),
         work_path.display(),
+        command_timeout_ms,
         max_concurrent_calls,
         edt_path.display(),
         command_timeout_ms,
@@ -54,7 +55,7 @@ fn write_designer_config_with_options(
     max_concurrent_calls: usize,
 ) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\nmcp:\n  execution:\n    max_concurrent_calls: {}\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    command_timeout_ms: {}\n",
+        "basePath: '{}'\nworkPath: '{}'\nexecution_timeout: 300000\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\nmcp:\n  execution:\n    max_concurrent_calls: {}\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    command_timeout_ms: {}\n",
         base_path.display(),
         work_path.display(),
         max_concurrent_calls,
@@ -74,9 +75,10 @@ fn write_edt_config_with_platform(
     max_concurrent_calls: usize,
 ) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main-edt\nmcp:\n  execution:\n    max_concurrent_calls: {}\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n    interactive-mode: true\n    command_timeout_ms: {}\n",
+        "basePath: '{}'\nworkPath: '{}'\nexecution_timeout: {}\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main-edt\nmcp:\n  execution:\n    max_concurrent_calls: {}\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n    interactive-mode: true\n    command_timeout_ms: {}\n",
         base_path.display(),
         work_path.display(),
+        command_timeout_ms,
         max_concurrent_calls,
         platform_path.display(),
         edt_path.display(),
@@ -409,7 +411,7 @@ fn read_invocation_count(path: &Path) -> usize {
 }
 
 async fn wait_for_invocation_count(path: &Path, expected: usize) {
-    for _ in 0..100 {
+    for _ in 0..300 {
         if read_invocation_count(path) >= expected {
             return;
         }

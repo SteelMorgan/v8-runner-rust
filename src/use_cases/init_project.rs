@@ -415,12 +415,13 @@ fn create_infobase_via_ibcmd(
         .locate(UtilityType::Ibcmd)
         .map_err(|error| AppError::Platform(error.to_string()))?
         .path;
-    let connection = IbcmdConnection::from_infobase(&config.infobase).map_err(|error| match error {
-        crate::platform::ibcmd::IbcmdError::MissingServerDbmsField(_) => {
-            AppError::Validation(error.to_string())
-        }
-        crate::platform::ibcmd::IbcmdError::Spawn(_) => AppError::Platform(error.to_string()),
-    })?;
+    let connection =
+        IbcmdConnection::from_infobase(&config.infobase).map_err(|error| match error {
+            crate::platform::ibcmd::IbcmdError::MissingServerDbmsField(_) => {
+                AppError::Validation(error.to_string())
+            }
+            crate::platform::ibcmd::IbcmdError::Spawn(_) => AppError::Platform(error.to_string()),
+        })?;
     IbcmdDsl::new(binary, connection, utilities.runner_for(UtilityType::Ibcmd))
         .ensure_infobase_create()
         .map_err(|error| AppError::Platform(error.to_string()))
@@ -551,6 +552,7 @@ mod tests {
         AppConfig {
             base_path: PathBuf::from("/tmp/base"),
             work_path: PathBuf::from("/tmp/work"),
+            execution_timeout: 300_000,
             format: SourceFormat::Edt,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),

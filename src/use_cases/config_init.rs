@@ -380,6 +380,7 @@ fn render_config(
         escape_yaml(&project_dir.display().to_string())
     ));
     yaml.push_str("workPath: 'build'\n");
+    yaml.push_str("execution_timeout: 300000\n");
     yaml.push_str(&format!("format: {}\n", format.as_yaml()));
     yaml.push_str(&format!("builder: {}\n", builder.as_yaml()));
     yaml.push_str("infobase:\n");
@@ -486,6 +487,9 @@ mod tests {
 
         let config = load_config(Some(&result.path), None).expect("load config");
 
-        assert_eq!(config.infobase.connection, format!("File={}", dir.path().join("build/ib").display()));
+        assert_eq!(
+            config.infobase.connection,
+            format!("File={}", dir.path().join("build/ib").display())
+        );
     }
 }

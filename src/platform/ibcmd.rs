@@ -204,10 +204,7 @@ impl<'a> IbcmdDsl<'a> {
         let result = self.run(&args)?;
         let status = if result.process.exit_code == 0 {
             IbcmdInfobaseCreateStatus::Created
-        } else if is_benign_already_exists(
-            &result.process.stdout,
-            &result.process.stderr,
-        ) {
+        } else if is_benign_already_exists(&result.process.stdout, &result.process.stderr) {
             IbcmdInfobaseCreateStatus::AlreadyExists
         } else {
             IbcmdInfobaseCreateStatus::Failed
@@ -386,7 +383,10 @@ fn is_benign_already_exists(stdout: &str, stderr: &str) -> bool {
         "не удалось подключ",
         "таймаут",
     ];
-    if FATAL_PATTERNS.iter().any(|pattern| combined.contains(pattern)) {
+    if FATAL_PATTERNS
+        .iter()
+        .any(|pattern| combined.contains(pattern))
+    {
         return false;
     }
 
@@ -718,7 +718,10 @@ mod tests {
 
     #[test]
     fn already_exists_detection_keeps_uppercase_russian_auth_failures_fatal() {
-        assert!(!is_benign_already_exists("", "ОШИБКА АВТОРИЗАЦИИ: УЖЕ СУЩЕСТВУЕТ"));
+        assert!(!is_benign_already_exists(
+            "",
+            "ОШИБКА АВТОРИЗАЦИИ: УЖЕ СУЩЕСТВУЕТ"
+        ));
     }
 
     #[cfg(unix)]

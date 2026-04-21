@@ -18,7 +18,7 @@ use crate::support::error::AppError;
 use crate::support::temp::platform_logs_dir;
 #[cfg(test)]
 use crate::use_cases::context::CommandName;
-use crate::use_cases::context::ExecutionContext;
+use crate::use_cases::context::{ExecutionContext, ExecutionInterruption};
 use crate::use_cases::request::{
     DesignerConfigSyntaxRequest as DesignerConfigSyntaxArgs,
     DesignerModulesSyntaxRequest as DesignerModulesSyntaxArgs, SyntaxRequest as SyntaxArgs,
@@ -81,6 +81,9 @@ fn run_syntax_with_context(
     args: &SyntaxArgs,
 ) -> UseCaseResult<SyntaxCheckResult> {
     let started = Instant::now();
+    if let Some(failure) = interrupted_syntax_failure(context, "syntax", started, None) {
+        return Err(failure);
+    }
     if let SyntaxTarget::Edt { projects } = &args.target {
         return run_edt_syntax(context, config, projects, started);
     }
@@ -405,6 +408,9 @@ fn run_edt_syntax(
     projects: &[String],
     started: Instant,
 ) -> UseCaseResult<SyntaxCheckResult> {
+    if let Some(failure) = interrupted_syntax_failure(context, "edt", started, None) {
+        return Err(failure);
+    }
     if let Some(error) = validate_edt_supported_matrix(config) {
         let error_message = error.to_string();
         return Err(SyntaxExecutionFailure::with_payload(
@@ -536,6 +542,11 @@ fn run_edt_syntax(
             &log_dir,
             &format!("edt_{}", source_set.name.replace(' ', "_")),
         );
+        if let Some(failure) =
+            interrupted_syntax_failure(context, "edt", started, Some(log_path.clone()))
+        {
+            return Err(failure);
+        }
         let result = match dsl.validate_project(&source_path, &log_path) {
             Ok(result) => result,
             Err(error) => {
@@ -627,6 +638,44 @@ fn run_edt_syntax(
                 )),
                 result,
             ))
+        }
+    }
+}
+
+fn interrupted_syntax_failure(
+    context: &ExecutionContext,
+    check_name: &str,
+    started: Instant,
+    platform_log_path: Option<PathBuf>,
+) -> Option<SyntaxExecutionFailure> {
+    let interruption = context.interruption()?;
+    let message = format!(
+        "{} for command '{}'",
+        interruption_message(interruption),
+        context.command().as_str()
+    );
+    Some(SyntaxExecutionFailure::with_payload(
+        AppError::Runtime(message.clone()),
+        failed_result(
+            check_name,
+            SyntaxCheckStatus::ToolFailed,
+            -1,
+            started,
+            vec![],
+            None,
+            Some(message),
+            platform_log_path,
+        ),
+    ))
+}
+
+fn interruption_message(interruption: ExecutionInterruption) -> &'static str {
+    match interruption {
+        ExecutionInterruption::Cancelled => {
+            "execution cancelled before reaching a safe completion point"
+        }
+        ExecutionInterruption::TimedOut => {
+            "execution timeout expired before reaching a safe completion point"
         }
     }
 }
@@ -963,6 +1012,7 @@ mod tests {
         AppConfig {
             base_path: base_path.to_path_buf(),
             work_path: work_path.to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -989,6 +1039,7 @@ mod tests {
         AppConfig {
             base_path: base_path.to_path_buf(),
             work_path: work_path.to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Edt,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),

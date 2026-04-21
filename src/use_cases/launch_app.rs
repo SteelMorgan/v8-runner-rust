@@ -7,7 +7,7 @@ use crate::platform::locator::UtilityType;
 use crate::platform::process::ProcessRequest;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
-use crate::use_cases::context::ExecutionContext;
+use crate::use_cases::context::{ExecutionContext, ExecutionInterruption};
 use crate::use_cases::request::{LaunchModeRequest, LaunchRequest as LaunchArgs};
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
 use tracing::debug;
@@ -39,6 +39,14 @@ pub fn execute(
             LaunchClientMode::Ordinary,
         ),
     };
+
+    if let Some(interruption) = context.interruption() {
+        return Err(UseCaseFailure::without_payload(AppError::Runtime(format!(
+            "{} for command '{}'",
+            interruption_message(interruption),
+            context.command().as_str()
+        ))));
+    }
 
     let mut utilities = PlatformUtilities::from_config(config);
     let location = utilities
@@ -78,6 +86,17 @@ pub fn execute(
         )),
     };
     Ok(result)
+}
+
+fn interruption_message(interruption: ExecutionInterruption) -> &'static str {
+    match interruption {
+        ExecutionInterruption::Cancelled => {
+            "execution cancelled before reaching a safe completion point"
+        }
+        ExecutionInterruption::TimedOut => {
+            "execution timeout expired before reaching a safe completion point"
+        }
+    }
 }
 
 fn mode_label(mode: LaunchModeRequest) -> &'static str {
@@ -124,6 +143,7 @@ mod tests {
         AppConfig {
             base_path: base_path.to_path_buf(),
             work_path: work_path.to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),

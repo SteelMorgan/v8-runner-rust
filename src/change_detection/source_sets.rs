@@ -104,6 +104,7 @@ mod tests {
         let config = AppConfig {
             base_path: std::path::PathBuf::from("."),
             work_path: std::path::PathBuf::from("target/tmp-work"),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -131,6 +132,7 @@ mod tests {
         let config = AppConfig {
             base_path: std::path::PathBuf::from("."),
             work_path: std::path::PathBuf::from("target/tmp-work"),
+            execution_timeout: 300_000,
             format: SourceFormat::Edt,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),

@@ -269,6 +269,7 @@ mod tests {
         AppConfig {
             base_path: base.to_path_buf(),
             work_path: work.to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Edt,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -366,12 +367,8 @@ mod tests {
         let mut config = sample_config(dir.path(), dir.path(), &ibcmd);
         config.infobase = crate::config::model::InfobaseConfig::server(
             "Srvr=cluster:1541;Ref=demo",
-            crate::config::model::InfobaseDbmsConfig::new(
-                "PostgreSQL",
-                "localhost",
-                "demo",
-            )
-            .with_credentials(Some("postgres".to_owned()), Some("pg-secret".to_owned())),
+            crate::config::model::InfobaseDbmsConfig::new("PostgreSQL", "localhost", "demo")
+                .with_credentials(Some("postgres".to_owned()), Some("pg-secret".to_owned())),
         )
         .with_credentials(Some("Admin".to_owned()), Some("secret".to_owned()));
 

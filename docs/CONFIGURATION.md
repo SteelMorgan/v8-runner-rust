@@ -39,6 +39,7 @@ v8-runner config init --format edt
 ```yaml
 basePath: /path/to/project
 workPath: build
+execution_timeout: 300000
 format: EDT
 builder: DESIGNER
 infobase:
@@ -118,6 +119,21 @@ tests:
 - Тип: путь
 - Обязателен: да
 - Значение: рабочий каталог для временных файлов, логов, hash storage и EDT workspace
+
+### `execution_timeout`
+
+- Тип: integer
+- Обязателен: нет
+- По умолчанию: `300000`
+- Допустимый диапазон: `1..=86400000`
+- Единица измерения: миллисекунды
+- Общий публичный budget для CLI и MCP команд
+
+Поведение:
+
+- покрывает queue wait, use case orchestration и platform execution;
+- используется как transport-neutral deadline в `ExecutionContext`;
+- для EDT не заменяет `tools.edt_cli.command_timeout_ms`, а ограничивает общий command budget.
 
 Поведение:
 

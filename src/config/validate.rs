@@ -86,6 +86,9 @@ pub enum ConfigValidationError {
     #[error("build.partialLoadThreshold must be greater than or equal to 1")]
     InvalidPartialLoadThreshold,
 
+    #[error("execution_timeout must be between 1 and 86400000 milliseconds")]
+    InvalidExecutionTimeout,
+
     #[error("tests.execution_timeout_seconds must be between 1 and 86400 seconds")]
     InvalidTestExecutionTimeout,
 
@@ -153,6 +156,7 @@ pub fn validate(config: &AppConfig) -> Result<(), ConfigValidationError> {
     validate_connection(config)?;
     validate_platform_version(config)?;
     validate_build_config(config)?;
+    validate_execution_timeout(config)?;
     validate_test_config(config)?;
     validate_mcp_config(config)?;
     validate_edt_cli_config(config)?;
@@ -392,6 +396,14 @@ fn validate_build_config(config: &AppConfig) -> Result<(), ConfigValidationError
     Ok(())
 }
 
+fn validate_execution_timeout(config: &AppConfig) -> Result<(), ConfigValidationError> {
+    if !(1..=86_400_000).contains(&config.execution_timeout) {
+        return Err(ConfigValidationError::InvalidExecutionTimeout);
+    }
+
+    Ok(())
+}
+
 fn validate_test_config(config: &AppConfig) -> Result<(), ConfigValidationError> {
     if !(1..=86_400).contains(&config.tests.execution_timeout_seconds) {
         return Err(ConfigValidationError::InvalidTestExecutionTimeout);
@@ -555,6 +567,7 @@ mod tests {
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -591,6 +604,7 @@ mod tests {
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -627,6 +641,7 @@ mod tests {
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -667,6 +682,7 @@ mod tests {
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -701,6 +717,7 @@ mod tests {
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -735,6 +752,7 @@ mod tests {
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -765,6 +783,7 @@ mod tests {
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -801,6 +820,7 @@ mod tests {
         let mut config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -827,6 +847,42 @@ mod tests {
     }
 
     #[test]
+    fn rejects_zero_global_execution_timeout() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let source_dir = base.path().join("src");
+        std::fs::create_dir_all(&source_dir).expect("source dir");
+
+        let mut config = AppConfig {
+            base_path: base.path().to_path_buf(),
+            work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
+            format: SourceFormat::Designer,
+            builder: BuilderBackend::Designer,
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
+            source_sets: vec![SourceSetConfig {
+                name: "main".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: source_dir
+                    .strip_prefix(base.path())
+                    .expect("relative")
+                    .to_path_buf(),
+            }],
+            build: BuildConfig::default(),
+            tools: ToolsConfig::default(),
+            mcp: Default::default(),
+            tests: TestsConfig::default(),
+        };
+        config.execution_timeout = 0;
+
+        let err = validate(&config).expect_err("expected invalid execution timeout");
+        assert!(matches!(
+            err,
+            ConfigValidationError::InvalidExecutionTimeout
+        ));
+    }
+
+    #[test]
     fn allows_edt_with_ibcmd_builder_for_file_connection() {
         let base = tempdir().expect("base");
         let work = tempdir().expect("work");
@@ -836,6 +892,7 @@ mod tests {
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Edt,
             builder: BuilderBackend::Ibcmd,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -865,6 +922,7 @@ mod tests {
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -895,6 +953,7 @@ mod tests {
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Ibcmd,
             infobase: crate::config::model::InfobaseConfig::file("/F /tmp/ib"),
@@ -924,6 +983,7 @@ mod tests {
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Edt,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -957,6 +1017,7 @@ mod tests {
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Edt,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -980,6 +1041,7 @@ mod tests {
         let config = AppConfig {
             base_path: shared.path().to_path_buf(),
             work_path: shared.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Edt,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -1015,6 +1077,7 @@ mod tests {
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Edt,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -1049,9 +1112,15 @@ mod tests {
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Edt,
             builder: BuilderBackend::Ibcmd,
-            infobase: crate::config::model::InfobaseConfig { connection: "Srvr=localhost;Ref=ib".to_owned(), user: None, password: None, dbms: None },
+            infobase: crate::config::model::InfobaseConfig {
+                connection: "Srvr=localhost;Ref=ib".to_owned(),
+                user: None,
+                password: None,
+                dbms: None,
+            },
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -1083,15 +1152,12 @@ mod tests {
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Edt,
             builder: BuilderBackend::Ibcmd,
             infobase: crate::config::model::InfobaseConfig::server(
                 "Srvr=localhost;Ref=ib",
-                crate::config::model::InfobaseDbmsConfig::new(
-                    "PostgreSQL",
-                    "localhost",
-                    "ib",
-                ),
+                crate::config::model::InfobaseDbmsConfig::new("PostgreSQL", "localhost", "ib"),
             ),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
@@ -1120,15 +1186,12 @@ mod tests {
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Ibcmd,
             infobase: crate::config::model::InfobaseConfig::server(
                 "File=/tmp/ib",
-                crate::config::model::InfobaseDbmsConfig::new(
-                    "PostgreSQL",
-                    "localhost",
-                    "ib",
-                ),
+                crate::config::model::InfobaseDbmsConfig::new("PostgreSQL", "localhost", "ib"),
             ),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
@@ -1145,7 +1208,10 @@ mod tests {
         };
 
         let err = validate(&config).expect_err("file connection must reject dbms contract");
-        assert!(matches!(err, ConfigValidationError::DbmsNotAllowedForFileConnection));
+        assert!(matches!(
+            err,
+            ConfigValidationError::DbmsNotAllowedForFileConnection
+        ));
     }
 
     #[test]
@@ -1158,6 +1224,7 @@ mod tests {
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Edt,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -1190,6 +1257,7 @@ mod tests {
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Edt,
             builder: BuilderBackend::Ibcmd,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -1221,6 +1289,7 @@ mod tests {
         let mut config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -1256,6 +1325,7 @@ mod tests {
         let mut config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -1304,6 +1374,7 @@ mod tests {
         let mut config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -1351,6 +1422,7 @@ mod tests {
         let mut config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -1394,6 +1466,7 @@ mod tests {
         let mut config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -1444,6 +1517,7 @@ mod tests {
         let mut config = AppConfig {
             base_path: base.path().to_path_buf(),
             work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),

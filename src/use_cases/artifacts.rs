@@ -1148,6 +1148,7 @@ mod tests {
         AppConfig {
             base_path: base.to_path_buf(),
             work_path: work.to_path_buf(),
+            execution_timeout: 300_000,
             format,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),

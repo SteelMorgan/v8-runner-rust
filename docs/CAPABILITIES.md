@@ -142,6 +142,7 @@ v8-runner test va
 
 Связанный конфиг:
 
+- `execution_timeout` задаёт общий command deadline для CLI и MCP; он покрывает queue wait и execution целиком.
 - `tests.execution_timeout_seconds` управляет запасным жёстким тайм-аутом для запуска Enterprise.
 - В активном пользовательском контракте таймаутов используется только `tests.*.timeouts.total_ms`; `startup_ms` и `run_ms` зарезервированы и не влияют на запуск.
 - Флаг `--full` относится именно к команде `test`, поэтому его нужно ставить до `all` или `module`.

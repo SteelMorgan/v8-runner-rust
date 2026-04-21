@@ -27,14 +27,12 @@ use rmcp::{
 use serde_json::json;
 use thiserror::Error;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
-use tracing::error;
 
 use crate::config::model::AppConfig;
 use crate::mcp::context::McpCallContext;
-use crate::mcp::edt_session::{EdtRequestCompletion, EdtSessionManager, EdtSessionShutdownError};
+use crate::mcp::edt_session::{EdtSessionManager, EdtSessionShutdownError};
 use crate::mcp::edt_syntax;
 use crate::mcp::error::{McpInternalError, McpServiceResult};
 use crate::mcp::port::{DefaultMcpUseCasePort, McpUseCasePort};
@@ -82,10 +80,6 @@ struct ExecutionPolicy {
 }
 
 impl ExecutionPolicy {
-    const fn standard() -> Self {
-        Self { timeout: None }
-    }
-
     const fn bounded(timeout: Duration) -> Self {
         Self {
             timeout: Some(timeout),
@@ -108,18 +102,8 @@ impl McpTool {
     }
 
     fn execution_policy(self, config: &AppConfig) -> ExecutionPolicy {
-        match self {
-            Self::CheckSyntaxEdt => ExecutionPolicy::bounded(Duration::from_millis(
-                config.tools.edt_cli.command_timeout_ms,
-            )),
-            Self::RunAllTests
-            | Self::RunModuleTests
-            | Self::BuildProject
-            | Self::DumpConfig
-            | Self::LaunchApp
-            | Self::CheckSyntaxDesignerConfig
-            | Self::CheckSyntaxDesignerModules => ExecutionPolicy::standard(),
-        }
+        let _ = self;
+        ExecutionPolicy::bounded(config.execution_timeout_duration())
     }
 }
 
@@ -327,24 +311,31 @@ impl McpToolServer {
 
         let config = self.config.clone();
         let port = self.port.clone();
-        let call_context = self.call_context.with_edt_timeout(remaining_timeout);
+        let call_context = self
+            .call_context
+            .clone()
+            .with_deadline(deadline.map(Instant::into_std))
+            .with_cancellation(cancellation.clone())
+            .with_edt_timeout(remaining_timeout);
         let mut handle =
             tokio::task::spawn_blocking(move || method(config, port, call_context, request));
-
-        tokio::select! {
-            biased;
-            result = &mut handle => {
-                let result = result
-                    .map_err(|_| execution_error(ErrorReason::JoinFailure, ExecutionStage::Running, timeout))?;
-                map_tool_result(result)
-            }
-            _ = cancellation.cancelled() => {
-                reap_detached_call(handle, permit);
-                Err(execution_error(ErrorReason::Cancelled, ExecutionStage::Running, timeout))
-            }
-            _ = wait_for_deadline(deadline), if deadline.is_some() => {
-                reap_detached_call(handle, permit);
-                Err(execution_error(ErrorReason::Timeout, ExecutionStage::Running, timeout))
+        let _permit = permit;
+        let mut interrupted = None;
+        loop {
+            tokio::select! {
+                biased;
+                result = &mut handle => {
+                    let result = result
+                        .map_err(|_| execution_error(ErrorReason::JoinFailure, ExecutionStage::Running, timeout))?;
+                    return map_tool_result(result);
+                }
+                _ = cancellation.cancelled(), if interrupted.is_none() => {
+                    interrupted = Some(ErrorReason::Cancelled);
+                }
+                _ = wait_for_deadline(deadline), if deadline.is_some() && interrupted.is_none() => {
+                    cancellation.cancel();
+                    interrupted = Some(ErrorReason::Timeout);
+                }
             }
         }
     }
@@ -473,7 +464,9 @@ impl McpToolServer {
                             crate::use_cases::context::CommandName::Syntax,
                             call_context.transport(),
                         )
-                        .with_edt_timeout(call_context.edt_timeout());
+                        .with_edt_timeout(call_context.edt_timeout())
+                        .with_deadline(call_context.deadline())
+                        .with_cancellation(call_context.cancellation());
                         let use_case_request = normalize_check_syntax_edt_request(&request);
                         map_syntax_use_case_result(port.check_syntax(
                             &context,
@@ -515,12 +508,19 @@ impl McpToolServer {
             ));
         }
 
+        let edt_timeout = remaining_timeout
+            .map(|value| {
+                value.min(Duration::from_millis(
+                    self.config.tools.edt_cli.command_timeout_ms,
+                ))
+            })
+            .unwrap_or_else(|| Duration::from_millis(1));
         let use_case_request = normalize_check_syntax_edt_request(&request);
         let result = edt_syntax::execute(
             self.edt_session.as_ref(),
             self.config.as_ref(),
             &use_case_request,
-            remaining_timeout.unwrap_or_else(|| Duration::from_millis(1)),
+            edt_timeout,
             cancellation,
         )
         .await;
@@ -540,7 +540,8 @@ impl McpToolServer {
             }
             Err(edt_syntax::EdtSyntaxTransportError::RunningCancelledDetached { completion }) => {
                 if let Some(permit) = permit.take() {
-                    reap_detached_edt_call(completion, permit);
+                    let _permit = permit;
+                    completion.wait().await;
                 }
                 Err(execution_error(
                     ErrorReason::Cancelled,
@@ -566,7 +567,8 @@ impl McpToolServer {
             }
             Err(edt_syntax::EdtSyntaxTransportError::RunningTimeoutDetached { completion }) => {
                 if let Some(permit) = permit.take() {
-                    reap_detached_edt_call(completion, permit);
+                    let _permit = permit;
+                    completion.wait().await;
                 }
                 Err(execution_error(
                     ErrorReason::Timeout,
@@ -1086,27 +1088,6 @@ async fn wait_for_shutdown_signal() {
     }
 }
 
-fn reap_detached_call<TResponse>(
-    handle: JoinHandle<McpServiceResult<TResponse>>,
-    permit: OwnedSemaphorePermit,
-) where
-    TResponse: Send + 'static,
-{
-    tokio::spawn(async move {
-        let _permit = permit;
-        if let Err(join_error) = handle.await {
-            error!(?join_error, "detached MCP execution task failed");
-        }
-    });
-}
-
-fn reap_detached_edt_call(completion: EdtRequestCompletion, permit: OwnedSemaphorePermit) {
-    tokio::spawn(async move {
-        let _permit = permit;
-        completion.wait().await;
-    });
-}
-
 fn max_concurrent_calls(config: &AppConfig) -> usize {
     config.mcp.execution.max_concurrent_calls.max(1)
 }
@@ -1226,7 +1207,11 @@ mod tests {
 
         assert_eq!(
             error,
-            execution_error(ErrorReason::Cancelled, ExecutionStage::Queued, None)
+            execution_error(
+                ErrorReason::Cancelled,
+                ExecutionStage::Queued,
+                Some(Duration::from_millis(300_000))
+            )
         );
         assert_eq!(started.load(Ordering::SeqCst), 0);
         assert_eq!(execution_telemetry.snapshot().cancelled_total, 1);
@@ -1363,8 +1348,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn standard_running_cancellation_returns_early_and_retains_capacity_until_worker_finishes(
-    ) {
+    async fn standard_running_cancellation_waits_for_terminal_state_and_releases_capacity() {
         let server = McpToolServer::with_port(
             Arc::new(test_config(1, 9)),
             Arc::new(DefaultMcpUseCasePort),
@@ -1395,17 +1379,13 @@ mod tests {
                     },
                 )
                 .await
-                .expect_err("running call must be cancelled")
+                .expect("running call should complete after cancellation request")
         });
 
         tokio::time::sleep(Duration::from_millis(15)).await;
         cancellation.cancel();
-        let error = first.await.expect("first task join");
-        assert!(started.elapsed() < Duration::from_millis(80));
-        assert_eq!(
-            error,
-            execution_error(ErrorReason::Cancelled, ExecutionStage::Running, None)
-        );
+        let _result = first.await.expect("first task join");
+        assert!(started.elapsed() >= Duration::from_millis(80));
 
         run_probe_call(
             server,
@@ -1421,7 +1401,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn running_cancellation_returns_early_and_retains_capacity_until_worker_finishes() {
+    async fn running_cancellation_waits_for_terminal_state_and_releases_capacity() {
         let server = McpToolServer::with_port(
             Arc::new(test_config_with_edt_timeout(1, 9, 500)),
             Arc::new(DefaultMcpUseCasePort),
@@ -1452,21 +1432,13 @@ mod tests {
                     },
                 )
                 .await
-                .expect_err("running call must be cancelled")
+                .expect("running call should complete after cancellation request")
         });
 
         tokio::time::sleep(Duration::from_millis(15)).await;
         cancellation.cancel();
-        let error = first.await.expect("first task join");
-        assert!(started.elapsed() < Duration::from_millis(80));
-        assert_eq!(
-            error,
-            execution_error(
-                ErrorReason::Cancelled,
-                ExecutionStage::Running,
-                Some(Duration::from_millis(500))
-            )
-        );
+        let _result = first.await.expect("first task join");
+        assert!(started.elapsed() >= Duration::from_millis(80));
 
         run_probe_call(
             server,
@@ -1482,7 +1454,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn running_timeout_returns_early_and_capacity_recovers() {
+    async fn running_timeout_waits_for_terminal_state_and_capacity_recovers() {
         let server = McpToolServer::with_port(
             Arc::new(test_config_with_edt_timeout(1, 9, 20)),
             Arc::new(DefaultMcpUseCasePort),
@@ -1491,7 +1463,8 @@ mod tests {
         .expect("server");
 
         for _ in 0..2 {
-            let error = server
+            let started = Instant::now();
+            let result = server
                 .execute_tool(
                     McpTool::CheckSyntaxEdt,
                     (),
@@ -1502,17 +1475,9 @@ mod tests {
                     },
                 )
                 .await
-                .expect_err("call must time out");
-
-            assert_eq!(
-                error,
-                execution_error(
-                    ErrorReason::Timeout,
-                    ExecutionStage::Running,
-                    Some(Duration::from_millis(20))
-                )
-            );
-            tokio::time::sleep(Duration::from_millis(70)).await;
+                .expect("call should finish after timeout request reaches terminal state");
+            assert_eq!(result.is_error, Some(false));
+            assert!(started.elapsed() >= Duration::from_millis(60));
         }
 
         run_probe_call(
@@ -1589,6 +1554,7 @@ mod tests {
         AppConfig {
             base_path: PathBuf::from("/tmp/project"),
             work_path: PathBuf::from("/tmp/work"),
+            execution_timeout: edt_timeout_ms,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),

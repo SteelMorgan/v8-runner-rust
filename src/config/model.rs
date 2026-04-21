@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 use crate::domain::execution::ExecutionTimeouts;
 use crate::platform::connection::V8Connection;
@@ -14,6 +15,16 @@ pub struct AppConfig {
 
     /// Working directory for temp files and hash storages
     pub work_path: PathBuf,
+
+    /// Global execution budget for public CLI and MCP commands in milliseconds.
+    #[serde(
+        rename = "execution_timeout",
+        default = "default_execution_timeout_ms",
+        alias = "executionTimeout",
+        alias = "execution_timeout_ms",
+        alias = "execution_timeout_seconds"
+    )]
+    pub execution_timeout: u64,
 
     /// Source format: DESIGNER or EDT
     #[serde(default = "default_format")]
@@ -154,6 +165,11 @@ impl AppConfig {
         conn.password = self.infobase.password.clone();
         conn
     }
+
+    /// Returns the global execution timeout as a duration.
+    pub fn execution_timeout_duration(&self) -> Duration {
+        Duration::from_millis(self.execution_timeout.max(1))
+    }
 }
 
 fn default_format() -> SourceFormat {
@@ -162,6 +178,10 @@ fn default_format() -> SourceFormat {
 
 fn default_builder() -> BuilderBackend {
     BuilderBackend::Designer
+}
+
+fn default_execution_timeout_ms() -> u64 {
+    300_000
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]

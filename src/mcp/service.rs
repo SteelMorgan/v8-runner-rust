@@ -357,7 +357,9 @@ fn execution_context(
     match call_context.transport() {
         transport @ (ExecutionTransport::McpStdio | ExecutionTransport::McpHttp) => {
             Ok(ExecutionContext::new(command, transport)
-                .with_edt_timeout(call_context.edt_timeout()))
+                .with_edt_timeout(call_context.edt_timeout())
+                .with_deadline(call_context.deadline())
+                .with_cancellation(call_context.cancellation()))
         }
         ExecutionTransport::Cli => Err(McpInternalError::new(format!(
             "mcp service received non-MCP transport for {}",
@@ -929,7 +931,7 @@ mod tests {
         ) -> UseCaseResult<BuildResult> {
             self.build_requests
                 .borrow_mut()
-                .push((*context, request.clone()));
+                .push((context.clone(), request.clone()));
             self.build_result
                 .borrow_mut()
                 .take()
@@ -944,7 +946,7 @@ mod tests {
         ) -> UseCaseResult<TestRunResult> {
             self.test_requests
                 .borrow_mut()
-                .push((*context, request.clone()));
+                .push((context.clone(), request.clone()));
             self.test_result
                 .borrow_mut()
                 .take()
@@ -959,7 +961,7 @@ mod tests {
         ) -> UseCaseResult<DumpResult> {
             self.dump_requests
                 .borrow_mut()
-                .push((*context, request.clone()));
+                .push((context.clone(), request.clone()));
             self.dump_result
                 .borrow_mut()
                 .take()
@@ -974,7 +976,7 @@ mod tests {
         ) -> UseCaseResult<LaunchResult> {
             self.launch_requests
                 .borrow_mut()
-                .push((*context, request.clone()));
+                .push((context.clone(), request.clone()));
             self.launch_result
                 .borrow_mut()
                 .take()
@@ -989,7 +991,7 @@ mod tests {
         ) -> UseCaseResult<SyntaxCheckResult> {
             self.syntax_requests
                 .borrow_mut()
-                .push((*context, request.clone()));
+                .push((context.clone(), request.clone()));
             self.syntax_result
                 .borrow_mut()
                 .take()
@@ -2098,6 +2100,7 @@ mod tests {
         AppConfig {
             base_path: PathBuf::from("/tmp/project"),
             work_path: PathBuf::from("/tmp/work"),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),

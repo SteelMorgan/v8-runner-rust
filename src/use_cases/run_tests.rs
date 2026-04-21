@@ -27,7 +27,7 @@ use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::support::path::is_safe_path_segment;
 use crate::use_cases::build_project;
-use crate::use_cases::context::ExecutionContext;
+use crate::use_cases::context::{ExecutionContext, ExecutionInterruption};
 use crate::use_cases::request::{
     BuildRequest as BuildArgs, TestRequest as TestArgs, TestScopeRequest as TestScope,
 };
@@ -46,7 +46,7 @@ pub fn execute(
         transport = ?context.transport(),
         "executing test use case"
     );
-    run_tests(config, args)
+    run_tests(context, config, args)
 }
 
 #[derive(Debug, Serialize)]
@@ -108,7 +108,62 @@ fn make_test_result(
     TestRunResult::from_outcome(outcome, target, mode, warnings, steps, duration_ms)
 }
 
-fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult> {
+fn interrupted_test_failure(
+    context: &ExecutionContext,
+    target: &TestTarget,
+    mode: &TestOutputMode,
+    warnings: &[String],
+    steps: &[StepResult],
+    started: Instant,
+) -> Option<TestExecutionFailure> {
+    let interruption = context.interruption()?;
+    let message = interruption_message(context, interruption);
+    let status = match interruption {
+        ExecutionInterruption::Cancelled => ExecutionStatus::Failed,
+        ExecutionInterruption::TimedOut => ExecutionStatus::TimedOut,
+    };
+    let outcome = ExecutionOutcome::new(status).with_diagnostics(vec![message.clone()]);
+    let result = make_test_result(
+        target.clone(),
+        mode.clone(),
+        outcome,
+        warnings.to_vec(),
+        steps.to_vec(),
+        started.elapsed().as_millis() as u64,
+    );
+    Some(TestExecutionFailure::with_payload(
+        AppError::Runtime(message),
+        result,
+    ))
+}
+
+fn capped_timeout_ms(timeout_override_ms: Option<u64>, context: &ExecutionContext) -> Option<u64> {
+    let remaining_budget_ms = context.remaining_budget().map(|duration| {
+        u64::try_from(duration.as_millis())
+            .unwrap_or(u64::MAX)
+            .max(1)
+    });
+    match (timeout_override_ms, remaining_budget_ms) {
+        (Some(timeout_ms), Some(remaining_ms)) => Some(timeout_ms.min(remaining_ms)),
+        (Some(timeout_ms), None) => Some(timeout_ms),
+        (None, Some(remaining_ms)) => Some(remaining_ms),
+        (None, None) => None,
+    }
+}
+
+fn interruption_message(context: &ExecutionContext, interruption: ExecutionInterruption) -> String {
+    format!(
+        "{} for command '{}'",
+        interruption.message(context.command()),
+        context.command().as_str()
+    )
+}
+
+fn run_tests(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    args: &TestArgs,
+) -> UseCaseResult<TestRunResult> {
     let started = Instant::now();
     let runner_kind = args.execution.profile.kind.clone();
     debug!(
@@ -141,6 +196,11 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
 
     let mut steps = Vec::new();
     let mut warnings = Vec::new();
+    if let Some(failure) =
+        interrupted_test_failure(context, &target, &mode, &warnings, &steps, started)
+    {
+        return Err(failure);
+    }
     let runner_id = match validate_runner_profile_id(&args.execution.profile.id) {
         Ok(runner_id) => runner_id,
         Err(error) => {
@@ -164,7 +224,8 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
 
     debug!("running build prerequisite for tests");
     let build_started = Instant::now();
-    let build_result = match build_project::run_build_unlocked(
+    let build_result = match build_project::execute(
+        context,
         config,
         &BuildArgs {
             full_rebuild: false,
@@ -245,6 +306,11 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
     });
 
     let prepare_runner_started = Instant::now();
+    if let Some(failure) =
+        interrupted_test_failure(context, &target, &mode, &warnings, &steps, started)
+    {
+        return Err(failure);
+    }
     let prepared_run = match prepare_runner_artifacts(config, args, &target, &mut artifacts) {
         Ok(prepared_run) => {
             steps.push(StepResult {
@@ -294,7 +360,7 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
         args.execution
             .client_mode
             .unwrap_or(LaunchClientModeRequest::Thin),
-        args.execution.timeouts.total_ms,
+        capped_timeout_ms(args.execution.timeouts.total_ms, context),
     ) {
         Ok(dsl) => dsl,
         Err(error) => {
@@ -328,6 +394,11 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
 
     let platform_launch = build_platform_launch(&args.execution.launch, &prepared_run, &artifacts);
 
+    if let Some(failure) =
+        interrupted_test_failure(context, &target, &mode, &warnings, &steps, started)
+    {
+        return Err(failure);
+    }
     let platform_result = match enterprise.run_launch(&platform_launch) {
         Ok(result) => {
             steps.push(StepResult {
@@ -1149,6 +1220,7 @@ mod tests {
     use crate::domain::test::{
         TestCase, TestErrorKind, TestReport, TestStatus, TestSuite, TestSummary, TestTarget,
     };
+    use crate::use_cases::context::{CommandName, ExecutionContext};
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -1158,6 +1230,7 @@ mod tests {
         AppConfig {
             base_path: base.clone(),
             work_path: work_path.to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
@@ -1334,7 +1407,8 @@ mod tests {
             },
         };
 
-        let result = super::run_tests(&config, &args);
+        let context = ExecutionContext::cli(CommandName::Test);
+        let result = super::run_tests(&context, &config, &args);
         assert!(result.is_err());
         let error = result.err().expect("error");
         assert!(error.error.to_string().contains("unsafe path characters"));

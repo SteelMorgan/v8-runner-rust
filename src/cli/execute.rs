@@ -99,7 +99,7 @@ fn execute_extensions(
     clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
     let request = map_extensions_request(args);
-    let context = ExecutionContext::cli(CommandName::Extensions);
+    let context = cli_context(config, CommandName::Extensions);
     with_cli_workspace_lock(
         config,
         presenter,
@@ -141,7 +141,7 @@ fn execute_init(
     clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
     let request = InitRequest;
-    let context = ExecutionContext::cli(CommandName::Init);
+    let context = cli_context(config, CommandName::Init);
     with_cli_workspace_lock(
         config,
         presenter,
@@ -189,7 +189,7 @@ fn execute_build(
     clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
     let request = map_build_request(args);
-    let context = ExecutionContext::cli(CommandName::Build);
+    let context = cli_context(config, CommandName::Build);
     with_cli_workspace_lock(
         config,
         presenter,
@@ -237,7 +237,7 @@ fn execute_test(
     clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
     let request = map_test_request(config, args)?;
-    let context = ExecutionContext::cli(CommandName::Test);
+    let context = cli_context(config, CommandName::Test);
     with_cli_workspace_lock(
         config,
         presenter,
@@ -277,7 +277,7 @@ fn execute_load(
     clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
     let request = map_load_request(args)?;
-    let context = ExecutionContext::cli(CommandName::Load);
+    let context = cli_context(config, CommandName::Load);
     with_cli_workspace_lock(
         config,
         presenter,
@@ -325,7 +325,7 @@ fn execute_dump(
     clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
     let request = map_dump_request(args)?;
-    let context = ExecutionContext::cli(CommandName::Dump);
+    let context = cli_context(config, CommandName::Dump);
     with_cli_workspace_lock(
         config,
         presenter,
@@ -373,7 +373,7 @@ fn execute_artifacts(
     clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
     let request = map_artifacts_request_with_config(config, args)?;
-    let context = ExecutionContext::cli(CommandName::Artifacts);
+    let context = cli_context(config, CommandName::Artifacts);
     with_cli_workspace_lock(
         config,
         presenter,
@@ -421,7 +421,7 @@ fn execute_syntax(
     clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
     let request = map_syntax_request(args);
-    let context = ExecutionContext::cli(CommandName::Syntax);
+    let context = cli_context(config, CommandName::Syntax);
     with_cli_workspace_lock(
         config,
         presenter,
@@ -469,7 +469,7 @@ fn execute_launch(
     clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
     let request = map_launch_request(args)?;
-    let context = ExecutionContext::cli(CommandName::Launch);
+    let context = cli_context(config, CommandName::Launch);
     let started = Instant::now();
     with_cli_workspace_lock(
         config,
@@ -746,6 +746,11 @@ fn effective_test_timeouts(
         timeouts.total_ms = Some(legacy_total_seconds.saturating_mul(1_000));
     }
     timeouts
+}
+
+fn cli_context(config: &AppConfig, command: CommandName) -> ExecutionContext {
+    ExecutionContext::cli(command)
+        .with_deadline(Some(Instant::now() + config.execution_timeout_duration()))
 }
 
 fn map_load_request(args: &LoadArgs) -> Result<LoadRequest, UseCaseError> {
@@ -1757,6 +1762,7 @@ mod tests {
         AppConfig {
             base_path: work_path.join("base"),
             work_path: work_path.to_path_buf(),
+            execution_timeout: 300_000,
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
