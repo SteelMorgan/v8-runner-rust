@@ -95,6 +95,30 @@ pub struct DumpRequest {
     pub objects: Vec<String>,
 }
 
+/// Transport-neutral conversion direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConvertDirectionRequest {
+    EdtToDesigner,
+    DesignerToEdt,
+}
+
+/// Transport-neutral request for the `convert` use case.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConvertRequest {
+    /// Requested conversion direction.
+    pub direction: ConvertDirectionRequest,
+    /// Source directory path.
+    pub source_path: String,
+    /// Target directory path.
+    pub target_path: String,
+    /// Optional platform version for Designer -> EDT conversion.
+    pub version: Option<String>,
+    /// Optional base EDT project name for extension/external conversion.
+    pub base_project_name: Option<String>,
+    /// Whether EDT should build the imported project immediately.
+    pub build: bool,
+}
+
 /// Transport-neutral artifact export mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtifactsModeRequest {

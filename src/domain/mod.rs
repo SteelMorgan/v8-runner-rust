@@ -6,6 +6,8 @@ pub mod artifacts;
 pub mod build;
 /// Config bootstrap domain models.
 pub mod config_init;
+/// Source-format conversion domain models.
+pub mod convert;
 /// Dump domain models.
 pub mod dump;
 /// Shared execution result models.

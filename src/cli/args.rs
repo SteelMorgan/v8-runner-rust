@@ -48,6 +48,8 @@ pub enum Command {
     Test(TestArgs),
     /// Dump configuration from infobase to files
     Dump(DumpArgs),
+    /// Convert sources between EDT and Designer file formats
+    Convert(ConvertArgs),
     /// Export configuration artifacts via Designer batch commands
     #[command(name = "make", visible_alias = "artifacts")]
     Artifacts(ArtifactsArgs),
@@ -185,6 +187,54 @@ pub struct DumpArgs {
     /// Objects for partial dump (TYPE:NAME)
     #[arg(long = "object")]
     pub objects: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct ConvertArgs {
+    #[command(subcommand)]
+    pub direction: ConvertCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConvertCommand {
+    /// Convert one EDT project into Designer configuration files
+    EdtToDesigner(ConvertEdtToDesignerArgs),
+    /// Convert Designer configuration files into one EDT project
+    DesignerToEdt(ConvertDesignerToEdtArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ConvertEdtToDesignerArgs {
+    /// Path to the EDT project directory
+    #[arg(long)]
+    pub source: String,
+
+    /// Target directory for Designer-format files
+    #[arg(long)]
+    pub target: String,
+}
+
+#[derive(Args, Debug)]
+pub struct ConvertDesignerToEdtArgs {
+    /// Path to the Designer-format directory
+    #[arg(long)]
+    pub source: String,
+
+    /// Target directory for the EDT project
+    #[arg(long)]
+    pub target: String,
+
+    /// Optional platform version for the created EDT project
+    #[arg(long)]
+    pub version: Option<String>,
+
+    /// Optional base EDT project name for extension or external project import
+    #[arg(long)]
+    pub base_project_name: Option<String>,
+
+    /// Build the EDT project after import
+    #[arg(long)]
+    pub build: bool,
 }
 
 #[derive(Args, Debug)]

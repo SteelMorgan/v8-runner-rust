@@ -5,9 +5,9 @@ use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 use crate::cli::args::{
-    ArtifactsArgs, BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs,
-    DumpArgs, ExtensionsArgs, LaunchArgs, LaunchOptionsArgs, LoadArgs, SyntaxArgs, SyntaxTarget,
-    TestArgs, TestRunner, TestScope, TestYaxunitArgs,
+    ArtifactsArgs, BuildArgs, Command, ConvertArgs, ConvertCommand, DesignerConfigSyntaxArgs,
+    DesignerModulesSyntaxArgs, DumpArgs, ExtensionsArgs, LaunchArgs, LaunchOptionsArgs, LoadArgs,
+    SyntaxArgs, SyntaxTarget, TestArgs, TestRunner, TestScope, TestYaxunitArgs,
 };
 use crate::cli::signal::CliSignalGuard;
 use crate::config::model::{AppConfig, SourceSetPurpose};
@@ -16,6 +16,7 @@ use crate::domain::artifact::{
 };
 use crate::domain::artifacts::{ArtifactBuildMode, ArtifactsResult};
 use crate::domain::build::{BuildMode, BuildResult};
+use crate::domain::convert::{ConvertDirection, ConvertResult};
 use crate::domain::dump::{DumpMode, DumpResult};
 use crate::domain::execution::{
     ExecutionError, ExecutionInterruptionDetails, ExecutionStepStatus, ExecutionTimeouts,
@@ -42,6 +43,7 @@ use crate::use_cases::artifacts;
 use crate::use_cases::build_project;
 use crate::use_cases::check_syntax;
 use crate::use_cases::configure_extensions;
+use crate::use_cases::convert_sources;
 use crate::use_cases::context::{CommandName, ExecutionContext};
 use crate::use_cases::dump_config;
 use crate::use_cases::init_project;
@@ -49,9 +51,10 @@ use crate::use_cases::launch_app;
 use crate::use_cases::load_artifact;
 use crate::use_cases::request::{
     ArtifactsModeRequest, ArtifactsRequest, BuildRequest, ConfigureExtensionsRequest,
-    DesignerConfigSyntaxRequest, DesignerModulesSyntaxRequest, DumpModeRequest, DumpRequest,
-    InitRequest, LaunchModeRequest, LaunchRequest, LoadRequest, SyntaxRequest, SyntaxTargetRequest,
-    TestRequest, TestScopeRequest,
+    ConvertDirectionRequest, ConvertRequest, DesignerConfigSyntaxRequest,
+    DesignerModulesSyntaxRequest, DumpModeRequest, DumpRequest, InitRequest, LaunchModeRequest,
+    LaunchRequest, LoadRequest, SyntaxRequest, SyntaxTargetRequest, TestRequest,
+    TestScopeRequest,
 };
 use crate::use_cases::result::{UseCaseError, UseCaseErrorKind};
 use crate::use_cases::run_tests;
@@ -105,6 +108,13 @@ pub fn execute_command(
             clean_before_execution,
             cancellation,
         ),
+        Command::Convert(args) => execute_convert(
+            config,
+            args,
+            presenter,
+            clean_before_execution,
+            cancellation,
+        ),
         Command::Artifacts(args) => execute_artifacts(
             config,
             args,
@@ -140,6 +150,7 @@ pub fn command_name(command: &Command) -> CommandName {
         Command::Load(_) => CommandName::Load,
         Command::Test(_) => CommandName::Test,
         Command::Dump(_) => CommandName::Dump,
+        Command::Convert(_) => CommandName::Convert,
         Command::Artifacts(_) => CommandName::Artifacts,
         Command::Syntax(_) => CommandName::Syntax,
         Command::Launch(_) => CommandName::Launch,
@@ -418,6 +429,60 @@ fn execute_dump(
                 } else {
                     if let Some(result) = failure.payload.as_ref() {
                         render_dump_text(result, presenter, false);
+                    }
+                    presenter.print_error(&error.to_string());
+                }
+                Err(error)
+            }
+        },
+    )
+}
+
+fn execute_convert(
+    config: &AppConfig,
+    args: &ConvertArgs,
+    presenter: &Presenter,
+    clean_before_execution: bool,
+    cancellation: CancellationToken,
+) -> Result<(), UseCaseError> {
+    let request = map_convert_request(args)?;
+    if let Err(error) = convert_sources::preflight_validate(config, &request) {
+        let error: UseCaseError = error.into();
+        presenter.print_error(&error.to_string());
+        return Err(error);
+    }
+    let context = cli_context(config, CommandName::Convert, cancellation);
+    with_cli_workspace_lock(
+        config,
+        presenter,
+        CommandName::Convert,
+        clean_before_execution,
+        || match convert_sources::execute(&context, config, &request) {
+            Ok(result) => {
+                if presenter.is_json() {
+                    presenter.print_envelope(&Envelope::ok(
+                        CommandName::Convert.as_str(),
+                        result.duration_ms,
+                        result,
+                    ));
+                } else {
+                    render_convert_text(&result, presenter, true);
+                }
+                Ok(())
+            }
+            Err(failure) => {
+                let error = failure.error;
+                if presenter.is_json() {
+                    if let Some(result) = failure.payload {
+                        presenter.print_envelope(&Envelope::err(
+                            CommandName::Convert.as_str(),
+                            result.duration_ms,
+                            result,
+                        ));
+                    }
+                } else {
+                    if let Some(result) = failure.payload.as_ref() {
+                        render_convert_text(result, presenter, false);
                     }
                     presenter.print_error(&error.to_string());
                 }
@@ -857,6 +922,27 @@ fn map_dump_request(args: &DumpArgs) -> Result<DumpRequest, UseCaseError> {
         source_set: args.source_set.clone(),
         extension: args.extension.clone(),
         objects: args.objects.clone(),
+    })
+}
+
+fn map_convert_request(args: &ConvertArgs) -> Result<ConvertRequest, UseCaseError> {
+    Ok(match &args.direction {
+        ConvertCommand::EdtToDesigner(direction) => ConvertRequest {
+            direction: ConvertDirectionRequest::EdtToDesigner,
+            source_path: direction.source.clone(),
+            target_path: direction.target.clone(),
+            version: None,
+            base_project_name: None,
+            build: false,
+        },
+        ConvertCommand::DesignerToEdt(direction) => ConvertRequest {
+            direction: ConvertDirectionRequest::DesignerToEdt,
+            source_path: direction.source.clone(),
+            target_path: direction.target.clone(),
+            version: direction.version.clone(),
+            base_project_name: direction.base_project_name.clone(),
+            build: direction.build,
+        },
     })
 }
 
@@ -1424,6 +1510,35 @@ fn render_dump_text(result: &DumpResult, presenter: &Presenter, succeeded: bool)
     single_timeline(presenter, timeline_status(succeeded), label, details);
 }
 
+fn render_convert_text(result: &ConvertResult, presenter: &Presenter, succeeded: bool) {
+    let label = if succeeded {
+        if result.message.is_some() {
+            "Convert completed with warnings"
+        } else {
+            "Convert completed successfully"
+        }
+    } else {
+        "Convert failed"
+    };
+    let mut details = vec![
+        format!("direction: {}", render_convert_direction(result.direction)),
+        format!("source: {}", result.source_path.display()),
+        format!("output: {}", result.target_path.display()),
+        format!("workspace: {}", result.workspace_path.display()),
+    ];
+    if !succeeded || result.message.is_some() {
+        let prefix = if succeeded { "warning" } else { "error" };
+        append_if_present(
+            &mut details,
+            result
+                .message
+                .as_deref()
+                .map(|message| bracketed_detail(prefix, message)),
+        );
+    }
+    single_timeline(presenter, timeline_status(succeeded), label, details);
+}
+
 fn render_artifacts_text(result: &ArtifactsResult, presenter: &Presenter, succeeded: bool) {
     let source_set = result.source_set.as_deref().unwrap_or("<unresolved>");
     let warning = succeeded
@@ -1489,6 +1604,13 @@ fn render_artifacts_text(result: &ArtifactsResult, presenter: &Presenter, succee
         }
     }
     single_timeline(presenter, timeline_status(succeeded), label, details);
+}
+
+fn render_convert_direction(direction: ConvertDirection) -> &'static str {
+    match direction {
+        ConvertDirection::EdtToDesigner => "edt-to-designer",
+        ConvertDirection::DesignerToEdt => "designer-to-edt",
+    }
 }
 
 fn render_syntax_text(result: &SyntaxCheckResult, presenter: &Presenter) {

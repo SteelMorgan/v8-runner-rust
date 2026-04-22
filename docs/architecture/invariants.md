@@ -19,8 +19,9 @@
 3. Текущая MCP-поверхность состоит из 8 tool-операций: `run_all_tests`, `run_module_tests`, `build_project`, `dump_config`, `launch_app`, `check_syntax_edt`, `check_syntax_designer_config`, `check_syntax_designer_modules`.
 4. Добавление, удаление или переименование MCP tool-операций является изменением публичного контракта и требует отдельного ADR или явного обновления действующего ADR.
 5. Любое изменение MCP surface должно проходить по checklist из `docs/architecture/change-checklist.md` и синхронизировать docs/source/tests, перечисленные в `ADR-0005`.
+6. CLI-only команды являются допустимой частью public surface; наличие CLI-команды не должно использоваться как аргумент для неявной публикации MCP tool.
 
-См. [ADR-0005](../decisions/0005-razdelit-cli-i-mcp-publichnye-poverhnosti.md).
+См. [ADR-0005](../decisions/0005-razdelit-cli-i-mcp-publichnye-poverhnosti.md) и [ADR-0020](../decisions/0020-dobavit-cli-only-convert-dlya-dvustoronney-konvertatsii-edt-i-designer.md).
 
 ## Config Contract
 

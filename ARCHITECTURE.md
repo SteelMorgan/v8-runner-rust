@@ -43,6 +43,7 @@ The CLI/runtime boundary is now split explicitly:
 - `app.rs` now also branches early for `mcp serve stdio` and `mcp serve http`, because those paths must bypass CLI presenters and run with MCP-specific bootstrap/logging behavior.
 - `cli::execute` converts `clap` args into transport-neutral request structs and renders command success/failure output.
 - `cli::execute` also owns the CLI workspace lock boundary for commands that use `workPath`; nested flows call explicit unlocked internals only while the outer command owns the lock.
+- CLI-only maintenance commands like `convert` live on the same adapter boundary and do not imply a matching MCP tool.
 - `use_cases::{request,context,result}` define the transport-neutral contract that both CLI and future MCP adapters can consume.
 - `use_cases/*.rs` no longer depend on `clap`, `Presenter`, or `Envelope`.
 - Новые public CLI/MCP команды с runtime state под `workPath` должны сохранять этот boundary и проходить checklist из `docs/architecture/change-checklist.md`.
@@ -97,7 +98,7 @@ The MCP adapter no longer needs to talk to `cli::execute` or to reuse domain ser
 - HTTP session capacity is tracked via atomic reservation (`reserve -> delegate initialize -> confirm/release`) plus lazy pruning of expired rmcp sessions, so `max_sessions` remains correct across explicit close, TTL expiry, and failed initializes.
 - Queued MCP cancellation/timeout still return early as transport-level admission errors. Detached one-shot work retains the server-side permit until completion, while live `check_syntax_edt` retains both the server-side permit and the shared actor's internal admission slot until the in-flight interactive command reaches terminal state and the server can return a structured tool result.
 - MCP normalization is finalized in the service layer: dump-mode defaulting, launch alias mapping, `allExtensions` tri-state inference, and MCP-only pre-validation for syntax flag dependencies all live there instead of leaking into transport-neutral use cases.
-- Общий shared actor применяет deterministic baseline contract перед каждой interactive EDT-командой: `cd <workPath/edt-workspace>`, затем `cd`, который обязан вернуть тот же workspace path. Exhaustion request budget в этой pre-dispatch phase остаётся `QueuedTimeout`; reset/probe faults форсят session restart и queue drain.
+- Общий shared actor применяет deterministic baseline contract перед каждой interactive EDT-командой: `cd <scenario EDT workspace>`, затем `cd`, который обязан вернуть тот же workspace path. Для `init` это обычно `workPath/edt-workspace`, для `convert` — `workPath/convert/edt-workspace`. Exhaustion request budget в этой pre-dispatch phase остаётся `QueuedTimeout`; reset/probe faults форсят session restart и queue drain.
 
 Important staging note:
 
@@ -122,6 +123,7 @@ Constraints to keep in mind:
 - `builder=IBCMD` does not support object-scoped partial dump directly; `PARTIAL` degrades to
   incremental export for the resolved target and returns a warning while preserving the requested
   mode in the result payload.
+- `convert` is intentionally not a builder-dispatch scenario: it is a CLI-only EDT-CLI path conversion flow that stays independent from infobase/builder semantics.
 
 ## Dump And Artifact Publication
 
@@ -135,7 +137,7 @@ Incremental and partial dump modes remain direct non-atomic update modes.
 Use cases now return transport-neutral payloads or structured failures.
 
 - `cli::execute` converts successful command payloads into `Envelope<T>` for JSON mode.
-- `cli::execute` preserves command-specific text formatting for build, test, dump, syntax, and launch.
+- `cli::execute` preserves command-specific text formatting for build, test, dump, convert, syntax, and launch.
 - Failure payload emission is also decided at the adapter boundary, which keeps `launch --output json` failure semantics unchanged while allowing other commands to keep structured JSON failures.
 - `mcp::service` returns MCP-specific DTOs and never reuses CLI `Envelope` or presenter logic.
 - Runner-like command payloads use `ExecutionOutcome<T>` as their domain source of truth for status, diagnostics, structured errors, metrics, artifacts, and typed parsed payload; top-level command structs may keep compatibility fields while adapters migrate.
@@ -145,6 +147,8 @@ Use cases now return transport-neutral payloads or structured failures.
 `workPath` is the root for runtime artifacts:
 
 - `workPath/logs/platform/` stores platform log files.
+- `workPath/edt-workspace/` stores the shared EDT workspace used by `init`.
+- `workPath/convert/edt-workspace/` stores the dedicated EDT workspace used by `convert`.
 - `workPath/temp/partial-lists/` stores partial load and partial dump list files.
 - `workPath/temp/yaxunit/` stores temporary YaXUnit config files.
 - `workPath/hash-storages/` remains reserved for change detection state.

@@ -37,11 +37,11 @@ flowchart TB
 
 - Преобразует аргументы `clap` в транспортно-нейтральные запросы.
 - Отвечает за разбор аргументов и CLI-специфичный рендеринг результатов.
-- Публикует команды `config init`, `init`, `extensions`, `build`, `load`, `test`, `dump`, `make`/`artifacts`, `syntax`, `launch` и `mcp`.
+- Публикует команды `config init`, `init`, `extensions`, `build`, `load`, `test`, `dump`, `convert`, `make`/`artifacts`, `syntax`, `launch` и `mcp`.
 
 #### `use_cases`
 
-- Центральная оркестрация для `config init`, `init`, `extensions`, `build`, `load`, `test`, `dump`, `artifacts`, `syntax` и `launch`.
+- Центральная оркестрация для `config init`, `init`, `extensions`, `build`, `load`, `test`, `dump`, `convert`, `artifacts`, `syntax` и `launch`.
 - Определяет transport-neutral request/result contracts, которые должны оставаться стабильной внутренней опорой для адаптеров и AI-агентов, работающих через эти адаптеры.
 - Предоставляет workspace lock helper и internal unlocked entrypoints для nested flows вроде `test -> build`; public lock boundary остаётся в CLI/MCP adapters.
 - Для runner-like сценариев собирает typed pipeline-like flow и заполняет `ExecutionOutcome<T>` вместо нового ad hoc result shape.
@@ -51,7 +51,7 @@ flowchart TB
 - Преобразует MCP tool-запросы в запросы use case.
 - Публикует восемь текущих MCP-инструментов.
 - Обрабатывает stdio- и HTTP-транспорты, трекинг сессий, execution admission, HTTP session capacity и общий EDT actor-path.
-- Намеренно не публикует весь CLI: `config init`, `init`, `extensions`, `load` и `make`/`artifacts` остаются CLI-only сценариями.
+- Намеренно не публикует весь CLI: `config init`, `init`, `extensions`, `load`, `convert` и `make`/`artifacts` остаются CLI-only сценариями.
 
 #### `platform`
 

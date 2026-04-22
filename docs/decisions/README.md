@@ -23,6 +23,7 @@
 - [ADR-0017: `v8project.yaml` / `source-set` как главный конфигурационный контракт](0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md) — `accepted`, `2026-04-20`
 - [ADR-0018: Перенести контракт информационной базы в `infobase`](0018-perenesti-kontrakt-informatsionnoy-bazy-v-infobase.md) — `accepted`, `2026-04-21`
 - [ADR-0019: Обеспечивать наличие серверной ИБ через `ibcmd` в `init`](0019-sozdavat-servernuyu-infobazu-cherez-ibcmd-pri-init-pri-otsutstvii.md) — `accepted`, `2026-04-22`
+- [ADR-0020: Упростить CLI-only `convert` до repo-aware конвертации текущих исходников проекта](0020-dobavit-cli-only-convert-dlya-dvustoronney-konvertatsii-edt-i-designer.md) — `accepted`, `2026-04-22`
 
 ## Правила обновления
 

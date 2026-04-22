@@ -23,6 +23,7 @@
 | `test` | Та же матрица, что и у `build` | Всегда сначала запускает `build`, затем YaXUnit через Enterprise |
 | `dump` | `format=DESIGNER` + `builder=DESIGNER` | Полная, инкрементальная или точечная частичная выгрузка объектов |
 | `dump` | `format=DESIGNER` + `builder=IBCMD` | Полная и инкрементальная выгрузка; запрос `partial` деградирует в инкрементальную выгрузку с предупреждением |
+| `convert` | CLI-only EDT -> Designer и Designer -> EDT по указанным путям | Использует EDT CLI, отдельный workspace `workPath/convert/edt-workspace`, full-replacement publication target; не требует `builder` и не использует ИБ |
 | `syntax` | `syntax designer-config` и `syntax designer-modules` требуют `builder=DESIGNER`, `format=DESIGNER` | Проверки через Designer |
 | `syntax` | `syntax edt` требует `builder=DESIGNER`, `format=EDT` | Проверка через EDT `validate` |
 | `launch` | У команды нет отдельного деления по форматам | Требует соответствующую локальную утилиту 1С |
@@ -178,6 +179,25 @@ v8-runner dump --mode <full|incremental|partial> [--source-set <NAME>] [--extens
 
 - `builder=DESIGNER`: `partial` выполняет точечную выгрузку объектов через частичную выгрузку Designer.
 - `builder=IBCMD`: прямая точечная частичная выгрузка по объектам недоступна. Запрос `partial` деградирует в инкрементальную выгрузку для разрешённой цели и возвращает предупреждение, сохраняя запрошенный режим как `PARTIAL` в результирующем ответе.
+- `format=EDT`: обратная синхронизация через `dump` пока не реализована. Для явной файловой конвертации между EDT и Designer используйте `convert`.
+
+## Команда `convert`
+
+```bash
+v8-runner convert edt-to-designer --source <EDT_PROJECT_DIR> --target <DESIGNER_DIR>
+v8-runner convert designer-to-edt --source <DESIGNER_DIR> --target <EDT_PROJECT_DIR> [--version <VERSION>] [--base-project-name <NAME>] [--build]
+```
+
+Поведение:
+
+- Команда является CLI-only и не публикуется как MCP tool.
+- Работает по явно переданным путям, а не по `source-set`.
+- Не использует `builder` и не требует `infobase.connection`.
+- `edt-to-designer` требует в source path marker `.project`.
+- `designer-to-edt` требует Designer-format source path с `Configuration.xml` или совместимыми root XML descriptors.
+- `designer-to-edt` поддерживает опции `--version`, `--base-project-name` и `--build`, которые пробрасываются в EDT CLI import flow.
+- Команда использует отдельный workspace `workPath/convert/edt-workspace`.
+- Target публикуется как full replacement через staging/backup; stale содержимое target не сохраняется.
 
 ## Команда `syntax`
 
@@ -275,7 +295,7 @@ v8-runner mcp serve http
 
 - Значение по умолчанию для `allExtensions` выводится из того, передан ли `extension`.
 - `checkUseSynchronousCalls` и `checkUseModality` отклоняются, когда `extendedModulesCheck=false`.
-- `check_syntax_edt` использует общую живую EDT-сессию при `tools.edt_cli.interactive-mode=true`; тот же shared EDT component используется CLI `init`, EDT export в `build` и CLI `syntax edt`.
+- `check_syntax_edt` использует общую живую EDT-сессию при `tools.edt_cli.interactive-mode=true`; тот же shared EDT component используется CLI `init`, EDT export в `build`, CLI `convert` и CLI `syntax edt`.
 
 ### Особенности HTTP-транспорта
 
@@ -299,7 +319,7 @@ v8-runner mcp serve http
 
 Чаще всего при чтении этого файла нужны только такие опорные ключи:
 
-- `basePath`, `workPath`, `connection`
+- `basePath`, `workPath`, `infobase.connection`
 - `format`, `builder`
 - `source-set[]`
 - `build.partialLoadThreshold`
@@ -315,6 +335,7 @@ v8-runner mcp serve http
 - `hash-storages/*.redb`: состояние отслеживания изменений
 - `logs/platform/`: логи команд платформы
 - `logs/mcp/actions.log`: трассировка MCP
+- `convert/edt-workspace/`: отдельный EDT workspace для команды `convert`
 - `temp/partial-lists/`: сгенерированные списки частичной загрузки
 - `temp/yaxunit/runs/<run-id>/`: сохранённые YaXUnit-артефакты при падении или проблемах парсинга
 
@@ -324,4 +345,5 @@ v8-runner mcp serve http
 - Нет публичного MCP-инструмента для `get_configuration`.
 - Нет публичного MCP-инструмента для `check_platform`.
 - `IBCMD` не предоставляет нативную точечную частичную выгрузку по объектам.
-- Нет отдельной настройки `working-directory` для `1cedtcli`; используется `workPath/edt-workspace`.
+- `dump` пока не поддерживает обратную синхронизацию из ИБ сразу в EDT-формат.
+- Нет отдельной пользовательской настройки `working-directory` для `1cedtcli`; внутренние EDT workspace paths выводятся из `workPath` (`workPath/edt-workspace`, `workPath/convert/edt-workspace`).

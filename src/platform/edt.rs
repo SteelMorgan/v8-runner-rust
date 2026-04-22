@@ -160,6 +160,20 @@ impl<'a> EdtDsl<'a> {
         )
     }
 
+    /// `-command export --project <source> --configuration-files <target>`
+    pub fn export_project_path(
+        &self,
+        source: &Path,
+        target: &Path,
+    ) -> Result<PlatformCommandResult, EdtError> {
+        let command_arguments = export_project_path_command_arguments(source, target);
+        self.run(
+            &process_arguments(&self.workspace, &command_arguments),
+            &render_interactive_export_project_path_command(source, target),
+            None,
+        )
+    }
+
     /// `-command validate --file <out_log> --project-list <source>`
     pub fn validate_project(
         &self,
@@ -180,6 +194,29 @@ impl<'a> EdtDsl<'a> {
         self.run(
             &process_arguments(&self.workspace, &command_arguments),
             &render_interactive_import_command(source),
+            None,
+        )
+    }
+
+    /// `-command import --configuration-files <source> --project <target> [...]`
+    pub fn import_configuration_files(
+        &self,
+        target_project: &Path,
+        configuration_files: &Path,
+        version: Option<&str>,
+        base_project_name: Option<&str>,
+        build: bool,
+    ) -> Result<PlatformCommandResult, EdtError> {
+        let command_arguments = import_configuration_files_command_arguments(
+            target_project,
+            configuration_files,
+            version,
+            base_project_name,
+            build,
+        );
+        self.run(
+            &process_arguments(&self.workspace, &command_arguments),
+            &render_interactive_command(&command_arguments),
             None,
         )
     }
@@ -617,6 +654,16 @@ fn export_command_arguments(project_name: &str, target: &Path) -> Vec<String> {
     ]
 }
 
+fn export_project_path_command_arguments(source: &Path, target: &Path) -> Vec<String> {
+    vec![
+        "export".to_owned(),
+        "--project".to_owned(),
+        source.display().to_string(),
+        "--configuration-files".to_owned(),
+        target.display().to_string(),
+    ]
+}
+
 fn validate_command_arguments(source: &Path, out_log: &Path) -> Vec<String> {
     vec![
         "validate".to_owned(),
@@ -635,12 +682,45 @@ fn import_command_arguments(source: &Path) -> Vec<String> {
     ]
 }
 
+fn import_configuration_files_command_arguments(
+    target_project: &Path,
+    configuration_files: &Path,
+    version: Option<&str>,
+    base_project_name: Option<&str>,
+    build: bool,
+) -> Vec<String> {
+    let mut arguments = vec![
+        "import".to_owned(),
+        "--configuration-files".to_owned(),
+        configuration_files.display().to_string(),
+        "--project".to_owned(),
+        target_project.display().to_string(),
+    ];
+    if let Some(version) = version {
+        arguments.push("--version".to_owned());
+        arguments.push(version.to_owned());
+    }
+    if let Some(base_project_name) = base_project_name {
+        arguments.push("--base-project-name".to_owned());
+        arguments.push(base_project_name.to_owned());
+    }
+    if build {
+        arguments.push("--build".to_owned());
+        arguments.push("true".to_owned());
+    }
+    arguments
+}
+
 fn render_interactive_command(arguments: &[String]) -> String {
     arguments
         .iter()
         .map(|argument| quote_interactive_argument(argument))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn render_interactive_export_project_path_command(source: &Path, target: &Path) -> String {
+    render_interactive_command(&export_project_path_command_arguments(source, target))
 }
 
 fn quote_interactive_argument(argument: &str) -> String {
@@ -802,6 +882,34 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn export_project_path_passes_expected_arguments() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("1cedtcli");
+        let args_log = dir.path().join("args.log");
+        write_script(
+            &script,
+            &format!("printf '%s\n' \"$@\" > \"{}\"\nexit 0", args_log.display()),
+        );
+
+        let runner = ProcessExecutor;
+        let dsl = EdtDsl::new(script, dir.path().join("ws"), &runner as &dyn ProcessRunner);
+
+        let result = dsl
+            .export_project_path(Path::new("/tmp/project"), Path::new("/tmp/out"))
+            .expect("export project path");
+
+        assert_eq!(result.process.exit_code, 0);
+        let args = fs::read_to_string(args_log).expect("args log");
+        assert!(args.contains("-command"));
+        assert!(args.contains("export"));
+        assert!(args.contains("--project"));
+        assert!(args.contains("/tmp/project"));
+        assert!(args.contains("--configuration-files"));
+        assert!(args.contains("/tmp/out"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn validate_project_reads_out_log() {
         let dir = tempdir().expect("tempdir");
         let script = dir.path().join("1cedtcli");
@@ -901,6 +1009,46 @@ mod tests {
         assert!(args.contains("import"));
         assert!(args.contains("--project"));
         assert!(args.contains("/tmp/project"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn import_configuration_files_passes_expected_arguments() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("1cedtcli");
+        let args_log = dir.path().join("args.log");
+        write_script(
+            &script,
+            &format!("printf '%s\n' \"$@\" > \"{}\"\nexit 0", args_log.display()),
+        );
+
+        let runner = ProcessExecutor;
+        let dsl = EdtDsl::new(script, dir.path().join("ws"), &runner as &dyn ProcessRunner);
+
+        let result = dsl
+            .import_configuration_files(
+                Path::new("/tmp/project"),
+                Path::new("/tmp/xml"),
+                Some("8.3.24"),
+                Some("BaseProject"),
+                true,
+            )
+            .expect("import configuration files");
+
+        assert_eq!(result.process.exit_code, 0);
+        let args = fs::read_to_string(args_log).expect("args log");
+        assert!(args.contains("-command"));
+        assert!(args.contains("import"));
+        assert!(args.contains("--configuration-files"));
+        assert!(args.contains("/tmp/xml"));
+        assert!(args.contains("--project"));
+        assert!(args.contains("/tmp/project"));
+        assert!(args.contains("--version"));
+        assert!(args.contains("8.3.24"));
+        assert!(args.contains("--base-project-name"));
+        assert!(args.contains("BaseProject"));
+        assert!(args.contains("--build"));
+        assert!(args.contains("true"));
     }
 
     #[derive(Default)]
