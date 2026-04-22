@@ -87,6 +87,13 @@ impl InterruptionSafetyClass {
     }
 }
 
+/// Result of a critical in-process phase that must complete without mid-phase aborts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CriticalPhaseResult<T> {
+    pub value: T,
+    pub deferred_interruption: Option<ExecutionInterruption>,
+}
+
 /// Per-invocation metadata passed into transport-neutral use cases.
 #[derive(Debug, Clone)]
 pub struct ExecutionContext {
@@ -199,6 +206,19 @@ impl ExecutionContext {
             None
         }
     }
+
+    /// Runs a non-process critical phase and reports whether interruption was deferred until
+    /// after the operation completed.
+    pub fn run_no_process_critical_phase<T, E>(
+        &self,
+        operation: impl FnOnce() -> Result<T, E>,
+    ) -> Result<CriticalPhaseResult<T>, E> {
+        let value = operation()?;
+        Ok(CriticalPhaseResult {
+            value,
+            deferred_interruption: self.interruption(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -259,5 +279,25 @@ mod tests {
 
         assert!(policy.timeout.expect("timeout") <= Duration::from_millis(25));
         assert_eq!(policy.safety, ProcessInterruptionSafety::GracefulThenKill);
+    }
+
+    #[test]
+    fn no_process_critical_phase_reports_deferred_cancellation() {
+        let cancellation = CancellationToken::new();
+        let context =
+            ExecutionContext::cli(CommandName::Artifacts).with_cancellation(cancellation.clone());
+
+        let result = context
+            .run_no_process_critical_phase(|| {
+                cancellation.cancel();
+                Ok::<_, ()>("published")
+            })
+            .expect("critical phase");
+
+        assert_eq!(result.value, "published");
+        assert_eq!(
+            result.deferred_interruption,
+            Some(ExecutionInterruption::Cancelled)
+        );
     }
 }

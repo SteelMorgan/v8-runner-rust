@@ -46,6 +46,7 @@ const PARTIAL_OBJECT_CONTROL_ERROR: &str =
     "partial dump objects must not contain control characters";
 const NON_PARTIAL_OBJECTS_ERROR: &str = "dump objects are supported only for mode 'partial'";
 const ORPHAN_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const DUMP_BACKUP_PREFIX: &str = ".dump-backup";
 
 pub fn execute(
     context: &ExecutionContext,
@@ -407,20 +408,23 @@ fn run_full_dump_designer(
         ));
     }
 
-    let publish_outcome = replace_dir_atomically(
-        &staging_dir,
-        &resolved.target_path,
-        &run_id,
-        &resolved.target_identity,
-    )
-    .map_err(|error| AppError::Runtime(format!("failed to publish staged dump: {error}")))?;
+    let publish_phase = context.run_no_process_critical_phase(|| {
+        replace_dir_atomically(
+            &staging_dir,
+            &resolved.target_path,
+            &run_id,
+            &resolved.target_identity,
+            DUMP_BACKUP_PREFIX,
+        )
+        .map_err(|error| AppError::Runtime(format!("failed to publish staged dump: {error}")))
+    })?;
     debug!(target = %resolved.target_path.display(), "published staged dump");
 
     Ok((
         dump_result,
         merge_optional_messages(
-            publish_outcome.cleanup_warning,
-            dump_publication_warning(context),
+            publish_phase.value.cleanup_warning,
+            dump_publication_warning(context.command(), publish_phase.deferred_interruption),
         ),
     ))
 }
@@ -511,20 +515,23 @@ fn run_full_dump_ibcmd(
         ));
     }
 
-    let publish_outcome = replace_dir_atomically(
-        &staging_dir,
-        &resolved.target_path,
-        &run_id,
-        &resolved.target_identity,
-    )
-    .map_err(|error| AppError::Runtime(format!("failed to publish staged dump: {error}")))?;
+    let publish_phase = context.run_no_process_critical_phase(|| {
+        replace_dir_atomically(
+            &staging_dir,
+            &resolved.target_path,
+            &run_id,
+            &resolved.target_identity,
+            DUMP_BACKUP_PREFIX,
+        )
+        .map_err(|error| AppError::Runtime(format!("failed to publish staged dump: {error}")))
+    })?;
     debug!(target = %resolved.target_path.display(), "published staged dump");
 
     Ok((
         dump_result,
         merge_optional_messages(
-            publish_outcome.cleanup_warning,
-            dump_publication_warning(context),
+            publish_phase.value.cleanup_warning,
+            dump_publication_warning(context.command(), publish_phase.deferred_interruption),
         ),
     ))
 }
@@ -1036,15 +1043,18 @@ fn merge_optional_messages(left: Option<String>, right: Option<String>) -> Optio
     }
 }
 
-fn dump_publication_warning(context: &ExecutionContext) -> Option<String> {
-    context.interruption().map(|interruption| {
+fn dump_publication_warning(
+    command: crate::use_cases::context::CommandName,
+    deferred_interruption: Option<crate::use_cases::context::ExecutionInterruption>,
+) -> Option<String> {
+    deferred_interruption.map(|interruption| {
         format!(
             "dump publication completed after {} for command '{}' during critical phase; unsafe interruption was not performed",
             match interruption {
                 crate::use_cases::context::ExecutionInterruption::Cancelled => "cancellation request",
                 crate::use_cases::context::ExecutionInterruption::TimedOut => "timeout",
             },
-            context.command().as_str()
+            command.as_str()
         )
     })
 }
@@ -1728,6 +1738,71 @@ mod tests {
         cleanup_orphan_dirs(&resolved).expect("cleanup");
         assert!(!stage_dir.exists());
         assert!(!meta_path.exists());
+    }
+
+    #[test]
+    fn cleanup_orphan_dirs_ignores_recent_metadata() {
+        let dir = tempdir().expect("tempdir");
+        let target = dir.path().join("main");
+        fs::create_dir_all(&target).expect("target");
+        let canonical = std::fs::canonicalize(&target).expect("canonical");
+        let identity = stable_path_identity(&canonical);
+        let backup_dir = target.parent().expect("parent").join(".dump-backup-recent");
+        fs::create_dir_all(&backup_dir).expect("backup");
+        write_temp_dir_metadata(&backup_dir, TempDirKind::Backup, "run", &target, &identity)
+            .expect("metadata");
+
+        let resolved = super::ResolvedDumpTarget {
+            source_set_name: "main".to_owned(),
+            extension: None,
+            target_path: target.clone(),
+            canonical_target_path: canonical.clone(),
+            canonical_base_path: std::fs::canonicalize(dir.path()).expect("canonical base"),
+            canonical_work_path: std::fs::canonicalize(dir.path()).expect("canonical work"),
+            target_identity: identity,
+            lock_path: target.parent().expect("parent").join(".lock"),
+        };
+
+        cleanup_orphan_dirs(&resolved).expect("cleanup");
+
+        assert!(backup_dir.exists());
+        assert!(metadata_sidecar_path(&backup_dir).exists());
+    }
+
+    #[test]
+    fn cleanup_orphan_dirs_ignores_foreign_metadata() {
+        let dir = tempdir().expect("tempdir");
+        let target = dir.path().join("main");
+        fs::create_dir_all(&target).expect("target");
+        let canonical = std::fs::canonicalize(&target).expect("canonical");
+        let identity = stable_path_identity(&canonical);
+        let stage_dir = target.parent().expect("parent").join(".dump-stage-foreign");
+        fs::create_dir_all(&stage_dir).expect("stage");
+        write_temp_dir_metadata(&stage_dir, TempDirKind::Stage, "run", &target, &identity)
+            .expect("metadata");
+        let meta_path = metadata_sidecar_path(&stage_dir);
+        let mut metadata = read_temp_dir_metadata(&stage_dir).expect("metadata");
+        metadata.tool = "foreign-tool".to_owned();
+        metadata.created_at = chrono::Utc::now()
+            - chrono::Duration::from_std(ORPHAN_TTL + Duration::from_secs(1)).expect("duration");
+        fs::write(&meta_path, serde_json::to_vec(&metadata).expect("json"))
+            .expect("write metadata");
+
+        let resolved = super::ResolvedDumpTarget {
+            source_set_name: "main".to_owned(),
+            extension: None,
+            target_path: target.clone(),
+            canonical_target_path: canonical.clone(),
+            canonical_base_path: std::fs::canonicalize(dir.path()).expect("canonical base"),
+            canonical_work_path: std::fs::canonicalize(dir.path()).expect("canonical work"),
+            target_identity: identity,
+            lock_path: target.parent().expect("parent").join(".lock"),
+        };
+
+        cleanup_orphan_dirs(&resolved).expect("cleanup");
+
+        assert!(stage_dir.exists());
+        assert!(meta_path.exists());
     }
 
     #[test]

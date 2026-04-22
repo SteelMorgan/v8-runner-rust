@@ -43,6 +43,7 @@ use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
 const SUPPORTED_ARTIFACTS_ERROR: &str =
     "artifacts currently supports only builder=DESIGNER with designer backend profile";
 const ORPHAN_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const ARTIFACTS_BACKUP_PREFIX: &str = ".artifacts-backup";
 
 pub fn execute(
     context: &ExecutionContext,
@@ -205,16 +206,13 @@ fn run_artifacts(
                         .with_role(ARTIFACT_ROLE_PLATFORM_LOG),
                 );
             }
-            let publication_warning = publication_warning(context);
             let metadata = ArtifactBuildMetadata {
                 artifact_type: resolved.mode,
                 output_path: resolved.output_path.clone(),
                 file_names: published_file_names(&artifacts),
                 published: true,
             };
-            let diagnostics = merge_optional_messages(message.clone(), publication_warning.clone())
-                .into_iter()
-                .collect::<Vec<_>>();
+            let diagnostics = message.clone().into_iter().collect::<Vec<_>>();
             Ok(ArtifactsResult {
                 ok: true,
                 mode: resolved.mode,
@@ -224,7 +222,7 @@ fn run_artifacts(
                 platform_log_path,
                 artifacts: artifacts.clone(),
                 duration_ms: started.elapsed().as_millis() as u64,
-                message: merge_optional_messages(message, publication_warning),
+                message,
                 execution: ExecutionOutcome::new(ExecutionStatus::Succeeded)
                     .with_diagnostics(diagnostics)
                     .with_artifacts(artifacts)
@@ -395,18 +393,20 @@ fn run_designer_export(
         return Err((error, artifacts, dump_result.platform_log_path.clone()));
     }
 
-    let replace_outcome = replace_file_atomically(
-        &staging_file,
-        &resolved.output_path,
-        &run_id,
-        &resolved.target_identity,
-    )
-    .map_err(|error| {
-        (
-            AppError::Runtime(format!("failed to publish staged artifact: {error}")),
-            artifacts.clone(),
-            dump_result.platform_log_path.clone(),
+    let publish_phase = context.run_no_process_critical_phase(|| {
+        replace_file_atomically(
+            &staging_file,
+            &resolved.output_path,
+            &run_id,
+            &resolved.target_identity,
         )
+        .map_err(|error| {
+            (
+                AppError::Runtime(format!("failed to publish staged artifact: {error}")),
+                artifacts.clone(),
+                dump_result.platform_log_path.clone(),
+            )
+        })
     })?;
 
     let mut published_artifacts = ArtifactSet::default();
@@ -418,7 +418,11 @@ fn run_designer_export(
     Ok((
         dump_result,
         published_artifacts,
-        replace_outcome.cleanup_warning,
+        publication_message(
+            context,
+            publish_phase.value.cleanup_warning,
+            publish_phase.deferred_interruption,
+        ),
     ))
 }
 
@@ -465,6 +469,22 @@ fn run_external_designer_export(
     ensure_dir(&staging_dir).map_err(|error| {
         (
             AppError::Runtime(format!("failed to create external staging dir: {error}")),
+            ArtifactSet::default(),
+            None,
+        )
+    })?;
+    write_temp_dir_metadata(
+        &staging_dir,
+        TempDirKind::Stage,
+        &run_id,
+        &resolved.output_path,
+        &resolved.target_identity,
+    )
+    .map_err(|error| {
+        (
+            AppError::Runtime(format!(
+                "failed to write external staging directory metadata: {error}"
+            )),
             ArtifactSet::default(),
             None,
         )
@@ -588,20 +608,23 @@ fn run_external_designer_export(
         return Err((error, artifacts, last_result.platform_log_path.clone()));
     }
 
-    replace_dir_atomically(
-        &staging_dir,
-        &resolved.output_path,
-        &run_id,
-        &resolved.target_identity,
-    )
-    .map_err(|error| {
-        (
-            AppError::Runtime(format!(
-                "failed to publish staged external directory: {error}"
-            )),
-            artifacts.clone(),
-            last_result.platform_log_path.clone(),
+    let publish_phase = context.run_no_process_critical_phase(|| {
+        replace_dir_atomically(
+            &staging_dir,
+            &resolved.output_path,
+            &run_id,
+            &resolved.target_identity,
+            ARTIFACTS_BACKUP_PREFIX,
         )
+        .map_err(|error| {
+            (
+                AppError::Runtime(format!(
+                    "failed to publish staged external directory: {error}"
+                )),
+                artifacts.clone(),
+                last_result.platform_log_path.clone(),
+            )
+        })
     })?;
 
     for descriptor in &descriptors {
@@ -617,7 +640,15 @@ fn run_external_designer_export(
         );
     }
 
-    Ok((last_result, artifacts, None))
+    Ok((
+        last_result,
+        artifacts,
+        publication_message(
+            context,
+            publish_phase.value.cleanup_warning,
+            publish_phase.deferred_interruption,
+        ),
+    ))
 }
 
 fn resolve_target(
@@ -961,7 +992,10 @@ fn cleanup_orphan_files(resolved: &ResolvedArtifactsTarget) -> Result<(), AppErr
             let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
                 continue;
             };
-            if !file_name.starts_with(".artifacts-stage-") && !file_name.contains(".backup-") {
+            if !file_name.starts_with(".artifacts-stage-")
+                && !file_name.starts_with(ARTIFACTS_BACKUP_PREFIX)
+                && !file_name.contains(".backup-")
+            {
                 continue;
             }
             let Ok(metadata) = read_temp_dir_metadata(&path) else {
@@ -1107,15 +1141,29 @@ fn merge_optional_messages(left: Option<String>, right: Option<String>) -> Optio
     }
 }
 
-fn publication_warning(context: &ExecutionContext) -> Option<String> {
-    context.interruption().map(|interruption| {
+fn publication_message(
+    context: &ExecutionContext,
+    cleanup_warning: Option<String>,
+    deferred_interruption: Option<crate::use_cases::context::ExecutionInterruption>,
+) -> Option<String> {
+    merge_optional_messages(
+        cleanup_warning,
+        publication_warning(context.command(), deferred_interruption),
+    )
+}
+
+fn publication_warning(
+    command: crate::use_cases::context::CommandName,
+    deferred_interruption: Option<crate::use_cases::context::ExecutionInterruption>,
+) -> Option<String> {
+    deferred_interruption.map(|interruption| {
         format!(
             "artifact publication completed after {} for command '{}' during critical phase; unsafe interruption was not performed",
             match interruption {
                 crate::use_cases::context::ExecutionInterruption::Cancelled => "cancellation request",
                 crate::use_cases::context::ExecutionInterruption::TimedOut => "timeout",
             },
-            context.command().as_str()
+            command.as_str()
         )
     })
 }
@@ -1193,8 +1241,8 @@ fn make_run_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        cleanup_orphan_files, publication_warning, resolve_target, run_artifacts,
-        validate_supported_matrix, ResolvedArtifactsTarget,
+        cleanup_orphan_files, publication_message, publication_warning, resolve_target,
+        run_artifacts, validate_supported_matrix, ResolvedArtifactsTarget,
     };
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, PlatformToolConfig, SourceFormat, SourceSetConfig,
@@ -1209,7 +1257,6 @@ mod tests {
     use crate::use_cases::request::{ArtifactsModeRequest, ArtifactsRequest};
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::time::{Duration, Instant};
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
 
@@ -1444,13 +1491,29 @@ mod tests {
 
     #[test]
     fn publication_warning_reports_timed_out_context() {
-        let context = ExecutionContext::cli(CommandName::Artifacts)
-            .with_deadline(Some(Instant::now() - Duration::from_millis(1)));
-
-        let warning = publication_warning(&context).expect("warning");
+        let warning = publication_warning(
+            CommandName::Artifacts,
+            Some(crate::use_cases::context::ExecutionInterruption::TimedOut),
+        )
+        .expect("warning");
 
         assert!(warning.contains("timeout"));
         assert!(warning.contains("critical phase"));
+    }
+
+    #[test]
+    fn publication_message_keeps_cleanup_warning_in_result_contract() {
+        let context = ExecutionContext::cli(CommandName::Artifacts);
+
+        let message = publication_message(
+            &context,
+            Some("cleanup warning".to_owned()),
+            Some(crate::use_cases::context::ExecutionInterruption::Cancelled),
+        )
+        .expect("message");
+
+        assert!(message.contains("cleanup warning"));
+        assert!(message.contains("cancellation request"));
     }
 
     #[cfg(unix)]
@@ -1669,5 +1732,164 @@ mod tests {
         cleanup_orphan_files(&resolved).expect("cleanup");
 
         assert!(!stale.exists());
+    }
+
+    #[test]
+    fn cleanup_orphan_files_removes_old_stage_directory_cleanup_unit() {
+        let dir = tempdir().expect("tempdir");
+        let output = dir.path().join("dist/external");
+        fs::create_dir_all(&output).expect("output");
+        let stage_dir = output
+            .parent()
+            .expect("parent")
+            .join(".artifacts-stage-old");
+        fs::create_dir_all(&stage_dir).expect("stage");
+        write_temp_dir_metadata(&stage_dir, TempDirKind::Stage, "run-1", &output, "identity")
+            .expect("metadata");
+        let meta_path = metadata_sidecar_path(&stage_dir);
+        let mut metadata = read_temp_dir_metadata(&stage_dir).expect("read metadata");
+        metadata.created_at -= chrono::Duration::days(2);
+        fs::write(
+            &meta_path,
+            serde_json::to_vec_pretty(&metadata).expect("json"),
+        )
+        .expect("rewrite metadata");
+        let resolved = ResolvedArtifactsTarget {
+            mode: ArtifactBuildMode::ExternalDataProcessorEpf,
+            source_set_name: "external".to_owned(),
+            extension: None,
+            output_path: output.clone(),
+            source_path: dir.path().join("external"),
+            is_directory_output: true,
+            canonical_output_path: output.clone(),
+            canonical_base_path: dir.path().to_path_buf(),
+            canonical_work_path: dir.path().to_path_buf(),
+            target_identity: "identity".to_owned(),
+            lock_path: dir.path().join("lock"),
+        };
+
+        cleanup_orphan_files(&resolved).expect("cleanup");
+
+        assert!(!stage_dir.exists());
+        assert!(!meta_path.exists());
+    }
+
+    #[test]
+    fn cleanup_orphan_files_removes_old_backup_directory_cleanup_unit() {
+        let dir = tempdir().expect("tempdir");
+        let output = dir.path().join("dist/external");
+        fs::create_dir_all(&output).expect("output");
+        let backup_dir = output
+            .parent()
+            .expect("parent")
+            .join(".artifacts-backup-old");
+        fs::create_dir_all(&backup_dir).expect("backup");
+        write_temp_dir_metadata(
+            &backup_dir,
+            TempDirKind::Backup,
+            "run-1",
+            &output,
+            "identity",
+        )
+        .expect("metadata");
+        let meta_path = metadata_sidecar_path(&backup_dir);
+        let mut metadata = read_temp_dir_metadata(&backup_dir).expect("read metadata");
+        metadata.created_at -= chrono::Duration::days(2);
+        fs::write(
+            &meta_path,
+            serde_json::to_vec_pretty(&metadata).expect("json"),
+        )
+        .expect("rewrite metadata");
+        let resolved = ResolvedArtifactsTarget {
+            mode: ArtifactBuildMode::ExternalDataProcessorEpf,
+            source_set_name: "external".to_owned(),
+            extension: None,
+            output_path: output.clone(),
+            source_path: dir.path().join("external"),
+            is_directory_output: true,
+            canonical_output_path: output.clone(),
+            canonical_base_path: dir.path().to_path_buf(),
+            canonical_work_path: dir.path().to_path_buf(),
+            target_identity: "identity".to_owned(),
+            lock_path: dir.path().join("lock"),
+        };
+
+        cleanup_orphan_files(&resolved).expect("cleanup");
+
+        assert!(!backup_dir.exists());
+        assert!(!meta_path.exists());
+    }
+
+    #[test]
+    fn cleanup_orphan_files_ignores_recent_metadata() {
+        let dir = tempdir().expect("tempdir");
+        let output = dir.path().join("dist/external");
+        fs::create_dir_all(&output).expect("output");
+        let recent = output
+            .parent()
+            .expect("parent")
+            .join(".artifacts-stage-recent");
+        fs::create_dir_all(&recent).expect("stage");
+        write_temp_dir_metadata(&recent, TempDirKind::Stage, "run-1", &output, "identity")
+            .expect("metadata");
+        let resolved = ResolvedArtifactsTarget {
+            mode: ArtifactBuildMode::ExternalDataProcessorEpf,
+            source_set_name: "external".to_owned(),
+            extension: None,
+            output_path: output.clone(),
+            source_path: dir.path().join("external"),
+            is_directory_output: true,
+            canonical_output_path: output.clone(),
+            canonical_base_path: dir.path().to_path_buf(),
+            canonical_work_path: dir.path().to_path_buf(),
+            target_identity: "identity".to_owned(),
+            lock_path: dir.path().join("lock"),
+        };
+
+        cleanup_orphan_files(&resolved).expect("cleanup");
+
+        assert!(recent.exists());
+        assert!(metadata_sidecar_path(&recent).exists());
+    }
+
+    #[test]
+    fn cleanup_orphan_files_ignores_foreign_metadata() {
+        let dir = tempdir().expect("tempdir");
+        let output = dir.path().join("dist/external");
+        fs::create_dir_all(&output).expect("output");
+        let foreign = output
+            .parent()
+            .expect("parent")
+            .join(".artifacts-backup-foreign");
+        fs::create_dir_all(&foreign).expect("backup");
+        write_temp_dir_metadata(&foreign, TempDirKind::Backup, "run-1", &output, "identity")
+            .expect("metadata");
+        let meta_path = metadata_sidecar_path(&foreign);
+        let mut metadata = read_temp_dir_metadata(&foreign).expect("read metadata");
+        metadata.tool = "foreign-tool".to_owned();
+        metadata.created_at -= chrono::Duration::days(2);
+        fs::write(
+            &meta_path,
+            serde_json::to_vec_pretty(&metadata).expect("json"),
+        )
+        .expect("rewrite metadata");
+        let resolved = ResolvedArtifactsTarget {
+            mode: ArtifactBuildMode::ExternalDataProcessorEpf,
+            source_set_name: "external".to_owned(),
+            extension: None,
+            output_path: output.clone(),
+            source_path: dir.path().join("external"),
+            is_directory_output: true,
+            canonical_output_path: output.clone(),
+            canonical_base_path: dir.path().to_path_buf(),
+            canonical_work_path: dir.path().to_path_buf(),
+            target_identity: "identity".to_owned(),
+            lock_path: dir.path().join("lock"),
+        };
+
+        cleanup_orphan_files(&resolved).expect("cleanup");
+
+        assert!(foreign.exists());
+        assert!(meta_path.exists());
     }
 }

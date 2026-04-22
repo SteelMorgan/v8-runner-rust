@@ -398,6 +398,7 @@ pub fn replace_dir_atomically(
     target_dir: &Path,
     run_id: &str,
     target_identity: &str,
+    backup_prefix: &str,
 ) -> std::io::Result<ReplaceDirOutcome> {
     let parent = target_dir.parent().ok_or_else(|| {
         std::io::Error::new(
@@ -405,7 +406,7 @@ pub fn replace_dir_atomically(
             format!("target path has no parent: {}", target_dir.display()),
         )
     })?;
-    let backup_dir = parent.join(format!(".dump-backup-{run_id}"));
+    let backup_dir = parent.join(format!("{backup_prefix}-{run_id}"));
     let stage_metadata_path = metadata_sidecar_path(staging_dir);
     let backup_metadata_path = metadata_sidecar_path(&backup_dir);
 
