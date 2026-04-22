@@ -27,7 +27,7 @@ use crate::support::path::{
     hashed_lock_path, is_filesystem_root, nearest_existing_canonical_path, stable_path_identity,
 };
 use crate::support::temp::{dump_object_list_file, platform_logs_dir};
-use crate::use_cases::context::ExecutionContext;
+use crate::use_cases::context::{ExecutionContext, InterruptionSafetyClass};
 use crate::use_cases::external_artifacts::ExternalArtifactKind;
 use crate::use_cases::ibcmd_diagnostics::format_ibcmd_failure_details;
 use crate::use_cases::request::{DumpModeRequest, DumpRequest as DumpArgs};
@@ -57,7 +57,7 @@ pub fn execute(
         transport = ?context.transport(),
         "executing dump use case"
     );
-    run_dump(config, args)
+    run_dump_with_context(context, config, args)
 }
 
 type DumpExecutionFailure = UseCaseFailure<DumpResult>;
@@ -74,7 +74,17 @@ struct ResolvedDumpTarget {
     lock_path: PathBuf,
 }
 
+#[cfg(test)]
 fn run_dump(config: &AppConfig, args: &DumpArgs) -> UseCaseResult<DumpResult> {
+    let context = ExecutionContext::cli(crate::use_cases::context::CommandName::Dump);
+    run_dump_with_context(&context, config, args)
+}
+
+fn run_dump_with_context(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    args: &DumpArgs,
+) -> UseCaseResult<DumpResult> {
     let started = Instant::now();
     let mode = match args.mode {
         DumpModeRequest::Full => DumpMode::Full,
@@ -218,30 +228,35 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> UseCaseResult<DumpResult> {
     let partial_objects = partial_objects.as_deref();
     let result = match (&mode, &config.builder, partial_objects) {
         (DumpMode::Incremental, BuilderBackend::Designer, _) => run_incremental_dump_designer(
+            context,
             config,
             &resolved,
             location.path.as_path(),
             utilities.runner_for(UtilityType::V8),
         ),
         (DumpMode::Incremental, BuilderBackend::Ibcmd, _) => run_incremental_dump_ibcmd(
+            context,
             config,
             &resolved,
             location.path.as_path(),
             utilities.runner_for(UtilityType::Ibcmd),
         ),
         (DumpMode::Full, BuilderBackend::Designer, _) => run_full_dump_designer(
+            context,
             config,
             &resolved,
             location.path.as_path(),
             utilities.runner_for(UtilityType::V8),
         ),
         (DumpMode::Full, BuilderBackend::Ibcmd, _) => run_full_dump_ibcmd(
+            context,
             config,
             &resolved,
             location.path.as_path(),
             utilities.runner_for(UtilityType::Ibcmd),
         ),
         (DumpMode::Partial, BuilderBackend::Designer, Some(objects)) => run_partial_dump_designer(
+            context,
             config,
             &resolved,
             location.path.as_path(),
@@ -249,6 +264,7 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> UseCaseResult<DumpResult> {
             objects,
         ),
         (DumpMode::Partial, BuilderBackend::Ibcmd, Some(objects)) => run_partial_dump_ibcmd(
+            context,
             config,
             &resolved,
             location.path.as_path(),
@@ -292,6 +308,7 @@ fn run_dump(config: &AppConfig, args: &DumpArgs) -> UseCaseResult<DumpResult> {
 }
 
 fn run_incremental_dump_designer(
+    context: &ExecutionContext,
     config: &AppConfig,
     resolved: &ResolvedDumpTarget,
     binary: &Path,
@@ -306,6 +323,7 @@ fn run_incremental_dump_designer(
         .map_err(|error| AppError::Runtime(format!("failed to create target dir: {error}")))?;
 
     let dump_result = build_designer_dsl(
+        context,
         config,
         binary,
         runner,
@@ -319,6 +337,7 @@ fn run_incremental_dump_designer(
 }
 
 fn run_full_dump_designer(
+    context: &ExecutionContext,
     config: &AppConfig,
     resolved: &ResolvedDumpTarget,
     binary: &Path,
@@ -360,7 +379,14 @@ fn run_full_dump_designer(
     .map_err(|error| AppError::Runtime(format!("failed to write stage metadata: {error}")))?;
 
     let dump_result =
-        match build_designer_dsl(config, binary, runner, &resolved.source_set_name, "full")?
+        match build_designer_dsl(
+            context,
+            config,
+            binary,
+            runner,
+            &resolved.source_set_name,
+            "full",
+        )?
             .dump_config_to_files(&staging_dir, resolved.extension.as_deref())
             .map_err(|error| AppError::Platform(error.to_string()))
         {
@@ -371,6 +397,16 @@ fn run_full_dump_designer(
         .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
 
     validate_publish_target(resolved)?;
+    if let Some(interruption) = context.interruption() {
+        return Err(cleanup_staging_on_interruption(
+            &staging_dir,
+            AppError::Runtime(format!(
+                "{} for command '{}' before entering dump publication safe point",
+                interruption.message(context.command()),
+                context.command().as_str()
+            )),
+        ));
+    }
 
     let publish_outcome = replace_dir_atomically(
         &staging_dir,
@@ -381,10 +417,17 @@ fn run_full_dump_designer(
     .map_err(|error| AppError::Runtime(format!("failed to publish staged dump: {error}")))?;
     debug!(target = %resolved.target_path.display(), "published staged dump");
 
-    Ok((dump_result, publish_outcome.cleanup_warning))
+    Ok((
+        dump_result,
+        merge_optional_messages(
+            publish_outcome.cleanup_warning,
+            dump_publication_warning(context),
+        ),
+    ))
 }
 
 fn run_incremental_dump_ibcmd(
+    context: &ExecutionContext,
     config: &AppConfig,
     resolved: &ResolvedDumpTarget,
     binary: &Path,
@@ -398,7 +441,7 @@ fn run_incremental_dump_ibcmd(
     ensure_dir(&resolved.target_path)
         .map_err(|error| AppError::Runtime(format!("failed to create target dir: {error}")))?;
 
-    let dump_result = build_ibcmd_dsl(config, binary, runner)?
+    let dump_result = build_ibcmd_dsl(context, config, binary, runner)?
         .config_export_incremental(&resolved.target_path, resolved.extension.as_deref())
         .map_err(map_ibcmd_error)?;
     ensure_platform_success("dump", resolved, &dump_result)?;
@@ -406,6 +449,7 @@ fn run_incremental_dump_ibcmd(
 }
 
 fn run_full_dump_ibcmd(
+    context: &ExecutionContext,
     config: &AppConfig,
     resolved: &ResolvedDumpTarget,
     binary: &Path,
@@ -446,7 +490,7 @@ fn run_full_dump_ibcmd(
     )
     .map_err(|error| AppError::Runtime(format!("failed to write stage metadata: {error}")))?;
 
-    let dump_result = match build_ibcmd_dsl(config, binary, runner)?
+    let dump_result = match build_ibcmd_dsl(context, config, binary, runner)?
         .config_export_full(&staging_dir, resolved.extension.as_deref())
         .map_err(map_ibcmd_error)
     {
@@ -457,6 +501,16 @@ fn run_full_dump_ibcmd(
         .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
 
     validate_publish_target(resolved)?;
+    if let Some(interruption) = context.interruption() {
+        return Err(cleanup_staging_on_interruption(
+            &staging_dir,
+            AppError::Runtime(format!(
+                "{} for command '{}' before entering dump publication safe point",
+                interruption.message(context.command()),
+                context.command().as_str()
+            )),
+        ));
+    }
 
     let publish_outcome = replace_dir_atomically(
         &staging_dir,
@@ -467,10 +521,17 @@ fn run_full_dump_ibcmd(
     .map_err(|error| AppError::Runtime(format!("failed to publish staged dump: {error}")))?;
     debug!(target = %resolved.target_path.display(), "published staged dump");
 
-    Ok((dump_result, publish_outcome.cleanup_warning))
+    Ok((
+        dump_result,
+        merge_optional_messages(
+            publish_outcome.cleanup_warning,
+            dump_publication_warning(context),
+        ),
+    ))
 }
 
 fn run_partial_dump_designer(
+    context: &ExecutionContext,
     config: &AppConfig,
     resolved: &ResolvedDumpTarget,
     binary: &Path,
@@ -488,7 +549,14 @@ fn run_partial_dump_designer(
 
     let list_file = create_dump_object_list_file(&config.work_path, objects)?;
     let dump_result =
-        build_designer_dsl(config, binary, runner, &resolved.source_set_name, "partial")?
+        build_designer_dsl(
+            context,
+            config,
+            binary,
+            runner,
+            &resolved.source_set_name,
+            "partial",
+        )?
             .dump_config_to_files_partial(
                 &resolved.target_path,
                 list_file.path(),
@@ -500,6 +568,7 @@ fn run_partial_dump_designer(
 }
 
 fn run_partial_dump_ibcmd(
+    context: &ExecutionContext,
     config: &AppConfig,
     resolved: &ResolvedDumpTarget,
     binary: &Path,
@@ -507,7 +576,7 @@ fn run_partial_dump_ibcmd(
     _objects: &[String],
 ) -> Result<(PlatformCommandResult, Option<String>), AppError> {
     let warning = ibcmd_partial_warning(resolved);
-    match run_incremental_dump_ibcmd(config, resolved, binary, runner) {
+    match run_incremental_dump_ibcmd(context, config, resolved, binary, runner) {
         Ok((dump_result, _)) => Ok((dump_result, Some(warning))),
         Err(error) => Err(decorate_ibcmd_partial_error(error, &warning)),
     }
@@ -686,6 +755,10 @@ fn cleanup_staging_on_platform_failure(staging_dir: &Path, error: AppError) -> A
     let _ = remove_path_if_exists(staging_dir);
     let _ = remove_path_if_exists(&sidecar);
     error
+}
+
+fn cleanup_staging_on_interruption(staging_dir: &Path, error: AppError) -> AppError {
+    cleanup_staging_on_platform_failure(staging_dir, error)
 }
 
 fn resolve_target(config: &AppConfig, args: &DumpArgs) -> Result<ResolvedDumpTarget, AppError> {
@@ -913,6 +986,7 @@ fn cleanup_orphan_dirs(resolved: &ResolvedDumpTarget) -> Result<(), AppError> {
 }
 
 fn build_designer_dsl<'a>(
+    context: &ExecutionContext,
     config: &AppConfig,
     binary: &Path,
     runner: &'a dyn ProcessRunner,
@@ -929,17 +1003,20 @@ fn build_designer_dsl<'a>(
         config.v8_connection(),
         runner,
         Some(log_file),
-    ))
+    )
+    .with_execution_policy(context.process_policy(InterruptionSafetyClass::GracefulThenKill, None)))
 }
 
 fn build_ibcmd_dsl<'a>(
+    context: &ExecutionContext,
     config: &AppConfig,
     binary: &Path,
     runner: &'a dyn ProcessRunner,
 ) -> Result<IbcmdDsl<'a>, AppError> {
     let connection = IbcmdConnection::from_infobase(&config.infobase).map_err(map_ibcmd_error)?;
 
-    Ok(IbcmdDsl::new(binary.to_path_buf(), connection, runner))
+    Ok(IbcmdDsl::new(binary.to_path_buf(), connection, runner)
+        .with_execution_policy(context.process_policy(InterruptionSafetyClass::GracefulThenKill, None)))
 }
 
 fn map_ibcmd_error(error: IbcmdError) -> AppError {
@@ -947,6 +1024,28 @@ fn map_ibcmd_error(error: IbcmdError) -> AppError {
         IbcmdError::MissingServerDbmsField(_) => AppError::Validation(error.to_string()),
         IbcmdError::Spawn(_) => AppError::Platform(error.to_string()),
     }
+}
+
+fn merge_optional_messages(left: Option<String>, right: Option<String>) -> Option<String> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(format!("{left}; {right}")),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    }
+}
+
+fn dump_publication_warning(context: &ExecutionContext) -> Option<String> {
+    context.interruption().map(|interruption| {
+        format!(
+            "dump publication completed after {} for command '{}' during critical phase; unsafe interruption was not performed",
+            match interruption {
+                crate::use_cases::context::ExecutionInterruption::Cancelled => "cancellation request",
+                crate::use_cases::context::ExecutionInterruption::TimedOut => "timeout",
+            },
+            context.command().as_str()
+        )
+    })
 }
 
 fn validate_dump_objects(
@@ -1096,7 +1195,8 @@ fn make_run_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_designer_dsl, cleanup_orphan_dirs, create_dump_object_list_file_with,
+        build_designer_dsl, cleanup_orphan_dirs, cleanup_staging_on_interruption,
+        create_dump_object_list_file_with,
         metadata_sidecar_path, parse_external_dump_descriptor, resolve_target, run_dump,
         run_external_dump_designer, validate_publish_target, validate_supported_matrix,
         DUMP_COMMAND, NON_PARTIAL_OBJECTS_ERROR, ORPHAN_TTL, PARTIAL_OBJECTS_REQUIRED_ERROR,
@@ -1625,6 +1725,29 @@ mod tests {
         };
 
         cleanup_orphan_dirs(&resolved).expect("cleanup");
+        assert!(!stage_dir.exists());
+        assert!(!meta_path.exists());
+    }
+
+    #[test]
+    fn cleanup_staging_on_interruption_removes_stage_dir_and_sidecar() {
+        let dir = tempdir().expect("tempdir");
+        let target = dir.path().join("main");
+        fs::create_dir_all(&target).expect("target");
+        let canonical = std::fs::canonicalize(&target).expect("canonical");
+        let identity = stable_path_identity(&canonical);
+        let stage_dir = target.parent().expect("parent").join(".dump-stage-run");
+        fs::create_dir_all(&stage_dir).expect("stage");
+        write_temp_dir_metadata(&stage_dir, TempDirKind::Stage, "run", &target, &identity)
+            .expect("metadata");
+        let meta_path = metadata_sidecar_path(&stage_dir);
+
+        let error = cleanup_staging_on_interruption(
+            &stage_dir,
+            AppError::Runtime("interrupted before publish".to_owned()),
+        );
+
+        assert_eq!(error.to_string(), "runtime error: interrupted before publish");
         assert!(!stage_dir.exists());
         assert!(!meta_path.exists());
     }
@@ -2217,8 +2340,11 @@ mod tests {
         write_dump_script(&script, &calls, None, 0);
         let config = build_config(dir.path(), &dir.path().join("work"), &script);
         let runner = crate::platform::process::ProcessExecutor;
-        let dsl =
-            build_designer_dsl(&config, &script, &runner, "main", "incremental").expect("dsl");
+        let context = crate::use_cases::context::ExecutionContext::cli(
+            crate::use_cases::context::CommandName::Dump,
+        );
+        let dsl = build_designer_dsl(&context, &config, &script, &runner, "main", "incremental")
+            .expect("dsl");
 
         let result = dsl
             .dump_config_to_files(dir.path().join("out").as_path(), None)
@@ -2263,8 +2389,11 @@ mod tests {
         write_dump_script(&script, &calls, None, 0);
         let config = build_config(dir.path(), &work, &script);
         let runner = crate::platform::process::ProcessExecutor;
-        let dsl =
-            build_designer_dsl(&config, &script, &runner, "main", "incremental").expect("dsl");
+        let context = crate::use_cases::context::ExecutionContext::cli(
+            crate::use_cases::context::CommandName::Dump,
+        );
+        let dsl = build_designer_dsl(&context, &config, &script, &runner, "main", "incremental")
+            .expect("dsl");
 
         let error = run_external_dump_designer(
             &dsl,

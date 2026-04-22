@@ -18,7 +18,9 @@ use crate::support::error::AppError;
 use crate::support::temp::platform_logs_dir;
 #[cfg(test)]
 use crate::use_cases::context::CommandName;
-use crate::use_cases::context::{ExecutionContext, ExecutionInterruption};
+use crate::use_cases::context::{
+    ExecutionContext, ExecutionInterruption, InterruptionSafetyClass,
+};
 use crate::use_cases::request::{
     DesignerConfigSyntaxRequest as DesignerConfigSyntaxArgs,
     DesignerModulesSyntaxRequest as DesignerModulesSyntaxArgs, SyntaxRequest as SyntaxArgs,
@@ -185,7 +187,8 @@ fn run_syntax_with_context(
         config.v8_connection(),
         runner,
         Some(log_path.clone()),
-    );
+    )
+    .with_execution_policy(context.process_policy(InterruptionSafetyClass::GracefulThenKill, None));
 
     let flags: Vec<&str> = invocation.flags.iter().map(String::as_str).collect();
     let platform_result = match invocation.kind {
@@ -494,14 +497,21 @@ fn run_edt_syntax(
         }
     };
 
-    let dsl = if config.tools.edt_cli.interactive_mode {
+    let edt_binary = location.path;
+    let interactive_dsl = if config.tools.edt_cli.interactive_mode {
         match EdtDsl::new_interactive(
-            location.path,
+            edt_binary.clone(),
             config.work_path.join("edt-workspace"),
             Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
             Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
         ) {
-            Ok(dsl) => dsl,
+            Ok(dsl) => Some(
+                dsl.with_timeout(context.edt_timeout())
+                    .with_execution_policy(context.process_policy(
+                        InterruptionSafetyClass::GracefulThenKill,
+                        context.edt_timeout(),
+                    )),
+            ),
             Err(error) => {
                 let message = error.to_string();
                 let app_error = AppError::Platform(message.clone());
@@ -521,13 +531,8 @@ fn run_edt_syntax(
             }
         }
     } else {
-        EdtDsl::new(
-            location.path,
-            config.work_path.join("edt-workspace"),
-            utilities.runner_for(UtilityType::EdtCli),
-        )
-    }
-    .with_timeout(context.edt_timeout());
+        None
+    };
     let mut issues = Vec::new();
     let mut status = SyntaxCheckStatus::Clean;
     let mut exit_code = 0;
@@ -547,7 +552,21 @@ fn run_edt_syntax(
         {
             return Err(failure);
         }
-        let result = match dsl.validate_project(&source_path, &log_path) {
+        let result = match if let Some(dsl) = interactive_dsl.as_ref() {
+            dsl.validate_project(&source_path, &log_path)
+        } else {
+            EdtDsl::new(
+                edt_binary.clone(),
+                config.work_path.join("edt-workspace"),
+                utilities.runner_for(UtilityType::EdtCli),
+            )
+            .with_timeout(context.edt_timeout())
+            .with_execution_policy(context.process_policy(
+                InterruptionSafetyClass::GracefulThenKill,
+                context.edt_timeout(),
+            ))
+            .validate_project(&source_path, &log_path)
+        } {
             Ok(result) => result,
             Err(error) => {
                 let message = error.to_string();
@@ -955,7 +974,7 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use tempfile::tempdir;
 
     fn make_executable(path: &Path) {
@@ -1373,6 +1392,37 @@ mod tests {
             .expect("syntax EDT failures should preserve a structured payload");
 
         assert!(message.contains("timed out"));
+        assert_eq!(payload.status, SyntaxCheckStatus::ToolFailed);
+        assert_eq!(payload.exit_code, -1);
+    }
+
+    #[test]
+    fn syntax_edt_recomputes_remaining_budget_for_each_project_in_one_shot_mode() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let main_dir = base.join("main-edt");
+        let ext_dir = base.join("ext-edt");
+        let binary = dir.path().join("edt").join("1cedtcli");
+        fs::create_dir_all(&work).expect("work");
+        fs::create_dir_all(&main_dir).expect("main");
+        fs::create_dir_all(&ext_dir).expect("ext");
+        write_script(&binary, "sleep 0.06\nexit 0");
+        let config = sample_edt_config(&base, &work, &binary);
+        let args = SyntaxArgs {
+            target: SyntaxTarget::Edt { projects: vec![] },
+        };
+        let context = ExecutionContext::mcp_stdio(CommandName::Syntax)
+            .with_deadline(Some(Instant::now() + Duration::from_millis(80)));
+
+        let failure =
+            run_syntax_with_context(&context, &config, &args).expect_err("expected timeout");
+        let message = failure.error.to_string();
+        let payload = failure
+            .payload
+            .expect("syntax EDT failures should preserve a structured payload");
+
+        assert!(message.contains("timed out") || message.contains("timeout expired"));
         assert_eq!(payload.status, SyntaxCheckStatus::ToolFailed);
         assert_eq!(payload.exit_code, -1);
     }

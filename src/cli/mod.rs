@@ -4,3 +4,5 @@ pub mod args;
 pub mod execute;
 /// CLI-facing output helpers.
 pub mod output;
+/// CLI signal routing helpers.
+pub mod signal;

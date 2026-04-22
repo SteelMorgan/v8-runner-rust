@@ -8,7 +8,9 @@ use tracing::debug;
 use crate::platform::interactive::{
     InteractiveProcessError, InteractiveProcessExecutor, InteractiveProcessRequest,
 };
-use crate::platform::process::{ProcessError, ProcessRequest, ProcessRunner};
+use crate::platform::process::{
+    ProcessError, ProcessExecutionPolicy, ProcessRequest, ProcessRunner,
+};
 use crate::platform::result::PlatformCommandResult;
 
 const INTERACTIVE_EDT_ERROR_MARKER: &str = "Run '$exception printStackTrace' for error details";
@@ -34,6 +36,7 @@ pub struct EdtDsl<'a> {
     workspace: PathBuf,
     backend: EdtBackend<'a>,
     timeout: Option<Duration>,
+    execution_policy: ProcessExecutionPolicy,
 }
 
 impl<'a> EdtDsl<'a> {
@@ -44,6 +47,7 @@ impl<'a> EdtDsl<'a> {
             workspace,
             backend: EdtBackend::OneShot { runner },
             timeout: None,
+            execution_policy: ProcessExecutionPolicy::default(),
         }
     }
 
@@ -87,12 +91,19 @@ impl<'a> EdtDsl<'a> {
                 shutdown_timeout: command_timeout.min(Duration::from_secs(5)),
             },
             timeout: None,
+            execution_policy: ProcessExecutionPolicy::default(),
         })
     }
 
     /// Overrides the timeout used for one-shot EDT process execution.
     pub const fn with_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Overrides the shared execution policy for one-shot EDT process execution.
+    pub fn with_execution_policy(mut self, execution_policy: ProcessExecutionPolicy) -> Self {
+        self.execution_policy = execution_policy;
         self
     }
 
@@ -165,10 +176,13 @@ impl<'a> EdtDsl<'a> {
                     stderr_log_path: None,
                     startup_probe: None,
                 };
-                match self.timeout {
-                    Some(timeout) => runner.run_with_timeout(&request, timeout),
-                    None => runner.run(&request),
-                }
+                let mut execution_policy = self.execution_policy.clone();
+                execution_policy.timeout = match (self.timeout, execution_policy.timeout) {
+                    (Some(timeout), Some(cap)) => Some(timeout.min(cap)),
+                    (Some(timeout), None) => Some(timeout),
+                    (None, timeout) => timeout,
+                };
+                runner.run_with_policy(&request, &execution_policy)
                 .map_err(EdtError::Spawn)?
             }
             EdtBackend::Interactive {
@@ -210,6 +224,7 @@ impl<'a> EdtDsl<'a> {
                     exit_code,
                     stdout: output.stdout,
                     stderr: output.stderr,
+                    interruption: None,
                 }
             }
         };
@@ -555,6 +570,7 @@ mod tests {
                 exit_code: 0,
                 stdout: String::new(),
                 stderr: String::new(),
+                interruption: None,
             })
         }
 

@@ -440,6 +440,7 @@ fn run_external_designer_export(
             exit_code: 0,
             stdout: String::new(),
             stderr: String::new(),
+            interruption: None,
         },
         platform_log_path: None,
         platform_log: None,

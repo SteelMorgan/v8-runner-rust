@@ -1,12 +1,14 @@
 use std::time::Instant;
 
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
 
 use crate::cli::args::{
     ArtifactsArgs, BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs,
     DumpArgs, ExtensionsArgs, LaunchArgs, LaunchOptionsArgs, LoadArgs, SyntaxArgs, SyntaxTarget,
     TestArgs, TestRunner, TestScope, TestYaxunitArgs,
 };
+use crate::cli::signal::CliSignalGuard;
 use crate::config::model::{AppConfig, SourceSetPurpose};
 use crate::domain::artifacts::{ArtifactBuildMode, ArtifactsResult};
 use crate::domain::build::{BuildMode, BuildResult};
@@ -56,21 +58,76 @@ pub fn execute_command(
     presenter: &Presenter,
     clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
+    let cancellation = CancellationToken::new();
+    let _signal_guard = CliSignalGuard::install(cancellation.clone());
     match command {
         Command::Config(_) => unreachable!("config commands are handled outside cli::execute"),
-        Command::Init => execute_init(config, presenter, clean_before_execution),
+        Command::Init => execute_init(
+            config,
+            presenter,
+            clean_before_execution,
+            cancellation,
+        ),
         Command::Extensions(args) => {
-            execute_extensions(config, args, presenter, clean_before_execution)
+            execute_extensions(
+                config,
+                args,
+                presenter,
+                clean_before_execution,
+                cancellation,
+            )
         }
-        Command::Build(args) => execute_build(config, args, presenter, clean_before_execution),
-        Command::Load(args) => execute_load(config, args, presenter, clean_before_execution),
-        Command::Test(args) => execute_test(config, args, presenter, clean_before_execution),
-        Command::Dump(args) => execute_dump(config, args, presenter, clean_before_execution),
+        Command::Build(args) => execute_build(
+            config,
+            args,
+            presenter,
+            clean_before_execution,
+            cancellation,
+        ),
+        Command::Load(args) => execute_load(
+            config,
+            args,
+            presenter,
+            clean_before_execution,
+            cancellation,
+        ),
+        Command::Test(args) => execute_test(
+            config,
+            args,
+            presenter,
+            clean_before_execution,
+            cancellation,
+        ),
+        Command::Dump(args) => execute_dump(
+            config,
+            args,
+            presenter,
+            clean_before_execution,
+            cancellation,
+        ),
         Command::Artifacts(args) => {
-            execute_artifacts(config, args, presenter, clean_before_execution)
+            execute_artifacts(
+                config,
+                args,
+                presenter,
+                clean_before_execution,
+                cancellation,
+            )
         }
-        Command::Syntax(args) => execute_syntax(config, args, presenter, clean_before_execution),
-        Command::Launch(args) => execute_launch(config, args, presenter, clean_before_execution),
+        Command::Syntax(args) => execute_syntax(
+            config,
+            args,
+            presenter,
+            clean_before_execution,
+            cancellation,
+        ),
+        Command::Launch(args) => execute_launch(
+            config,
+            args,
+            presenter,
+            clean_before_execution,
+            cancellation,
+        ),
         Command::Mcp(_) => unreachable!("mcp commands are handled outside cli::execute"),
     }
 }
@@ -97,9 +154,10 @@ fn execute_extensions(
     args: &ExtensionsArgs,
     presenter: &Presenter,
     clean_before_execution: bool,
+    cancellation: CancellationToken,
 ) -> Result<(), UseCaseError> {
     let request = map_extensions_request(args);
-    let context = cli_context(config, CommandName::Extensions);
+    let context = cli_context(config, CommandName::Extensions, cancellation);
     with_cli_workspace_lock(
         config,
         presenter,
@@ -139,9 +197,10 @@ fn execute_init(
     config: &AppConfig,
     presenter: &Presenter,
     clean_before_execution: bool,
+    cancellation: CancellationToken,
 ) -> Result<(), UseCaseError> {
     let request = InitRequest;
-    let context = cli_context(config, CommandName::Init);
+    let context = cli_context(config, CommandName::Init, cancellation);
     with_cli_workspace_lock(
         config,
         presenter,
@@ -187,9 +246,10 @@ fn execute_build(
     args: &BuildArgs,
     presenter: &Presenter,
     clean_before_execution: bool,
+    cancellation: CancellationToken,
 ) -> Result<(), UseCaseError> {
     let request = map_build_request(args);
-    let context = cli_context(config, CommandName::Build);
+    let context = cli_context(config, CommandName::Build, cancellation);
     with_cli_workspace_lock(
         config,
         presenter,
@@ -235,9 +295,10 @@ fn execute_test(
     args: &TestArgs,
     presenter: &Presenter,
     clean_before_execution: bool,
+    cancellation: CancellationToken,
 ) -> Result<(), UseCaseError> {
     let request = map_test_request(config, args)?;
-    let context = cli_context(config, CommandName::Test);
+    let context = cli_context(config, CommandName::Test, cancellation);
     with_cli_workspace_lock(
         config,
         presenter,
@@ -275,9 +336,10 @@ fn execute_load(
     args: &LoadArgs,
     presenter: &Presenter,
     clean_before_execution: bool,
+    cancellation: CancellationToken,
 ) -> Result<(), UseCaseError> {
     let request = map_load_request(args)?;
-    let context = cli_context(config, CommandName::Load);
+    let context = cli_context(config, CommandName::Load, cancellation);
     with_cli_workspace_lock(
         config,
         presenter,
@@ -323,9 +385,10 @@ fn execute_dump(
     args: &DumpArgs,
     presenter: &Presenter,
     clean_before_execution: bool,
+    cancellation: CancellationToken,
 ) -> Result<(), UseCaseError> {
     let request = map_dump_request(args)?;
-    let context = cli_context(config, CommandName::Dump);
+    let context = cli_context(config, CommandName::Dump, cancellation);
     with_cli_workspace_lock(
         config,
         presenter,
@@ -371,9 +434,10 @@ fn execute_artifacts(
     args: &ArtifactsArgs,
     presenter: &Presenter,
     clean_before_execution: bool,
+    cancellation: CancellationToken,
 ) -> Result<(), UseCaseError> {
     let request = map_artifacts_request_with_config(config, args)?;
-    let context = cli_context(config, CommandName::Artifacts);
+    let context = cli_context(config, CommandName::Artifacts, cancellation);
     with_cli_workspace_lock(
         config,
         presenter,
@@ -419,9 +483,10 @@ fn execute_syntax(
     args: &SyntaxArgs,
     presenter: &Presenter,
     clean_before_execution: bool,
+    cancellation: CancellationToken,
 ) -> Result<(), UseCaseError> {
     let request = map_syntax_request(args);
-    let context = cli_context(config, CommandName::Syntax);
+    let context = cli_context(config, CommandName::Syntax, cancellation);
     with_cli_workspace_lock(
         config,
         presenter,
@@ -467,9 +532,10 @@ fn execute_launch(
     args: &LaunchArgs,
     presenter: &Presenter,
     clean_before_execution: bool,
+    cancellation: CancellationToken,
 ) -> Result<(), UseCaseError> {
     let request = map_launch_request(args)?;
-    let context = cli_context(config, CommandName::Launch);
+    let context = cli_context(config, CommandName::Launch, cancellation);
     let started = Instant::now();
     with_cli_workspace_lock(
         config,
@@ -748,9 +814,14 @@ fn effective_test_timeouts(
     timeouts
 }
 
-fn cli_context(config: &AppConfig, command: CommandName) -> ExecutionContext {
+fn cli_context(
+    config: &AppConfig,
+    command: CommandName,
+    cancellation: CancellationToken,
+) -> ExecutionContext {
     ExecutionContext::cli(command)
         .with_deadline(Some(Instant::now() + config.execution_timeout_duration()))
+        .with_cancellation(cancellation)
 }
 
 fn map_load_request(args: &LoadArgs) -> Result<LoadRequest, UseCaseError> {

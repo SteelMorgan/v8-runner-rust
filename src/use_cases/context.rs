@@ -2,6 +2,8 @@ use std::time::{Duration, Instant};
 
 use tokio_util::sync::CancellationToken;
 
+use crate::platform::process::{ProcessExecutionPolicy, ProcessInterruptionSafety};
+
 /// Identifies the logical command being executed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandName {
@@ -57,6 +59,29 @@ impl ExecutionInterruption {
             (Self::Cancelled, _) => "execution cancelled before reaching a safe completion point",
             (Self::TimedOut, _) => {
                 "execution timeout expired before reaching a safe completion point"
+            }
+        }
+    }
+}
+
+/// Command-level interruption safety contract from ADR-0014.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InterruptionSafetyClass {
+    Interruptible,
+    GracefulThenKill,
+    CriticalNonAbortable,
+    NoExternalProcess,
+}
+
+impl InterruptionSafetyClass {
+    /// Returns the subset of process-runner safety semantics for commands that spawn a child.
+    pub const fn process_safety(self) -> ProcessInterruptionSafety {
+        match self {
+            Self::Interruptible => ProcessInterruptionSafety::Interruptible,
+            Self::GracefulThenKill => ProcessInterruptionSafety::GracefulThenKill,
+            Self::CriticalNonAbortable | Self::NoExternalProcess => {
+                ProcessInterruptionSafety::CriticalNonAbortable
             }
         }
     }
@@ -140,6 +165,27 @@ impl ExecutionContext {
             .map(|deadline| deadline.saturating_duration_since(Instant::now()))
     }
 
+    /// Returns the shared cancellation token for this execution.
+    pub fn cancellation(&self) -> CancellationToken {
+        self.cancellation.clone()
+    }
+
+    /// Builds a process policy capped by the remaining command budget.
+    pub fn process_policy(
+        &self,
+        safety: InterruptionSafetyClass,
+        timeout_cap: Option<Duration>,
+    ) -> ProcessExecutionPolicy {
+        let timeout = match (timeout_cap, self.remaining_budget()) {
+            (Some(cap), Some(remaining)) => Some(cap.min(remaining)),
+            (Some(cap), None) => Some(cap),
+            (None, Some(remaining)) => Some(remaining),
+            (None, None) => None,
+        };
+
+        ProcessExecutionPolicy::new(timeout, self.cancellation(), safety.process_safety())
+    }
+
     /// Returns the pending command-boundary interruption, if any.
     pub fn interruption(&self) -> Option<ExecutionInterruption> {
         if self
@@ -161,7 +207,12 @@ mod tests {
 
     use tokio_util::sync::CancellationToken;
 
-    use super::{CommandName, ExecutionContext, ExecutionInterruption, ExecutionTransport};
+    use crate::platform::process::ProcessInterruptionSafety;
+
+    use super::{
+        CommandName, ExecutionContext, ExecutionInterruption, ExecutionTransport,
+        InterruptionSafetyClass,
+    };
 
     #[test]
     fn constructs_mcp_contexts() {
@@ -191,5 +242,20 @@ mod tests {
             .with_deadline(Some(Instant::now() - Duration::from_millis(1)));
 
         assert_eq!(context.interruption(), Some(ExecutionInterruption::TimedOut));
+    }
+
+    #[test]
+    fn process_policy_caps_timeout_by_remaining_budget() {
+        let context = ExecutionContext::cli(CommandName::Build).with_deadline(Some(
+            Instant::now() + Duration::from_millis(25),
+        ));
+
+        let policy = context.process_policy(
+            InterruptionSafetyClass::GracefulThenKill,
+            Some(Duration::from_millis(100)),
+        );
+
+        assert!(policy.timeout.expect("timeout") <= Duration::from_millis(25));
+        assert_eq!(policy.safety, ProcessInterruptionSafety::GracefulThenKill);
     }
 }

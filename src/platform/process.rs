@@ -4,6 +4,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 const EXECUTABLE_BUSY_MAX_RETRIES: usize = 5;
@@ -35,6 +36,8 @@ pub struct ProcessResult {
     pub stdout: String,
     /// Captured stderr as UTF-8 (lossy-decoded).
     pub stderr: String,
+    /// Command-boundary interruption observed while the child was running.
+    pub interruption: Option<ProcessInterruption>,
 }
 
 /// Result of a detached `spawn()` invocation.
@@ -44,6 +47,69 @@ pub struct SpawnResult {
     pub pid: u32,
     /// Binary that was used to start the process.
     pub binary: PathBuf,
+}
+
+/// Safety class applied by the process runner when interruption arrives mid-flight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessInterruptionSafety {
+    Interruptible,
+    GracefulThenKill,
+    CriticalNonAbortable,
+}
+
+/// Normalized interruption reason shared across timeout and cancellation paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessInterruptionReason {
+    Cancelled,
+    TimedOut,
+}
+
+/// How the runner handled the interruption after it arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessInterruptionAction {
+    Deferred,
+}
+
+/// Metadata preserved when the runner observes interruption during process execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessInterruption {
+    pub reason: ProcessInterruptionReason,
+    pub action: ProcessInterruptionAction,
+}
+
+/// Shared execution policy passed from transport-neutral command context into the runner.
+#[derive(Debug, Clone)]
+pub struct ProcessExecutionPolicy {
+    pub timeout: Option<Duration>,
+    pub cancellation: CancellationToken,
+    pub safety: ProcessInterruptionSafety,
+    pub graceful_shutdown_timeout: Duration,
+}
+
+impl Default for ProcessExecutionPolicy {
+    fn default() -> Self {
+        Self {
+            timeout: None,
+            cancellation: CancellationToken::new(),
+            safety: ProcessInterruptionSafety::Interruptible,
+            graceful_shutdown_timeout: Duration::from_millis(250),
+        }
+    }
+}
+
+impl ProcessExecutionPolicy {
+    pub fn new(
+        timeout: Option<Duration>,
+        cancellation: CancellationToken,
+        safety: ProcessInterruptionSafety,
+    ) -> Self {
+        Self {
+            timeout,
+            cancellation,
+            safety,
+            ..Self::default()
+        }
+    }
 }
 
 /// Runner-level process execution failures.
@@ -70,6 +136,9 @@ pub enum ProcessError {
         source: std::io::Error,
     },
 
+    #[error("process cancelled '{cmd}' before reaching a safe completion point")]
+    Cancelled { cmd: String },
+
     #[error("process timed out '{cmd}' after {timeout_ms}ms")]
     TimedOut { cmd: String, timeout_ms: u64 },
 }
@@ -86,6 +155,18 @@ pub trait ProcessRunner {
         timeout: Duration,
     ) -> Result<ProcessResult, ProcessError>;
 
+    /// Execute a process using the shared command-boundary execution policy.
+    fn run_with_policy(
+        &self,
+        request: &ProcessRequest,
+        policy: &ProcessExecutionPolicy,
+    ) -> Result<ProcessResult, ProcessError> {
+        match policy.timeout {
+            Some(timeout) => self.run_with_timeout(request, timeout),
+            None => self.run(request),
+        }
+    }
+
     /// Start a process in fire-and-forget mode without waiting for completion.
     fn spawn(&self, request: &ProcessRequest) -> Result<SpawnResult, ProcessError>;
 }
@@ -95,7 +176,7 @@ pub struct ProcessExecutor;
 
 impl ProcessRunner for ProcessExecutor {
     fn run(&self, request: &ProcessRequest) -> Result<ProcessResult, ProcessError> {
-        self.run_internal(request, None)
+        self.run_internal(request, &ProcessExecutionPolicy::default())
     }
 
     fn run_with_timeout(
@@ -103,7 +184,22 @@ impl ProcessRunner for ProcessExecutor {
         request: &ProcessRequest,
         timeout: Duration,
     ) -> Result<ProcessResult, ProcessError> {
-        self.run_internal(request, Some(timeout))
+        self.run_internal(
+            request,
+            &ProcessExecutionPolicy::new(
+                Some(timeout),
+                CancellationToken::new(),
+                ProcessInterruptionSafety::Interruptible,
+            ),
+        )
+    }
+
+    fn run_with_policy(
+        &self,
+        request: &ProcessRequest,
+        policy: &ProcessExecutionPolicy,
+    ) -> Result<ProcessResult, ProcessError> {
+        self.run_internal(request, policy)
     }
 
     fn spawn(&self, request: &ProcessRequest) -> Result<SpawnResult, ProcessError> {
@@ -147,16 +243,28 @@ impl ProcessExecutor {
     fn run_internal(
         &self,
         request: &ProcessRequest,
-        timeout: Option<Duration>,
+        policy: &ProcessExecutionPolicy,
     ) -> Result<ProcessResult, ProcessError> {
         let rendered_command = render_command(request);
         debug!(
             command = rendered_command.as_str(),
-            timeout_ms = timeout.map(|value| value.as_millis() as u64),
+            timeout_ms = policy.timeout.map(|value| value.as_millis() as u64),
+            safety = ?policy.safety,
             "running process"
         );
+        if policy.cancellation.is_cancelled() {
+            return Err(ProcessError::Cancelled {
+                cmd: rendered_command,
+            });
+        }
+        if policy.timeout.is_some_and(|timeout| timeout.is_zero()) {
+            return Err(ProcessError::TimedOut {
+                cmd: rendered_command,
+                timeout_ms: 0,
+            });
+        }
         let child = spawn_command(request, ProcessIoMode::Captured, &rendered_command)?;
-        let output = wait_for_output(child, &rendered_command, timeout)?;
+        let output = wait_for_output(child, &rendered_command, policy)?;
         debug!(
             command = rendered_command.as_str(),
             exit_code = output.status.code().unwrap_or(-1),
@@ -183,6 +291,7 @@ impl ProcessExecutor {
             exit_code: output.status.code().unwrap_or(-1),
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            interruption: output.interruption,
         })
     }
 }
@@ -273,17 +382,8 @@ fn is_executable_busy(error: &std::io::Error) -> bool {
 fn wait_for_output(
     mut child: std::process::Child,
     rendered_command: &str,
-    timeout: Option<Duration>,
-) -> Result<std::process::Output, ProcessError> {
-    if timeout.is_none() {
-        return child
-            .wait_with_output()
-            .map_err(|source| ProcessError::StartupCheckFailed {
-                cmd: rendered_command.to_owned(),
-                source,
-            });
-    }
-
+    policy: &ProcessExecutionPolicy,
+) -> Result<ObservedOutput, ProcessError> {
     let mut stdout = child
         .stdout
         .take()
@@ -310,6 +410,7 @@ fn wait_for_output(
     });
 
     let start = std::time::Instant::now();
+    let mut observed_interruption: Option<ProcessInterruptionReason> = None;
     loop {
         if let Some(status) =
             child
@@ -319,31 +420,135 @@ fn wait_for_output(
                     source,
                 })?
         {
-            return Ok(std::process::Output {
-                status,
-                stdout: stdout_reader.join().unwrap_or_default(),
-                stderr: stderr_reader.join().unwrap_or_default(),
-            });
+            let stdout = stdout_reader.join().unwrap_or_default();
+            let stderr = stderr_reader.join().unwrap_or_default();
+            return match observed_interruption {
+                Some(ProcessInterruptionReason::Cancelled)
+                    if policy.safety != ProcessInterruptionSafety::CriticalNonAbortable =>
+                {
+                    Err(ProcessError::Cancelled {
+                        cmd: rendered_command.to_owned(),
+                    })
+                }
+                Some(ProcessInterruptionReason::TimedOut)
+                    if policy.safety != ProcessInterruptionSafety::CriticalNonAbortable =>
+                {
+                    Err(ProcessError::TimedOut {
+                        cmd: rendered_command.to_owned(),
+                        timeout_ms: policy
+                            .timeout
+                            .unwrap_or_default()
+                            .as_millis() as u64,
+                    })
+                }
+                Some(reason) => Ok(ObservedOutput {
+                    status,
+                    stdout,
+                    stderr,
+                    interruption: Some(ProcessInterruption {
+                        reason,
+                        action: ProcessInterruptionAction::Deferred,
+                    }),
+                }),
+                None => Ok(ObservedOutput {
+                    status,
+                    stdout,
+                    stderr,
+                    interruption: None,
+                }),
+            };
         }
 
-        let limit = timeout.expect("checked above");
-        if start.elapsed() >= limit {
-            terminate_child_group(&mut child);
-            let _ = child.wait();
-            let _ = stdout_reader.join();
-            let _ = stderr_reader.join();
-            warn!(
-                command = rendered_command,
-                timeout_ms = limit.as_millis() as u64,
-                "process timed out"
-            );
-            return Err(ProcessError::TimedOut {
-                cmd: rendered_command.to_owned(),
-                timeout_ms: limit.as_millis() as u64,
-            });
+        if observed_interruption.is_none() {
+            if policy.cancellation.is_cancelled() {
+                observed_interruption = Some(ProcessInterruptionReason::Cancelled);
+                if let Some(error) = interrupt_child(
+                    &mut child,
+                    rendered_command,
+                    policy,
+                    ProcessInterruptionReason::Cancelled,
+                )? {
+                    let _ = stdout_reader.join();
+                    let _ = stderr_reader.join();
+                    return Err(error);
+                }
+            } else if let Some(limit) = policy.timeout {
+                if start.elapsed() >= limit {
+                    observed_interruption = Some(ProcessInterruptionReason::TimedOut);
+                    if let Some(error) = interrupt_child(
+                        &mut child,
+                        rendered_command,
+                        policy,
+                        ProcessInterruptionReason::TimedOut,
+                    )? {
+                        let _ = stdout_reader.join();
+                        let _ = stderr_reader.join();
+                        return Err(error);
+                    }
+                }
+            }
         }
 
         std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+struct ObservedOutput {
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    interruption: Option<ProcessInterruption>,
+}
+
+fn interrupt_child(
+    child: &mut std::process::Child,
+    rendered_command: &str,
+    policy: &ProcessExecutionPolicy,
+    reason: ProcessInterruptionReason,
+) -> Result<Option<ProcessError>, ProcessError> {
+    match policy.safety {
+        ProcessInterruptionSafety::CriticalNonAbortable => {
+            warn!(
+                command = rendered_command,
+                reason = ?reason,
+                "interruption requested during critical process phase; waiting for terminal outcome"
+            );
+            Ok(None)
+        }
+        ProcessInterruptionSafety::Interruptible => {
+            terminate_child_group(child);
+            let _ = child.wait();
+            Ok(Some(process_error_from_reason(
+                rendered_command,
+                policy.timeout,
+                reason,
+            )))
+        }
+        ProcessInterruptionSafety::GracefulThenKill => {
+            terminate_child_group_gracefully(child, policy.graceful_shutdown_timeout);
+            let _ = child.wait();
+            Ok(Some(process_error_from_reason(
+                rendered_command,
+                policy.timeout,
+                reason,
+            )))
+        }
+    }
+}
+
+fn process_error_from_reason(
+    rendered_command: &str,
+    timeout: Option<Duration>,
+    reason: ProcessInterruptionReason,
+) -> ProcessError {
+    match reason {
+        ProcessInterruptionReason::Cancelled => ProcessError::Cancelled {
+            cmd: rendered_command.to_owned(),
+        },
+        ProcessInterruptionReason::TimedOut => ProcessError::TimedOut {
+            cmd: rendered_command.to_owned(),
+            timeout_ms: timeout.unwrap_or_default().as_millis() as u64,
+        },
     }
 }
 
@@ -358,6 +563,30 @@ fn terminate_child_group(child: &mut std::process::Child) {
     {
         let _ = child.kill();
     }
+}
+
+fn terminate_child_group_gracefully(child: &mut std::process::Child, timeout: Duration) {
+    #[cfg(unix)]
+    unsafe {
+        let pgid = -(child.id() as i32);
+        let _ = libc::kill(pgid, libc::SIGTERM);
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+        return;
+    }
+
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            Err(_) => break,
+        }
+    }
+    terminate_child_group(child);
 }
 
 fn render_command(request: &ProcessRequest) -> String {
@@ -415,11 +644,17 @@ fn split_sensitive_assignment(arg: &str) -> Option<(&str, &str)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_command, ProcessError, ProcessExecutor, ProcessRequest, ProcessRunner};
+    use super::{
+        render_command, ProcessError, ProcessExecutionPolicy, ProcessExecutor,
+        ProcessInterruptionAction, ProcessInterruptionReason, ProcessInterruptionSafety,
+        ProcessRequest, ProcessRunner,
+    };
     use std::fs;
     use std::path::Path;
+    use std::thread;
     use std::time::Duration;
     use tempfile::tempdir;
+    use tokio_util::sync::CancellationToken;
 
     #[cfg(unix)]
     fn make_executable(path: &Path) {
@@ -598,6 +833,77 @@ mod tests {
             .expect_err("expected timeout");
 
         assert!(matches!(err, ProcessError::TimedOut { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_with_policy_cancels_interruptible_process() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("sleep.sh");
+        write_script(&script, "sleep 2");
+        let cancellation = CancellationToken::new();
+        let cancellation_clone = cancellation.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            cancellation_clone.cancel();
+        });
+
+        let runner = ProcessExecutor;
+        let err = runner
+            .run_with_policy(
+                &ProcessRequest {
+                    program: script,
+                    args: vec![],
+                    workdir: None,
+                    stdout_log_path: None,
+                    stderr_log_path: None,
+                    startup_probe: None,
+                },
+                &ProcessExecutionPolicy::new(
+                    None,
+                    cancellation,
+                    ProcessInterruptionSafety::Interruptible,
+                ),
+            )
+            .expect_err("expected cancellation");
+
+        assert!(matches!(err, ProcessError::Cancelled { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_with_policy_defers_timeout_for_critical_process() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("sleep.sh");
+        write_script(&script, "sleep 0.1\nprintf 'done\\n'");
+
+        let runner = ProcessExecutor;
+        let result = runner
+            .run_with_policy(
+                &ProcessRequest {
+                    program: script,
+                    args: vec![],
+                    workdir: None,
+                    stdout_log_path: None,
+                    stderr_log_path: None,
+                    startup_probe: None,
+                },
+                &ProcessExecutionPolicy::new(
+                    Some(Duration::from_millis(10)),
+                    CancellationToken::new(),
+                    ProcessInterruptionSafety::CriticalNonAbortable,
+                ),
+            )
+            .expect("critical process must reach terminal success");
+
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(
+            result.interruption,
+            Some(super::ProcessInterruption {
+                reason: ProcessInterruptionReason::TimedOut,
+                action: ProcessInterruptionAction::Deferred,
+            })
+        );
     }
 
     #[cfg(unix)]

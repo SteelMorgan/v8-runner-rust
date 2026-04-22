@@ -4,7 +4,9 @@ use thiserror::Error;
 
 use crate::config::model::InfobaseConfig;
 use crate::platform::connection::V8Connection;
-use crate::platform::process::{ProcessError, ProcessRequest, ProcessRunner};
+use crate::platform::process::{
+    ProcessError, ProcessExecutionPolicy, ProcessRequest, ProcessRunner,
+};
 use crate::platform::result::PlatformCommandResult;
 
 #[derive(Debug, Error)]
@@ -168,6 +170,7 @@ pub struct IbcmdDsl<'a> {
     binary: PathBuf,
     connection: IbcmdConnection,
     runner: &'a dyn ProcessRunner,
+    execution_policy: ProcessExecutionPolicy,
 }
 
 impl<'a> IbcmdDsl<'a> {
@@ -181,7 +184,14 @@ impl<'a> IbcmdDsl<'a> {
             binary,
             connection,
             runner,
+            execution_policy: ProcessExecutionPolicy::default(),
         }
+    }
+
+    /// Overrides the shared execution policy for process-level cancellation and deadlines.
+    pub fn with_execution_policy(mut self, execution_policy: ProcessExecutionPolicy) -> Self {
+        self.execution_policy = execution_policy;
+        self
     }
 
     /// Imports a full configuration or extension snapshot into the target infobase.
@@ -332,14 +342,17 @@ impl<'a> IbcmdDsl<'a> {
     fn run(&self, args: &[String]) -> Result<PlatformCommandResult, IbcmdError> {
         let process = self
             .runner
-            .run(&ProcessRequest {
-                program: self.binary.clone(),
-                args: args.to_vec(),
-                workdir: None,
-                stdout_log_path: None,
-                stderr_log_path: None,
-                startup_probe: None,
-            })
+            .run_with_policy(
+                &ProcessRequest {
+                    program: self.binary.clone(),
+                    args: args.to_vec(),
+                    workdir: None,
+                    stdout_log_path: None,
+                    stderr_log_path: None,
+                    startup_probe: None,
+                },
+                &self.execution_policy,
+            )
             .map_err(IbcmdError::Spawn)?;
 
         Ok(PlatformCommandResult {

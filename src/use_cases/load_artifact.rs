@@ -16,7 +16,7 @@ use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::support::temp::platform_logs_dir;
-use crate::use_cases::context::ExecutionContext;
+use crate::use_cases::context::{ExecutionContext, InterruptionSafetyClass};
 use crate::use_cases::ibcmd_diagnostics::format_ibcmd_failure_details;
 use crate::use_cases::request::LoadRequest;
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
@@ -41,7 +41,7 @@ pub fn execute(
         extension = args.extension.as_deref().unwrap_or("<none>"),
         "executing load use case"
     );
-    run_load(config, args)
+    run_load(context, config, args)
 }
 
 type LoadExecutionFailure = UseCaseFailure<LoadResult>;
@@ -56,7 +56,11 @@ struct ResolvedLoadRequest {
     extension: Option<String>,
 }
 
-fn run_load(config: &AppConfig, args: &LoadRequest) -> UseCaseResult<LoadResult> {
+fn run_load(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    args: &LoadRequest,
+) -> UseCaseResult<LoadResult> {
     let started = Instant::now();
     let request_snapshot = request_snapshot_for_failure_payload(args);
 
@@ -120,6 +124,7 @@ fn run_load(config: &AppConfig, args: &LoadRequest) -> UseCaseResult<LoadResult>
     };
 
     let probe_result = match probe_compatibility(
+        context,
         config,
         location.path.as_path(),
         utilities.runner_for(UtilityType::V8),
@@ -160,6 +165,7 @@ fn run_load(config: &AppConfig, args: &LoadRequest) -> UseCaseResult<LoadResult>
     }
 
     let apply_dsl = match build_designer_dsl(
+        context,
         config,
         location.path.as_path(),
         utilities.runner_for(UtilityType::V8),
@@ -168,6 +174,7 @@ fn run_load(config: &AppConfig, args: &LoadRequest) -> UseCaseResult<LoadResult>
             LoadMode::Merge => "merge",
             LoadMode::Update => unreachable!("update mode is rejected during validation"),
         },
+        InterruptionSafetyClass::CriticalNonAbortable,
     ) {
         Ok(dsl) => dsl,
         Err((error, platform_log_path)) => {
@@ -242,11 +249,31 @@ fn run_load(config: &AppConfig, args: &LoadRequest) -> UseCaseResult<LoadResult>
         ));
     }
 
+    if let Some(interruption) = context.interruption() {
+        let message = format!(
+            "{} for command '{}' before entering update_db_cfg safe point",
+            interruption.message(context.command()),
+            context.command().as_str()
+        );
+        return Err(LoadExecutionFailure::with_payload(
+            AppError::Runtime(message.clone()),
+            interrupted_result_from_resolved(
+                &resolved,
+                compatibility_state,
+                started,
+                message,
+                apply_result.platform_log_path.or(probe_log_path),
+            ),
+        ));
+    }
+
     let update_dsl = match build_designer_dsl(
+        context,
         config,
         location.path.as_path(),
         utilities.runner_for(UtilityType::V8),
         "update-db-cfg",
+        InterruptionSafetyClass::CriticalNonAbortable,
     ) {
         Ok(dsl) => dsl,
         Err((error, platform_log_path)) => {
@@ -307,7 +334,25 @@ fn run_load(config: &AppConfig, args: &LoadRequest) -> UseCaseResult<LoadResult>
         ));
     }
 
-    let message = success_message(&resolved, compatibility_state);
+    let deferred_warnings = [
+        deferred_interruption_warning("apply", &apply_result),
+        deferred_interruption_warning("update_db_cfg", &update_result),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    let message = success_message(&resolved, compatibility_state, &deferred_warnings);
+    let mut execution = ExecutionOutcome::new(ExecutionStatus::Succeeded).with_payload(
+        LoadExecutionMetadata {
+            applied: true,
+            target_kind: resolved.target_kind,
+            compatibility_state,
+            update_db_cfg_ran: true,
+        },
+    );
+    if !deferred_warnings.is_empty() {
+        execution = execution.with_diagnostics(deferred_warnings);
+    }
     Ok(LoadResult {
         ok: true,
         mode: resolved.mode,
@@ -322,14 +367,7 @@ fn run_load(config: &AppConfig, args: &LoadRequest) -> UseCaseResult<LoadResult>
             .or(probe_log_path),
         duration_ms: started.elapsed().as_millis() as u64,
         message: Some(message),
-        execution: ExecutionOutcome::new(ExecutionStatus::Succeeded).with_payload(
-            LoadExecutionMetadata {
-                applied: true,
-                target_kind: resolved.target_kind,
-                compatibility_state,
-                update_db_cfg_ran: true,
-            },
-        ),
+        execution,
     })
 }
 
@@ -339,6 +377,7 @@ struct ProbeResult {
 }
 
 fn probe_compatibility(
+    context: &ExecutionContext,
     config: &AppConfig,
     binary: &Path,
     runner: &dyn ProcessRunner,
@@ -357,7 +396,14 @@ fn probe_compatibility(
         LoadTargetKind::Unknown => "unknown-compare.txt",
     });
 
-    let dsl = build_designer_dsl(config, binary, runner, "probe")?;
+    let dsl = build_designer_dsl(
+        context,
+        config,
+        binary,
+        runner,
+        "probe",
+        InterruptionSafetyClass::GracefulThenKill,
+    )?;
     let result = match resolved.target_kind {
         LoadTargetKind::Configuration => dsl.compare_cfg(
             "MainConfiguration",
@@ -625,10 +671,12 @@ fn trim_optional(value: Option<String>) -> Option<String> {
 }
 
 fn build_designer_dsl<'a>(
+    context: &ExecutionContext,
     config: &AppConfig,
     binary: &Path,
     runner: &'a dyn ProcessRunner,
     action: &str,
+    safety: InterruptionSafetyClass,
 ) -> Result<DesignerDsl<'a>, (AppError, Option<PathBuf>)> {
     let log_dir = platform_logs_dir(&config.work_path).map_err(|error| {
         (
@@ -642,7 +690,8 @@ fn build_designer_dsl<'a>(
         config.v8_connection(),
         runner,
         Some(log_file),
-    ))
+    )
+    .with_execution_policy(context.process_policy(safety, None)))
 }
 
 fn ensure_platform_success(
@@ -683,8 +732,9 @@ fn target_label(resolved: &ResolvedLoadRequest) -> String {
 fn success_message(
     resolved: &ResolvedLoadRequest,
     compatibility_state: CompatibilityState,
+    deferred_warnings: &[String],
 ) -> String {
-    format!(
+    let mut message = format!(
         "{} {} applied successfully after {:?} compatibility probe",
         match resolved.mode {
             LoadMode::Load => "load",
@@ -693,7 +743,57 @@ fn success_message(
         },
         resolved.artifact_path.display(),
         compatibility_state
-    )
+    );
+    if !deferred_warnings.is_empty() {
+        message.push_str("; ");
+        message.push_str(&deferred_warnings.join("; "));
+    }
+    message
+}
+
+fn interrupted_result_from_resolved(
+    resolved: &ResolvedLoadRequest,
+    compatibility_state: CompatibilityState,
+    started: Instant,
+    message: String,
+    platform_log_path: Option<PathBuf>,
+) -> LoadResult {
+    LoadResult {
+        ok: false,
+        mode: resolved.mode,
+        artifact_path: resolved.artifact_path.clone(),
+        artifact_type: resolved.artifact_type,
+        target_kind: resolved.target_kind,
+        compatibility_state,
+        extension: resolved.extension.clone(),
+        platform_log_path,
+        duration_ms: started.elapsed().as_millis() as u64,
+        message: Some(message.clone()),
+        execution: ExecutionOutcome::new(ExecutionStatus::Failed)
+            .with_diagnostics(vec![message.clone()])
+            .with_errors(vec![ExecutionError::new("artifact_load_interrupted", message)])
+            .with_payload(LoadExecutionMetadata {
+                applied: true,
+                target_kind: resolved.target_kind,
+                compatibility_state,
+                update_db_cfg_ran: false,
+            }),
+    }
+}
+
+fn deferred_interruption_warning(
+    action: &str,
+    result: &PlatformCommandResult,
+) -> Option<String> {
+    result.process.interruption.map(|interruption| {
+        let reason = match interruption.reason {
+            crate::platform::process::ProcessInterruptionReason::Cancelled => "cancellation",
+            crate::platform::process::ProcessInterruptionReason::TimedOut => "timeout",
+        };
+        format!(
+            "{action} completed successfully after {reason} request during critical phase; unsafe interruption was not performed"
+        )
+    })
 }
 
 fn empty_result_from_resolved(

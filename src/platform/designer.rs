@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::platform::connection::V8Connection;
-use crate::platform::process::{ProcessError, ProcessRequest, ProcessRunner};
+use crate::platform::process::{
+    ProcessError, ProcessExecutionPolicy, ProcessRequest, ProcessRunner,
+};
 use crate::platform::result::PlatformCommandResult;
 
 #[derive(Debug, Error)]
@@ -22,6 +24,7 @@ pub struct DesignerDsl<'a> {
     runner: &'a dyn ProcessRunner,
     /// Optional file where Designer should write its `/Out` log.
     log_file: Option<PathBuf>,
+    execution_policy: ProcessExecutionPolicy,
 }
 
 impl<'a> DesignerDsl<'a> {
@@ -37,7 +40,14 @@ impl<'a> DesignerDsl<'a> {
             connection,
             runner,
             log_file,
+            execution_policy: ProcessExecutionPolicy::default(),
         }
+    }
+
+    /// Overrides the shared execution policy for process-level cancellation and deadlines.
+    pub fn with_execution_policy(mut self, execution_policy: ProcessExecutionPolicy) -> Self {
+        self.execution_policy = execution_policy;
+        self
     }
 
     /// `/LoadConfigFromFiles <dir> -updateConfigDumpInfo`
@@ -287,14 +297,17 @@ impl<'a> DesignerDsl<'a> {
         }
         let process = self
             .runner
-            .run(&ProcessRequest {
-                program: self.binary.clone(),
-                args: args.to_vec(),
-                workdir: None,
-                stdout_log_path: None,
-                stderr_log_path: None,
-                startup_probe: None,
-            })
+            .run_with_policy(
+                &ProcessRequest {
+                    program: self.binary.clone(),
+                    args: args.to_vec(),
+                    workdir: None,
+                    stdout_log_path: None,
+                    stderr_log_path: None,
+                    startup_probe: None,
+                },
+                &self.execution_policy,
+            )
             .map_err(DesignerError::Spawn)?;
 
         let (platform_log_path, platform_log, platform_log_read_error) =
