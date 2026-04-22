@@ -737,7 +737,9 @@ mod tests {
         use_bin_layout: bool,
     ) -> PathBuf {
         let path = if use_bin_layout {
-            root.join(version).join("bin").join(utility.executable_name())
+            root.join(version)
+                .join("bin")
+                .join(utility.executable_name())
         } else {
             root.join(version).join(utility.executable_name())
         };
@@ -836,7 +838,10 @@ mod tests {
         let mut locator =
             Locator::with_roots(Some(root), Some(version), None, None, vec![], vec![]);
 
-        assert_eq!(locator.locate(UtilityType::Ibcmd).expect("locate").path, ibcmd);
+        assert_eq!(
+            locator.locate(UtilityType::Ibcmd).expect("locate").path,
+            ibcmd
+        );
     }
 
     #[cfg(unix)]
@@ -935,32 +940,17 @@ mod tests {
     fn platform_version_matrix_applies_to_all_platform_utilities() {
         for utility in [UtilityType::V8, UtilityType::V8C, UtilityType::Ibcmd] {
             let dir = tempdir().expect("tempdir");
-            let root = dir.path().join(format!("platform-{}", utility.executable_name()));
+            let root = dir
+                .path()
+                .join(format!("platform-{}", utility.executable_name()));
 
-            let exact = touch_versioned_platform_executable(
-                &root,
-                "8.3.27.1789",
-                utility,
-                true,
-            );
-            let _older_build = touch_versioned_platform_executable(
-                &root,
-                "8.3.27.1000",
-                utility,
-                false,
-            );
-            let patch_best = touch_versioned_platform_executable(
-                &root,
-                "8.3.20.9999",
-                utility,
-                false,
-            );
-            let _patch_older = touch_versioned_platform_executable(
-                &root,
-                "8.3.20.1000",
-                utility,
-                true,
-            );
+            let exact = touch_versioned_platform_executable(&root, "8.3.27.1789", utility, true);
+            let _older_build =
+                touch_versioned_platform_executable(&root, "8.3.27.1000", utility, false);
+            let patch_best =
+                touch_versioned_platform_executable(&root, "8.3.20.9999", utility, false);
+            let _patch_older =
+                touch_versioned_platform_executable(&root, "8.3.20.1000", utility, true);
             let _other_minor =
                 touch_versioned_platform_executable(&root, "8.4.1.1", utility, false);
 
@@ -982,7 +972,10 @@ mod tests {
                 vec![root.clone()],
                 vec![],
             );
-            assert_eq!(patch_locator.locate(utility).expect("patch").path, patch_best);
+            assert_eq!(
+                patch_locator.locate(utility).expect("patch").path,
+                patch_best
+            );
 
             let mut minor_locator = Locator::with_roots(
                 None,

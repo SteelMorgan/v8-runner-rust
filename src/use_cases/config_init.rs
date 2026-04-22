@@ -163,7 +163,16 @@ fn choose_format(
 fn discover_sources(project_dir: &Path) -> Result<DetectedSources, AppError> {
     let mut designer = Vec::new();
     let mut edt = Vec::new();
-    scan_dir(project_dir, project_dir, &mut designer, &mut edt)?;
+    let mut seen_designer = HashSet::new();
+    let mut seen_edt = HashSet::new();
+    scan_dir(
+        project_dir,
+        project_dir,
+        &mut designer,
+        &mut edt,
+        &mut seen_designer,
+        &mut seen_edt,
+    )?;
     designer.sort_by(|a, b| a.path.cmp(&b.path));
     edt.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(DetectedSources { designer, edt })
@@ -174,25 +183,10 @@ fn scan_dir(
     dir: &Path,
     designer: &mut Vec<DetectedSource>,
     edt: &mut Vec<DetectedSource>,
+    seen_designer: &mut HashSet<PathBuf>,
+    seen_edt: &mut HashSet<PathBuf>,
 ) -> Result<(), AppError> {
     if should_skip_dir(root, dir) {
-        return Ok(());
-    }
-
-    let designer_marker = dir.join("Configuration.xml");
-    if designer_marker.is_file() {
-        designer.push(DetectedSource {
-            path: dir.to_path_buf(),
-            purpose: detect_designer_purpose(&designer_marker),
-        });
-        return Ok(());
-    }
-
-    if dir.join(".project").is_file() {
-        edt.push(DetectedSource {
-            path: dir.to_path_buf(),
-            purpose: detect_edt_purpose(dir),
-        });
         return Ok(());
     }
 
@@ -212,7 +206,46 @@ fn scan_dir(
         })?;
         let path = entry.path();
         if path.is_dir() {
-            scan_dir(root, &path, designer, edt)?;
+            scan_dir(root, &path, designer, edt, seen_designer, seen_edt)?;
+            continue;
+        }
+
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        match file_name {
+            "Configuration.xml" => {
+                let Some(source_root) = path.parent() else {
+                    continue;
+                };
+                if has_ancestor_marker(root, source_root, ".project") {
+                    continue;
+                }
+                if let Some(purpose) = detect_designer_purpose(&path)? {
+                    let source_root = source_root.to_path_buf();
+                    if seen_designer.insert(source_root.clone()) {
+                        designer.push(DetectedSource {
+                            path: source_root,
+                            purpose,
+                        });
+                    }
+                }
+            }
+            ".project" => {
+                let Some(source_root) = path.parent() else {
+                    continue;
+                };
+                if let Some(purpose) = detect_edt_purpose(source_root)? {
+                    let source_root = source_root.to_path_buf();
+                    if seen_edt.insert(source_root.clone()) {
+                        edt.push(DetectedSource {
+                            path: source_root,
+                            purpose,
+                        });
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -232,37 +265,93 @@ fn should_skip_dir(root: &Path, dir: &Path) -> bool {
     )
 }
 
-fn detect_designer_purpose(configuration_xml: &Path) -> SourcePurpose {
-    match std::fs::read_to_string(configuration_xml) {
-        Ok(content)
-            if content.contains("<ConfigurationExtensionPurpose>")
-                || content.contains("<ObjectBelonging>") =>
-        {
-            SourcePurpose::Extension
+fn has_ancestor_marker(root: &Path, start: &Path, marker: &str) -> bool {
+    let mut current = Some(start);
+    while let Some(path) = current {
+        if path.join(marker).is_file() {
+            return true;
         }
-        _ => SourcePurpose::Configuration,
+        if path == root {
+            break;
+        }
+        current = path.parent();
     }
+    false
 }
 
-fn detect_edt_purpose(project_dir: &Path) -> SourcePurpose {
-    let configuration_xml = project_dir
-        .join("src")
-        .join("Configuration")
-        .join("Configuration.xml");
-    if configuration_xml.is_file() {
-        detect_designer_purpose(&configuration_xml)
-    } else if path_looks_like_extension(project_dir) {
-        SourcePurpose::Extension
-    } else {
-        SourcePurpose::Configuration
-    }
+fn detect_designer_purpose(configuration_xml: &Path) -> Result<Option<SourcePurpose>, AppError> {
+    let content = std::fs::read_to_string(configuration_xml).map_err(|error| {
+        AppError::Runtime(format!(
+            "failed to read source marker '{}': {error}",
+            configuration_xml.display()
+        ))
+    })?;
+    Ok(classify_configuration_descriptor(&content))
 }
 
-fn path_looks_like_extension(path: &Path) -> bool {
-    path.components().any(|component| {
-        let name = component.as_os_str().to_string_lossy().to_ascii_lowercase();
-        matches!(name.as_str(), "ext" | "exts" | "extension" | "extensions")
-    })
+fn classify_configuration_descriptor(content: &str) -> Option<SourcePurpose> {
+    if content.contains("<ConfigurationExtensionPurpose>") || content.contains("<ObjectBelonging>")
+    {
+        return Some(SourcePurpose::Extension);
+    }
+    if content.contains("<Configuration") || content.contains("<MetaDataObject") {
+        return Some(SourcePurpose::Configuration);
+    }
+    None
+}
+
+fn detect_edt_purpose(project_dir: &Path) -> Result<Option<SourcePurpose>, AppError> {
+    let project_file = project_dir.join(".project");
+    let content = std::fs::read_to_string(&project_file).map_err(|error| {
+        AppError::Runtime(format!(
+            "failed to read source marker '{}': {error}",
+            project_file.display()
+        ))
+    })?;
+    if !looks_like_edt_project_descriptor(&content) {
+        return Ok(None);
+    }
+
+    let mut dirs = vec![project_dir.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        let entries = std::fs::read_dir(&dir).map_err(|error| {
+            AppError::Runtime(format!(
+                "failed to read EDT project directory '{}': {error}",
+                dir.display()
+            ))
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                AppError::Runtime(format!(
+                    "failed to read EDT project entry '{}': {error}",
+                    dir.display()
+                ))
+            })?;
+            let path = entry.path();
+            if path.is_dir() {
+                if !should_skip_dir(project_dir, &path) {
+                    dirs.push(path);
+                }
+                continue;
+            }
+            if path.file_name().and_then(|name| name.to_str()) != Some("Configuration.xml") {
+                continue;
+            }
+            match detect_designer_purpose(&path)? {
+                Some(SourcePurpose::Extension) => return Ok(Some(SourcePurpose::Extension)),
+                Some(SourcePurpose::Configuration) => {}
+                None => {}
+            }
+        }
+    }
+
+    Ok(Some(SourcePurpose::Configuration))
+}
+
+fn looks_like_edt_project_descriptor(content: &str) -> bool {
+    content.contains("<projectDescription>")
+        && content.contains("<name>")
+        && content.contains("</name>")
 }
 
 fn build_source_sets(
@@ -464,9 +553,88 @@ mod tests {
         std::fs::write(&xml, "<ObjectBelonging>Adopted</ObjectBelonging>").expect("xml");
 
         assert_eq!(
-            super::detect_designer_purpose(&xml),
-            SourcePurpose::Extension
+            super::detect_designer_purpose(&xml).expect("designer purpose"),
+            Some(SourcePurpose::Extension)
         );
+    }
+
+    #[test]
+    fn discovers_nested_designer_sources_without_relying_on_root_structure() {
+        let dir = tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("Configuration.xml"), "<Configuration/>").expect("root xml");
+        let ext = dir.path().join("packages").join("sales-addon");
+        std::fs::create_dir_all(&ext).expect("ext dir");
+        std::fs::write(
+            ext.join("Configuration.xml"),
+            "<ConfigurationExtensionPurpose>Customization</ConfigurationExtensionPurpose>",
+        )
+        .expect("ext xml");
+
+        let result = execute(&ConfigInitRequest {
+            project_dir: dir.path().to_path_buf(),
+            output_path: "v8project.yaml".into(),
+            force: false,
+            connection: None,
+            format: ConfigFormatRequest::Designer,
+            builder: ConfigBuilderRequest::Designer,
+        })
+        .expect("init config");
+
+        assert_eq!(result.source_sets.len(), 2);
+        assert!(result
+            .source_sets
+            .iter()
+            .any(|source| source.path == "." && source.source_type == "CONFIGURATION"));
+        assert!(result.source_sets.iter().any(|source| {
+            source.path == "packages/sales-addon" && source.source_type == "EXTENSION"
+        }));
+    }
+
+    #[test]
+    fn detects_edt_extension_from_configuration_xml_content_instead_of_path_name() {
+        let dir = tempdir().expect("tempdir");
+        let config_project = dir.path().join("workspace").join("cfg-project");
+        let extension_project = dir.path().join("workspace").join("addon-project");
+        std::fs::create_dir_all(config_project.join("metadata")).expect("config metadata");
+        std::fs::create_dir_all(extension_project.join("metadata")).expect("ext metadata");
+        std::fs::write(
+            config_project.join(".project"),
+            "<projectDescription><name>configuration</name></projectDescription>",
+        )
+        .expect("config project");
+        std::fs::write(
+            config_project.join("metadata").join("Configuration.xml"),
+            "<Configuration/>",
+        )
+        .expect("config xml");
+        std::fs::write(
+            extension_project.join(".project"),
+            "<projectDescription><name>sales</name></projectDescription>",
+        )
+        .expect("ext project");
+        std::fs::write(
+            extension_project.join("metadata").join("Configuration.xml"),
+            "<ObjectBelonging>Adopted</ObjectBelonging>",
+        )
+        .expect("ext xml");
+
+        let result = execute(&ConfigInitRequest {
+            project_dir: dir.path().to_path_buf(),
+            output_path: "v8project.yaml".into(),
+            force: false,
+            connection: None,
+            format: ConfigFormatRequest::Auto,
+            builder: ConfigBuilderRequest::Designer,
+        })
+        .expect("init config");
+
+        assert_eq!(result.format, "EDT");
+        assert!(result.source_sets.iter().any(|source| {
+            source.path == "workspace/cfg-project" && source.source_type == "CONFIGURATION"
+        }));
+        assert!(result.source_sets.iter().any(|source| {
+            source.path == "workspace/addon-project" && source.source_type == "EXTENSION"
+        }));
     }
 
     #[test]

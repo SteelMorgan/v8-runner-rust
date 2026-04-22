@@ -2,6 +2,7 @@
 
 Этот документ фиксирует правила, которые должны оставаться верными при развитии `v8-runner`.
 Если изменение нарушает инвариант, сначала нужен новый ADR, который явно заменяет или уточняет текущее решение.
+Практический checklist для изменений MCP surface, public command boundary и config contract вынесен в [docs/architecture/change-checklist.md](change-checklist.md).
 
 ## Цель продукта
 
@@ -17,6 +18,7 @@
 2. MCP не зеркалит CLI автоматически.
 3. Текущая MCP-поверхность состоит из 8 tool-операций: `run_all_tests`, `run_module_tests`, `build_project`, `dump_config`, `launch_app`, `check_syntax_edt`, `check_syntax_designer_config`, `check_syntax_designer_modules`.
 4. Добавление, удаление или переименование MCP tool-операций является изменением публичного контракта и требует отдельного ADR или явного обновления действующего ADR.
+5. Любое изменение MCP surface должно проходить по checklist из `docs/architecture/change-checklist.md` и синхронизировать docs/source/tests, перечисленные в `ADR-0005`.
 
 См. [ADR-0005](../decisions/0005-razdelit-cli-i-mcp-publichnye-poverhnosti.md).
 
@@ -34,6 +36,7 @@
 10. `source-set.name` должен быть уникальным и безопасным path segment; resolved paths должны быть уникальны после normalization.
 11. EDT/external source-set paths и generated work targets не должны пересекаться; reserved work directory names нельзя использовать как EDT source-set names.
 12. Unsupported или unsafe config combinations должны отклоняться на validation boundary до вызова platform DSL.
+13. Новый public config field, `source-set` type или `infobase` subtree требует typed model, validation, `config init`/examples/docs sync и regression tests по checklist из `docs/architecture/change-checklist.md`.
 
 См. [ADR-0017](../decisions/0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md), [ADR-0018](../decisions/0018-perenesti-kontrakt-informatsionnoy-bazy-v-infobase.md) и [ADR-0019](../decisions/0019-sozdavat-servernuyu-infobazu-cherez-ibcmd-pri-init-pri-otsutstvii.md).
 
@@ -44,6 +47,7 @@
 3. Lock sidecar является diagnostic-only metadata; отсутствие или ошибка записи sidecar не отменяет сам lock.
 4. Вложенная orchestration использует explicit internal `*_unlocked` entrypoints только под внешним lock.
 5. MCP admission limits не заменяют workspace lock: semaphore ограничивает общую нагрузку, lock сериализует доступ к конкретному `workPath`.
+6. Новая public CLI/MCP команда, работающая с runtime state под `workPath`, должна брать lock на adapter boundary и иметь regression coverage на boundary conflict.
 
 См. [ADR-0011](../decisions/0011-eksklyuzivnoe-vladenie-workpath-na-vremya-komandy.md).
 

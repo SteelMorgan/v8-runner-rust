@@ -1250,7 +1250,8 @@ fn visible_test_diagnostics(result: &TestRunResult) -> Vec<String> {
 }
 
 fn test_has_actionable_success_signal(result: &TestRunResult) -> bool {
-    result.report
+    result
+        .report
         .as_ref()
         .is_some_and(|report| !report.extracted_errors.is_empty())
         || !visible_test_diagnostics(result).is_empty()

@@ -20,6 +20,7 @@
 - `ADR-0012`: `SourceSetsService` уже создает два context-а для EDT (`edt-*` и `designer-*`), но `run_build_edt` принимает load-решение по EDT-анализу до export. Generated Designer context после успешного EDT export не анализируется, partial load для EDT flow не используется, а `designer-*` snapshot коммитится через EDT `StepCommit`.
 - `ADR-0014`: общего command-level `execution_timeout`/deadline/cancellation context нет. `ExecutionContext` несет только EDT subprocess timeout, а MCP `server.rs` имеет отдельную bounded-модель и ранний running cancel/timeout response.
 - `ADR-0018`: `docs/architecture/invariants.md` уже описывает `infobase.*` как supported contract, но `AppConfig`, `config init`, примеры и тестовые YAML продолжают использовать top-level `connection`/`credentials`; `IbcmdConnection` по-прежнему отклоняет server connection.
+- `ADR-0017`: `config init` определяет source-set кандидаты частично по structure/path heuristics, а не только по marker filenames и содержимому; autodiscovery external aggregate source-set для `EXTERNAL_DATA_PROCESSORS` и `EXTERNAL_REPORTS` как часть supported config contract явно не реализован.
 - `ADR-0016`: `ExecutionOutcome<T>` есть, но `ExecutionStatus::Cancelled` отсутствует, `StepResult` остается минимальным, а MCP/CLI mapping всё еще опирается на command-specific top-level поля.
 - Guardrails частичные: есть `tests/use_case_boundaries.rs`, но он проверяет только небольшой список use-case файлов и не ловит, например, production-зависимость `src/use_cases/result.rs` от `crate::output::exit_codes`.
 
@@ -92,6 +93,18 @@
    Готово, когда: старые top-level `connection`/`credentials` отклоняются; file connection для `IBCMD` использует `--db-path`; server connection для `IBCMD` использует `--dbms`, `--database-server`, `--database-name`, optional DBMS auth и отдельные `--user/--password` пользователя ИБ; Designer/Enterprise используют `infobase.connection` и `infobase.user/password`; docs и examples перешли на новый формат.
 
    Сверка 2026-04-22: gap подтвержден: `AppConfig` содержит top-level `connection`/`credentials`, `config init`, `README.md`, `examples/v8project.yaml`, `config::loader` fixtures и CLI tests продолжают использовать старый формат, `IbcmdConnection::from_v8_connection` возвращает `ServerConnectionNotSupported` для server connection. По критерию этого документа это уже P0, потому что код и public docs расходятся с accepted `ADR-0018` и `docs/architecture/invariants.md`.
+
+7. `ADR-TASK-012`: Привести autodiscovery `config init` к content-based config contract.
+
+   Источники: `ADR-0017`, `docs/architecture/invariants.md`, `docs/architecture/change-checklist.md`.
+
+   Объем: убрать зависимость autodiscovery от имен каталогов и structure/layout heuristics. `CONFIGURATION` и `EXTENSION` должны определяться по marker filenames и содержимому marker-файлов; для `DESIGNER` и `EDT` это разные content formats. Для external types сохранить aggregate-root contract: один `source-set` на каталог внешних обработок и один `source-set` на каталог внешних отчетов. Для `DESIGNER` aggregate root определяется по однородным top-level XML descriptors, для `EDT` — по direct child projects одного external-kind, определяемого по содержимому проектных файлов. Mixed/ambiguous roots не должны autodetect-иться и остаются manual config case.
+
+   Затронутые области: `src/use_cases/config_init.rs`, `tests/cli_config_init.rs`, unit tests autodiscovery/classification, `README.md`, `docs/CONFIGURATION.md`, при необходимости `docs/CAPABILITIES.md`.
+
+   Готово, когда: `CONFIGURATION`/`EXTENSION` для `DESIGNER` определяются по содержимому `Configuration.xml`; `CONFIGURATION`/`EXTENSION` для `EDT` определяются по содержимому project-local markers, а не по path-name heuristics; `config init` умеет формировать `EXTERNAL_DATA_PROCESSORS` и `EXTERNAL_REPORTS` как aggregate source-set; EDT-internal markers не порождают ложные Designer candidates; mixed external roots не автогенерируются; regression coverage фиксирует nested sources, EDT-vs-Designer suppression и external aggregate detection.
+
+   Сверка 2026-04-22: gap подтвержден: текущий `config init` по-прежнему частично опирается на structure/path heuristics для классификации source-set и не фиксирует external autodiscovery как реализованный supported contract.
 
 ### P1
 
@@ -222,13 +235,13 @@
 | `ADR-0014` | Общая timeout/cancellation policy является целевой архитектурой и реализована не полностью. | `ADR-TASK-003`, `ADR-TASK-005`, `ADR-TASK-006` |
 | `ADR-0015` | Atomic publication в основном есть, но остаются явные cleanup/prefix/critical-phase follow-ups. | `ADR-TASK-005` |
 | `ADR-0016` | `ExecutionOutcome<T>` есть частично; миграция к canonical outcome остается открытой. | `ADR-TASK-003`, `ADR-TASK-006` |
-| `ADR-0017` | Config contract реализован частично; структура подключения ИБ уточнена отдельным ADR-0018. | `ADR-TASK-008`, `ADR-TASK-010` |
+| `ADR-0017` | Config contract реализован частично; структура подключения ИБ уточнена отдельным ADR-0018, а content-based autodiscovery `config init` и external aggregate detection остаются отдельным gap. | `ADR-TASK-008`, `ADR-TASK-010`, `ADR-TASK-012` |
 | `ADR-0018` | `infobase` становится единственным контрактом подключения, credentials и DBMS-level настроек. | `ADR-TASK-008` |
 
 ## Следующий рекомендуемый порядок
 
-1. Следующим брать `ADR-TASK-005`: это главный открытый follow-up по atomic publication после закрытия transport/execution и shared EDT задач.
-2. Затем `ADR-TASK-006`, чтобы довести `ExecutionOutcome<T>` и step contract до целевого canonical state.
-3. После этого `ADR-TASK-007`: применить agreed CLI output policy как единый high-signal contract для человека и AI-агента.
-4. Дальше `ADR-TASK-009`, чтобы усилить regression coverage platform locator и mask selection для `ibcmd`.
-5. Затем `ADR-TASK-010` и CI wiring из `spec/REAL_ENV_TEST_PLAN.md` как следующий слой архитектурных guardrails и delivery automation.
+1. Следующим брать `ADR-TASK-012`: это новый зафиксированный gap public config contract вокруг `config init`, source-set autodiscovery и external aggregate detection.
+2. Затем `ADR-TASK-005`: это главный follow-up по atomic publication после закрытия transport/execution и shared EDT задач.
+3. После этого `ADR-TASK-006`, чтобы довести `ExecutionOutcome<T>` и step contract до целевого canonical state.
+4. Дальше `ADR-TASK-007`: применить agreed CLI output policy как единый high-signal contract для человека и AI-агента.
+5. Затем `ADR-TASK-009` и `ADR-TASK-010` как следующий слой regression/guardrail работ.

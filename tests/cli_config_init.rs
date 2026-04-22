@@ -72,6 +72,49 @@ fn config_init_uses_json_envelope_and_config_path_override() {
 }
 
 #[test]
+fn config_init_detects_edt_extension_by_marker_contents() {
+    let dir = tempdir().expect("tempdir");
+    let config_project = dir.path().join("workspace").join("cfg-project");
+    let extension_project = dir.path().join("workspace").join("addon-project");
+    fs::create_dir_all(config_project.join("metadata")).expect("config metadata");
+    fs::create_dir_all(extension_project.join("metadata")).expect("ext metadata");
+    fs::write(
+        config_project.join(".project"),
+        "<projectDescription><name>configuration</name></projectDescription>",
+    )
+    .expect("config project");
+    fs::write(
+        config_project.join("metadata").join("Configuration.xml"),
+        "<Configuration/>",
+    )
+    .expect("config xml");
+    fs::write(
+        extension_project.join(".project"),
+        "<projectDescription><name>sales</name></projectDescription>",
+    )
+    .expect("ext project");
+    fs::write(
+        extension_project.join("metadata").join("Configuration.xml"),
+        "<ConfigurationExtensionPurpose>Customization</ConfigurationExtensionPurpose>",
+    )
+    .expect("ext xml");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .current_dir(dir.path())
+        .args(["config", "init"])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let config = fs::read_to_string(dir.path().join("v8project.yaml")).expect("config");
+    assert!(config.contains("format: EDT"));
+    assert!(config.contains("path: 'workspace/cfg-project'"));
+    assert!(config.contains("path: 'workspace/addon-project'"));
+    assert!(config.contains("type: EXTENSION"));
+}
+
+#[test]
 fn config_init_refuses_to_overwrite_without_force() {
     let dir = tempdir().expect("tempdir");
     fs::write(dir.path().join("v8project.yaml"), "existing").expect("existing");

@@ -881,7 +881,10 @@ mod tests {
         let edt_calls_text = fs::read_to_string(&edt_calls).expect("edt calls");
         assert!(result.ok);
         assert!(edt_calls_text.contains("-command import --project"));
-        assert_eq!(edt_calls_text.matches("-command import --project").count(), 2);
+        assert_eq!(
+            edt_calls_text.matches("-command import --project").count(),
+            2
+        );
         assert!(!edt_calls_text.contains("START"));
         assert!(edt_workspace_marker_path(&work.join("edt-workspace")).exists());
     }

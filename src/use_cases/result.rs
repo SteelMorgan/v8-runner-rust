@@ -2,6 +2,10 @@ use std::fmt;
 
 use crate::support::error::AppError;
 
+const VALIDATION_EXIT_CODE: i32 = 2;
+const RUNTIME_EXIT_CODE: i32 = 3;
+const PLATFORM_EXIT_CODE: i32 = 4;
+
 /// Stable use-case error class used by transport adapters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UseCaseErrorKind {
@@ -14,9 +18,9 @@ impl UseCaseErrorKind {
     /// Maps the error kind to the CLI exit code.
     pub const fn exit_code(self) -> i32 {
         match self {
-            Self::Validation => crate::output::exit_codes::VALIDATION_ERROR,
-            Self::Runtime => crate::output::exit_codes::RUNTIME_ERROR,
-            Self::Platform => crate::output::exit_codes::PLATFORM_ERROR,
+            Self::Validation => VALIDATION_EXIT_CODE,
+            Self::Runtime => RUNTIME_EXIT_CODE,
+            Self::Platform => PLATFORM_EXIT_CODE,
         }
     }
 
@@ -105,3 +109,15 @@ impl<T> UseCaseFailure<T> {
 
 /// The transport-neutral result contract for use-case execution.
 pub type UseCaseResult<T> = Result<T, UseCaseFailure<T>>;
+
+#[cfg(test)]
+mod tests {
+    use super::UseCaseErrorKind;
+
+    #[test]
+    fn use_case_error_kinds_keep_stable_cli_exit_codes() {
+        assert_eq!(UseCaseErrorKind::Validation.exit_code(), 2);
+        assert_eq!(UseCaseErrorKind::Runtime.exit_code(), 3);
+        assert_eq!(UseCaseErrorKind::Platform.exit_code(), 4);
+    }
+}

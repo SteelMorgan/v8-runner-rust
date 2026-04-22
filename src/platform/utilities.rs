@@ -85,7 +85,7 @@ impl PlatformUtilities {
 mod tests {
     use super::PlatformUtilities;
     use crate::config::model::{
-        AppConfig, BuilderBackend, BuildConfig, InfobaseConfig, McpConfig, PlatformToolConfig,
+        AppConfig, BuildConfig, BuilderBackend, InfobaseConfig, McpConfig, PlatformToolConfig,
         SourceFormat, TestsConfig, ToolsConfig,
     };
     use crate::platform::locator::{EdtVersion, Locator, LocatorError, UtilityType};
@@ -202,7 +202,9 @@ mod tests {
     fn from_config_locates_all_platform_utilities_via_shared_platform_contract() {
         for utility in [UtilityType::V8, UtilityType::V8C, UtilityType::Ibcmd] {
             let dir = tempdir().expect("tempdir");
-            let root = dir.path().join(format!("platform-{}", utility.executable_name()));
+            let root = dir
+                .path()
+                .join(format!("platform-{}", utility.executable_name()));
             let wanted = root
                 .join("8.3.27.1789")
                 .join("bin")

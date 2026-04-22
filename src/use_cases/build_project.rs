@@ -1004,12 +1004,10 @@ fn run_build_edt(
                                 Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
                                 Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
                             ) {
-                                Ok(dsl) => {
-                                    dsl.with_execution_policy(context.process_policy(
-                                        InterruptionSafetyClass::GracefulThenKill,
-                                        None,
-                                    ))
-                                }
+                                Ok(dsl) => dsl.with_execution_policy(context.process_policy(
+                                    InterruptionSafetyClass::GracefulThenKill,
+                                    None,
+                                )),
                                 Err(error) => {
                                     let app_error = AppError::Platform(error.to_string());
                                     let result = fail_with_remaining_steps(
@@ -1221,12 +1219,10 @@ fn run_build_edt(
                                     Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
                                     Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
                                 ) {
-                                    Ok(dsl) => dsl.with_execution_policy(
-                                        context.process_policy(
-                                            InterruptionSafetyClass::GracefulThenKill,
-                                            None,
-                                        ),
-                                    ),
+                                    Ok(dsl) => dsl.with_execution_policy(context.process_policy(
+                                        InterruptionSafetyClass::GracefulThenKill,
+                                        None,
+                                    )),
                                     Err(error) => {
                                         let app_error = AppError::Platform(error.to_string());
                                         let result = fail_with_remaining_steps(

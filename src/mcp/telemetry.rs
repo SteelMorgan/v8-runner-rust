@@ -5,8 +5,7 @@ use std::time::Duration;
 use tracing::info;
 
 use crate::platform::edt_session::{
-    EdtDrainReason, EdtQueueDepthAction, EdtQueueDepthReason, EdtRestartReason,
-    EdtSessionObserver,
+    EdtDrainReason, EdtQueueDepthAction, EdtQueueDepthReason, EdtRestartReason, EdtSessionObserver,
 };
 use crate::use_cases::context::ExecutionTransport;
 
@@ -313,9 +312,7 @@ const fn transport_name(transport: ExecutionTransport) -> &'static str {
 mod tests {
     use std::time::Duration;
 
-    use super::{
-        EdtTelemetry, ExecutionTelemetry, SemaphoreWaitErrorKind, SemaphoreWaitOutcome,
-    };
+    use super::{EdtTelemetry, ExecutionTelemetry, SemaphoreWaitErrorKind, SemaphoreWaitOutcome};
     use crate::platform::edt_session::{
         EdtDrainReason, EdtQueueDepthAction, EdtQueueDepthReason, EdtRestartReason,
     };

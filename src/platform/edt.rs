@@ -6,11 +6,11 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 use tracing::debug;
 
+use crate::platform::edt_session::{EdtSessionError, EdtSessionManager, EdtSessionRequest};
 use crate::platform::interactive::{
     InteractiveCommandExecution, InteractiveProcessError, InteractiveProcessExecutor,
     InteractiveProcessRequest,
 };
-use crate::platform::edt_session::{EdtSessionError, EdtSessionManager, EdtSessionRequest};
 use crate::platform::process::{
     ProcessError, ProcessExecutionPolicy, ProcessInterruptionReason, ProcessRequest, ProcessRunner,
 };

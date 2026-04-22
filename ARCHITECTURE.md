@@ -7,6 +7,7 @@
 `v8-runner` is a Rust CLI for orchestrating local 1C platform operations. The current codebase is organized into eight main layers:
 
 Architecture decisions live in [docs/decisions](docs/decisions/README.md), and agent-facing invariants are summarized in [docs/architecture/invariants.md](docs/architecture/invariants.md).
+Практический checklist для изменений MCP surface, public command boundary и config contract вынесен в [docs/architecture/change-checklist.md](docs/architecture/change-checklist.md).
 
 1. `cli` parses arguments, maps them into transport-neutral requests, and owns command-level text/json rendering.
 2. `config` loads and validates YAML configuration.
@@ -44,6 +45,7 @@ The CLI/runtime boundary is now split explicitly:
 - `cli::execute` also owns the CLI workspace lock boundary for commands that use `workPath`; nested flows call explicit unlocked internals only while the outer command owns the lock.
 - `use_cases::{request,context,result}` define the transport-neutral contract that both CLI and future MCP adapters can consume.
 - `use_cases/*.rs` no longer depend on `clap`, `Presenter`, or `Envelope`.
+- Новые public CLI/MCP команды с runtime state под `workPath` должны сохранять этот boundary и проходить checklist из `docs/architecture/change-checklist.md`.
 
 This keeps current CLI behavior intact while reserving a stable internal API for MCP stdio/HTTP adapters.
 Workspace ownership is governed by [ADR-0011](docs/decisions/0011-eksklyuzivnoe-vladenie-workpath-na-vremya-komandy.md).
@@ -73,6 +75,7 @@ The typed config model now splits MCP knobs into active HTTP/session settings an
 - `tools.edt_cli` now also carries `startup_timeout_ms` and `command_timeout_ms`; the shared MCP EDT actor reuses these knobs for startup and bounded syntax execution.
 
 This keeps the config surface stable while allowing both MCP transports to share the same execution/session infrastructure.
+Новые public config fields, `source-set` types и `infobase` subtrees должны обновлять typed model, validation, `config init`, примеры и архитектурную документацию синхронно по checklist из `docs/architecture/change-checklist.md`.
 
 ## MCP Boundary
 
@@ -85,6 +88,7 @@ The MCP adapter no longer needs to talk to `cli::execute` or to reuse domain ser
 - `mcp::tool_result` defines the structured transport payload returned by MCP tools for success vs business failure outcomes.
 - `mcp::server::McpToolServer` is the shared rmcp handler used by both transports. It exposes tools-only capabilities, maps incoming `camelCase` params into MCP DTOs, gates every tool call through a global semaphore, calls the synchronous `McpService` via `tokio::task::spawn_blocking` for non-EDT tools, and routes live `check_syntax_edt` through `mcp::edt_syntax` plus the shared `EdtSessionManager`.
 - `mcp::port` owns the MCP workspace lock boundary before dispatching requests into transport-neutral use cases; the global MCP semaphore remains an admission limit, not a replacement for per-`workPath` ownership.
+- Изменение MCP tool surface должно оставаться явным архитектурным событием: список опубликованных tools синхронизируется между `src/mcp/server.rs`, `ADR-0005`, invariants и checklist-документом.
 - MCP execution admission and HTTP session capacity are separate guardrails governed by [ADR-0013](docs/decisions/0013-mcp-execution-admission-timeout-cancellation-routing-i-http-session-capacity.md).
 - MCP runtime telemetry is intentionally implemented as structured `tracing` events rather than a separate metrics backend: semaphore acquisition emits `mcp_execution_semaphore_wait`, while the shared EDT actor emits `mcp_edt_queue_depth`, `mcp_edt_startup_failure`, `mcp_edt_session_restart`, and `mcp_edt_shutdown_drain`.
 - The stdio adapter still reserves `stdout` for MCP frames and enforces an absolute deadline for bounded EDT syntax calls: queue wait plus actor-side baseline/reset plus the interactive `validate` command all consume the same `tools.edt_cli.command_timeout_ms` budget.

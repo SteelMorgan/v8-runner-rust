@@ -268,11 +268,12 @@ impl EdtSessionManager {
                     });
                     if !completed {
                         drop(runtime);
-                        self.shutdown().map_err(|error| EdtSessionError::InternalFailure {
-                            message: format!(
-                                "shared EDT running cancellation cleanup failed: {error}"
-                            ),
-                        })?;
+                        self.shutdown()
+                            .map_err(|error| EdtSessionError::InternalFailure {
+                                message: format!(
+                                    "shared EDT running cancellation cleanup failed: {error}"
+                                ),
+                            })?;
                     }
                 }
                 Err(EdtSessionError::RunningCancelled)
@@ -286,9 +287,12 @@ impl EdtSessionManager {
                     });
                     if !completed {
                         drop(runtime);
-                        self.shutdown().map_err(|error| EdtSessionError::InternalFailure {
-                            message: format!("shared EDT running timeout cleanup failed: {error}"),
-                        })?;
+                        self.shutdown()
+                            .map_err(|error| EdtSessionError::InternalFailure {
+                                message: format!(
+                                    "shared EDT running timeout cleanup failed: {error}"
+                                ),
+                            })?;
                     }
                 }
                 Err(EdtSessionError::RunningTimeout)
@@ -343,11 +347,9 @@ impl EdtSessionManager {
             queue.push_back(queued.clone());
             let queue_depth = queue.len();
             drop(queue);
-            self.inner.observer.record_queue_depth(
-                EdtQueueDepthAction::Enqueue,
-                queue_depth,
-                None,
-            );
+            self.inner
+                .observer
+                .record_queue_depth(EdtQueueDepthAction::Enqueue, queue_depth, None);
         }
         self.inner.queue_ready.notify_one();
 
@@ -896,9 +898,7 @@ fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactor
             queued.reply(Err(EdtSessionError::DrainedByRestartOrShutdown {
                 reason: EdtSessionDrainReason::Shutdown,
             }));
-            inner
-                .observer
-                .record_drain(EdtDrainReason::Shutdown, 1);
+            inner.observer.record_drain(EdtDrainReason::Shutdown, 1);
             inner.drain_pending(
                 EdtSessionError::DrainedByRestartOrShutdown {
                     reason: EdtSessionDrainReason::Shutdown,
@@ -1485,7 +1485,8 @@ mod tests {
             _reason: Option<EdtQueueDepthReason>,
         ) {
             self.queue_depth.store(queue_depth, Ordering::SeqCst);
-            self.max_queue_depth.fetch_max(queue_depth, Ordering::SeqCst);
+            self.max_queue_depth
+                .fetch_max(queue_depth, Ordering::SeqCst);
         }
 
         fn record_startup_failure(&self) {
@@ -1645,7 +1646,13 @@ mod tests {
         capacity: usize,
         shutdown: Duration,
     ) -> EdtSessionManager {
-        manager_with_observer(factory, Arc::new(RecordingObserver::default()), capacity, shutdown).0
+        manager_with_observer(
+            factory,
+            Arc::new(RecordingObserver::default()),
+            capacity,
+            shutdown,
+        )
+        .0
     }
 
     fn queued_len(manager: &EdtSessionManager) -> usize {
@@ -2353,8 +2360,7 @@ mod tests {
             }
         });
 
-        let error =
-            manager.execute_blocking(request("cmd-1", 200).with_cancellation(cancellation));
+        let error = manager.execute_blocking(request("cmd-1", 200).with_cancellation(cancellation));
         cancellation_thread.join().expect("cancellation thread");
 
         assert_eq!(error, Err(EdtSessionError::RunningCancelled));

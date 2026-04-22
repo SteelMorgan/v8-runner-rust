@@ -32,13 +32,20 @@
 7. Resolved `source-set.path` должны быть уникальны после normalization.
 8. Для `format=EDT` имена `source-set` не должны конфликтовать с reserved work dirs: `hash-storages`, `logs`, `temp`, `edt-workspace`, `designer`.
 9. EDT/external source-set paths должны существовать и соответствовать ожидаемому layout.
-10. External source sets требуют `builder=DESIGNER`.
-11. External EDT source-set должен содержать хотя бы один child project с `.project`.
-12. `EXTENSION` source-set требует наличия хотя бы одного `CONFIGURATION` source-set.
-13. EDT source-set path не должен пересекаться с generated work target под `workPath/designer/<sourceSetName>`.
-14. `workPath` является owned runtime root для logs, temp files, hash storages, EDT workspace и generated Designer output; его нельзя трактовать как произвольный scratch без контракта.
-15. Контракт подключения информационной базы описан в [ADR-0018](0018-perenesti-kontrakt-informatsionnoy-bazy-v-infobase.md): `infobase.connection` заменяет top-level `connection`, а `infobase.user/password` заменяют top-level `credentials`.
-16. Config validation должна отклонять неподдерживаемые или unsafe combinations до вызова platform DSL.
+10. `config init` обязан определять `source-set[].type` по именам marker-файлов и содержимому этих файлов, а не по именам каталогов и не по layout-эвристикам.
+11. Для `format=DESIGNER` кандидат configuration/extension определяется по `Configuration.xml`; различение `CONFIGURATION` и `EXTENSION` выполняется только по содержимому `Configuration.xml`.
+12. Для `format=EDT` кандидат проекта определяется по `.project`; различение `CONFIGURATION` и `EXTENSION` выполняется по содержимому project-local metadata descriptor, а не по имени пути проекта.
+13. Автопоиск внешних артефактов использует aggregate-root contract: один `source-set` на каталог внешних обработок и один `source-set` на каталог внешних отчётов; per-artifact `source-set` не является частью этого решения.
+14. Для `format=DESIGNER` каталог считается external aggregate root только если его top-level XML descriptors однородно классифицируются по содержимому как `ExternalDataProcessor` или `ExternalReport`.
+15. Для `format=EDT` каталог считается external aggregate root только если его direct child projects однородно классифицируются по содержимому проектных файлов как внешние обработки или внешние отчёты.
+16. Mixed или ambiguous external roots не должны autodetect-иться; в таких случаях пользователь должен задавать `source-set` явно.
+17. External source sets требуют `builder=DESIGNER`.
+18. External EDT source-set должен содержать хотя бы один child project с `.project`.
+19. `EXTENSION` source-set требует наличия хотя бы одного `CONFIGURATION` source-set.
+20. EDT source-set path не должен пересекаться с generated work target под `workPath/designer/<sourceSetName>`.
+21. `workPath` является owned runtime root для logs, temp files, hash storages, EDT workspace и generated Designer output; его нельзя трактовать как произвольный scratch без контракта.
+22. Контракт подключения информационной базы описан в [ADR-0018](0018-perenesti-kontrakt-informatsionnoy-bazy-v-infobase.md): `infobase.connection` заменяет top-level `connection`, а `infobase.user/password` заменяют top-level `credentials`.
+23. Config validation должна отклонять неподдерживаемые или unsafe combinations до вызова platform DSL.
 
 ## Неграницы (Non-goals)
 
@@ -52,7 +59,7 @@
 
 1. Документация, примеры и tests должны использовать `source-set[].type`.
 2. Переименование `source-set.name` является изменением runtime identity и может сбросить/change persisted state.
-3. Изменение supported source-set types, path safety rules или reserved names требует обновления этого ADR или нового ADR.
+3. Изменение supported source-set types, path safety rules, marker filenames/content rules или external aggregate autodiscovery pattern требует обновления этого ADR или нового ADR.
 4. Новые сценарии должны добавлять config fields в typed model и validation boundary, а не читать ad-hoc YAML ниже по стеку.
 5. Ошибки unsupported config combinations должны быть user-facing validation errors, а не поздние platform failures.
 6. Изменение структуры `infobase` требует обновления ADR-0018 или нового ADR.
@@ -65,14 +72,15 @@
 2. `src/config/loader.rs` загружает YAML в typed model и поддерживает текущие имена ключей.
 3. `src/config/validate.rs` проверяет source-set presence, path uniqueness, name safety, EDT/external layout, builder compatibility и reserved names.
 4. `src/change_detection/source_sets.rs`, `src/support/temp.rs` и build/dump/artifacts use cases используют `source-set.name` как identity для paths и diagnostics.
-5. `src/use_cases/config_init.rs` генерирует starter config с `source-set[].type`.
+5. `src/use_cases/config_init.rs` генерирует starter config с `source-set[].type` и обязан держать autodiscovery согласованным с content-based rules этого ADR.
 
 При дальнейших изменениях:
 
 1. новые config fields должны иметь typed model, defaults и validation tests;
 2. примеры в `README.md`, `docs/CAPABILITIES.md`, `docs/DEEP_DIVE.md` и generated config должны оставаться синхронизированными;
 3. новые source-set types должны обновлять validation, runtime selection, docs и tests;
-4. изменения naming/path rules должны обновлять ADR-0002, ADR-0012 и этот ADR.
+4. изменения naming/path rules должны обновлять ADR-0002, ADR-0012 и этот ADR;
+5. изменения marker filenames, content classifiers или external aggregate discovery rules должны обновлять `config init`, task backlog и regression coverage.
 
 ## Верификация
 

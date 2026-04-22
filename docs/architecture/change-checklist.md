@@ -1,0 +1,39 @@
+# Checklist архитектурных изменений
+
+Этот checklist нужен для задач, которые меняют публичный контракт или архитектурные границы `v8-runner`.
+Он не заменяет ADR и [архитектурные инварианты](invariants.md), а помогает не забыть обязательную синхронизацию перед merge.
+
+## Изменение MCP public surface
+
+1. Подтвердить, что изменение разрешено текущим ADR; если нет, сначала добавить новый ADR или обновить `ADR-0005`.
+2. Синхронизировать список tools и их публичную семантику минимум в:
+   - `docs/decisions/0005-razdelit-cli-i-mcp-publichnye-poverhnosti.md`
+   - `docs/architecture/invariants.md`
+   - `ARCHITECTURE.md`
+   - `README.md`
+   - `docs/CAPABILITIES.md`
+   - `spec/FUNCTIONAL_CAPABILITIES.md`
+   - `src/mcp/server.rs`
+   - `src/mcp/request.rs`
+   - `src/mcp/response.rs`
+   - `src/mcp/service.rs`
+3. Добавить или обновить tests для `list_tools`, request/response DTO и business/runtime failure mapping по `ADR-0009`.
+4. Явно проверить, что изменение не публикует CLI-only сценарий как MCP tool по умолчанию.
+
+## Новая public CLI/MCP команда, работающая с `workPath`
+
+1. Брать workspace lock на adapter boundary: `src/cli/execute.rs` для CLI или `src/mcp/port.rs` для MCP.
+2. Nested orchestration оставлять на explicit unlocked entrypoints только под уже взятым внешним lock.
+3. Не считать execution admission, semaphore или HTTP session capacity заменой workspace lock.
+4. Добавить regression coverage минимум на:
+   - busy workspace conflict;
+   - корректный boundary до dispatch в use case;
+   - validation-before-lock, если команда имеет раннюю валидацию аргументов.
+
+## Новый public config field, `source-set` type или `infobase` subtree
+
+1. Добавить typed field и нужные `serde` defaults/aliases в `src/config/model.rs`.
+2. Добавить validation boundary в `src/config/validate.rs`, чтобы unsafe/unsupported combinations отклонялись до platform DSL.
+3. Обновить `config init`, round-trip fixtures и публичные примеры (`README.md`, `examples/*`), если поле входит в supported contract.
+4. Синхронизировать `docs/architecture/invariants.md`, `ARCHITECTURE.md` и соответствующий ADR, если поле меняет публичный контракт.
+5. Добавить regression tests на parse/validation/round-trip и на целевое поведение для новых `source-set`/`infobase` веток.

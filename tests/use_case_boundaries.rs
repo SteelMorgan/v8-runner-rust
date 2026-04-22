@@ -1,9 +1,13 @@
-use std::fs;
+mod guardrail_support;
+
 use std::path::Path;
 
+use guardrail_support::{collect_rust_files, production_rust_contents};
+
+const FORBIDDEN_PATTERNS: &[&str] = &["clap::", "crate::cli::", "crate::output::", "crate::mcp::"];
+
 fn assert_missing(path: &Path, forbidden: &str) {
-    let contents = fs::read_to_string(path).expect("read source");
-    let production = contents.split("#[cfg(test)]").next().unwrap_or(&contents);
+    let production = production_rust_contents(path);
     assert!(
         !production.contains(forbidden),
         "{} must not import {}",
@@ -13,22 +17,20 @@ fn assert_missing(path: &Path, forbidden: &str) {
 }
 
 #[test]
-fn use_cases_do_not_depend_on_cli_or_output_types() {
+fn use_cases_do_not_depend_on_transport_or_presentation_types() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src")
         .join("use_cases");
-    let files = [
-        root.join("build_project.rs"),
-        root.join("check_syntax.rs"),
-        root.join("dump_config.rs"),
-        root.join("init_project.rs"),
-        root.join("launch_app.rs"),
-        root.join("run_tests.rs"),
-    ];
+    let files = collect_rust_files(&root);
+    assert!(
+        files.len() >= 10,
+        "expected to scan the full use-case layer, found only {} files",
+        files.len()
+    );
 
     for file in &files {
-        assert_missing(file, "crate::cli::args");
-        assert_missing(file, "crate::output::presenter::Presenter");
-        assert_missing(file, "crate::output::json::Envelope");
+        for forbidden in FORBIDDEN_PATTERNS {
+            assert_missing(file, forbidden);
+        }
     }
 }
