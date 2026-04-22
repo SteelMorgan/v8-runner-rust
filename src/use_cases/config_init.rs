@@ -2,6 +2,9 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use quick_xml::events::Event;
+use quick_xml::Reader;
+
 use crate::domain::config_init::{ConfigInitResult, ConfigInitSourceSet};
 use crate::support::error::AppError;
 use crate::support::path::is_safe_path_segment;
@@ -56,6 +59,7 @@ pub fn execute(request: &ConfigInitRequest) -> Result<ConfigInitResult, AppError
     let detected = discover_sources(&project_dir)?;
     let format = choose_format(request.format, &detected);
     let source_sets = build_source_sets(&project_dir, &detected, format);
+    validate_discovered_source_sets(&project_dir, request.builder, &source_sets)?;
     let yaml = render_config(
         &project_dir,
         request.connection.as_deref(),
@@ -110,10 +114,12 @@ struct DetectedSource {
     purpose: SourcePurpose,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum SourcePurpose {
     Configuration,
     Extension,
+    ExternalDataProcessors,
+    ExternalReports,
 }
 
 impl SourcePurpose {
@@ -121,7 +127,22 @@ impl SourcePurpose {
         match self {
             Self::Configuration => "CONFIGURATION",
             Self::Extension => "EXTENSION",
+            Self::ExternalDataProcessors => "EXTERNAL_DATA_PROCESSORS",
+            Self::ExternalReports => "EXTERNAL_REPORTS",
         }
+    }
+
+    const fn sort_rank(self) -> u8 {
+        match self {
+            Self::Configuration => 0,
+            Self::Extension => 1,
+            Self::ExternalDataProcessors => 2,
+            Self::ExternalReports => 3,
+        }
+    }
+
+    const fn is_external(self) -> bool {
+        matches!(self, Self::ExternalDataProcessors | Self::ExternalReports)
     }
 }
 
@@ -150,7 +171,19 @@ fn choose_format(
 ) -> ConfigFormatRequest {
     match requested {
         ConfigFormatRequest::Auto => {
-            if !detected.designer.is_empty() || detected.edt.is_empty() {
+            if detected
+                .designer
+                .iter()
+                .any(|source| source.purpose == SourcePurpose::Configuration)
+            {
+                ConfigFormatRequest::Designer
+            } else if detected
+                .edt
+                .iter()
+                .any(|source| source.purpose == SourcePurpose::Configuration)
+            {
+                ConfigFormatRequest::Edt
+            } else if !detected.designer.is_empty() || detected.edt.is_empty() {
                 ConfigFormatRequest::Designer
             } else {
                 ConfigFormatRequest::Edt
@@ -190,6 +223,39 @@ fn scan_dir(
         return Ok(());
     }
 
+    if let Some(purpose) = detect_designer_source_root(root, dir)? {
+        let dir = dir.to_path_buf();
+        if seen_designer.insert(dir.clone()) {
+            designer.push(DetectedSource { path: dir, purpose });
+        }
+    }
+
+    if let Some(purpose) = detect_designer_external_root(root, dir)? {
+        let dir = dir.to_path_buf();
+        if seen_designer.insert(dir.clone()) {
+            designer.push(DetectedSource { path: dir, purpose });
+        }
+    }
+
+    if dir.join(".project").is_file() {
+        if let Some(purpose) = detect_edt_project_purpose(dir)? {
+            if !purpose.is_external() {
+                let dir = dir.to_path_buf();
+                if seen_edt.insert(dir.clone()) {
+                    edt.push(DetectedSource { path: dir, purpose });
+                }
+            }
+            return Ok(());
+        }
+    }
+
+    if let Some(purpose) = detect_edt_external_root(dir)? {
+        let dir = dir.to_path_buf();
+        if seen_edt.insert(dir.clone()) {
+            edt.push(DetectedSource { path: dir, purpose });
+        }
+    }
+
     let entries = std::fs::read_dir(dir).map_err(|error| {
         AppError::Runtime(format!(
             "failed to read source directory '{}': {error}",
@@ -207,45 +273,6 @@ fn scan_dir(
         let path = entry.path();
         if path.is_dir() {
             scan_dir(root, &path, designer, edt, seen_designer, seen_edt)?;
-            continue;
-        }
-
-        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        match file_name {
-            "Configuration.xml" => {
-                let Some(source_root) = path.parent() else {
-                    continue;
-                };
-                if has_ancestor_marker(root, source_root, ".project") {
-                    continue;
-                }
-                if let Some(purpose) = detect_designer_purpose(&path)? {
-                    let source_root = source_root.to_path_buf();
-                    if seen_designer.insert(source_root.clone()) {
-                        designer.push(DetectedSource {
-                            path: source_root,
-                            purpose,
-                        });
-                    }
-                }
-            }
-            ".project" => {
-                let Some(source_root) = path.parent() else {
-                    continue;
-                };
-                if let Some(purpose) = detect_edt_purpose(source_root)? {
-                    let source_root = source_root.to_path_buf();
-                    if seen_edt.insert(source_root.clone()) {
-                        edt.push(DetectedSource {
-                            path: source_root,
-                            purpose,
-                        });
-                    }
-                }
-            }
-            _ => {}
         }
     }
 
@@ -265,42 +292,88 @@ fn should_skip_dir(root: &Path, dir: &Path) -> bool {
     )
 }
 
-fn has_ancestor_marker(root: &Path, start: &Path, marker: &str) -> bool {
+fn has_valid_edt_project_ancestor(root: &Path, start: &Path) -> Result<bool, AppError> {
     let mut current = Some(start);
     while let Some(path) = current {
-        if path.join(marker).is_file() {
-            return true;
+        let project_file = path.join(".project");
+        if project_file.is_file() {
+            let content = std::fs::read_to_string(&project_file).map_err(|error| {
+                AppError::Runtime(format!(
+                    "failed to read source marker '{}': {error}",
+                    project_file.display()
+                ))
+            })?;
+            if parse_edt_project_name(&content, &project_file)?.is_some() {
+                return Ok(true);
+            }
         }
         if path == root {
             break;
         }
         current = path.parent();
     }
-    false
+    Ok(false)
+}
+
+fn detect_designer_source_root(root: &Path, dir: &Path) -> Result<Option<SourcePurpose>, AppError> {
+    if has_valid_edt_project_ancestor(root, dir)? {
+        return Ok(None);
+    }
+    let configuration_xml = dir.join("Configuration.xml");
+    if !configuration_xml.is_file() {
+        return Ok(None);
+    }
+    detect_designer_purpose(&configuration_xml)
 }
 
 fn detect_designer_purpose(configuration_xml: &Path) -> Result<Option<SourcePurpose>, AppError> {
-    let content = std::fs::read_to_string(configuration_xml).map_err(|error| {
+    let detected = classify_source_descriptor_file(configuration_xml)?;
+    Ok(match detected {
+        Some(SourcePurpose::Configuration | SourcePurpose::Extension) => detected,
+        _ => None,
+    })
+}
+
+fn detect_designer_external_root(root: &Path, dir: &Path) -> Result<Option<SourcePurpose>, AppError> {
+    if has_valid_edt_project_ancestor(root, dir)? || dir.join("Configuration.xml").is_file() {
+        return Ok(None);
+    }
+
+    let entries = std::fs::read_dir(dir).map_err(|error| {
         AppError::Runtime(format!(
-            "failed to read source marker '{}': {error}",
-            configuration_xml.display()
+            "failed to read source directory '{}': {error}",
+            dir.display()
         ))
     })?;
-    Ok(classify_configuration_descriptor(&content))
+
+    let mut kinds = HashSet::new();
+    let mut has_top_level_xml = false;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            AppError::Runtime(format!(
+                "failed to read source directory entry '{}': {error}",
+                dir.display()
+            ))
+        })?;
+        let path = entry.path();
+        if !path.is_file() || path.extension().and_then(|value| value.to_str()) != Some("xml") {
+            continue;
+        }
+        has_top_level_xml = true;
+        let Some(kind) = classify_external_descriptor_file(&path)? else {
+            return Ok(None);
+        };
+        kinds.insert(kind);
+    }
+
+    if !has_top_level_xml || kinds.len() != 1 {
+        return Ok(None);
+    }
+
+    Ok(kinds.into_iter().next())
 }
 
-fn classify_configuration_descriptor(content: &str) -> Option<SourcePurpose> {
-    if content.contains("<ConfigurationExtensionPurpose>") || content.contains("<ObjectBelonging>")
-    {
-        return Some(SourcePurpose::Extension);
-    }
-    if content.contains("<Configuration") || content.contains("<MetaDataObject") {
-        return Some(SourcePurpose::Configuration);
-    }
-    None
-}
-
-fn detect_edt_purpose(project_dir: &Path) -> Result<Option<SourcePurpose>, AppError> {
+fn detect_edt_project_purpose(project_dir: &Path) -> Result<Option<SourcePurpose>, AppError> {
     let project_file = project_dir.join(".project");
     let content = std::fs::read_to_string(&project_file).map_err(|error| {
         AppError::Runtime(format!(
@@ -308,50 +381,308 @@ fn detect_edt_purpose(project_dir: &Path) -> Result<Option<SourcePurpose>, AppEr
             project_file.display()
         ))
     })?;
-    if !looks_like_edt_project_descriptor(&content) {
+    if parse_edt_project_name(&content, &project_file)?.is_none() {
         return Ok(None);
     }
 
-    let mut dirs = vec![project_dir.to_path_buf()];
-    while let Some(dir) = dirs.pop() {
-        let entries = std::fs::read_dir(&dir).map_err(|error| {
+    classify_edt_project_contents(project_dir)
+}
+
+fn parse_edt_project_name(content: &str, source_path: &Path) -> Result<Option<String>, AppError> {
+    let mut reader = Reader::from_str(content);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut root_tag = None::<String>;
+    let mut depth = 0usize;
+    let mut inside_name = false;
+    let mut project_name = None::<String>;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(event)) => {
+                let tag = xml_local_name(event.name().as_ref());
+                if root_tag.is_none() {
+                    root_tag = Some(tag);
+                    depth = 1;
+                } else {
+                    if depth == 1 && tag == "name" {
+                        inside_name = true;
+                    }
+                    depth += 1;
+                }
+            }
+            Ok(Event::Empty(event)) => {
+                let tag = xml_local_name(event.name().as_ref());
+                if root_tag.is_none() {
+                    root_tag = Some(tag);
+                    break;
+                }
+            }
+            Ok(Event::Text(text)) if inside_name && project_name.is_none() => {
+                project_name = Some(
+                    text.unescape()
+                        .map_err(|error| {
+                            AppError::Validation(format!(
+                                "failed to decode EDT project marker '{}': {error}",
+                                source_path.display()
+                            ))
+                        })?
+                        .trim()
+                        .to_owned(),
+                );
+            }
+            Ok(Event::End(event)) => {
+                let tag = xml_local_name(event.name().as_ref());
+                if tag == "name" {
+                    inside_name = false;
+                }
+                depth = depth.saturating_sub(1);
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => {
+                return Err(AppError::Validation(format!(
+                    "failed to parse EDT project marker '{}': {error}",
+                    source_path.display()
+                )));
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    if depth > 0 {
+        return Err(AppError::Validation(format!(
+            "failed to parse EDT project marker '{}': unexpected EOF",
+            source_path.display()
+        )));
+    }
+
+    if root_tag.as_deref() != Some("projectDescription") {
+        return Ok(None);
+    }
+
+    Ok(project_name.filter(|value| !value.is_empty()))
+}
+
+fn detect_edt_external_root(dir: &Path) -> Result<Option<SourcePurpose>, AppError> {
+    let entries = std::fs::read_dir(dir).map_err(|error| {
+        AppError::Runtime(format!(
+            "failed to read source directory '{}': {error}",
+            dir.display()
+        ))
+    })?;
+
+    let mut has_child_project = false;
+    let mut kinds = HashSet::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
             AppError::Runtime(format!(
-                "failed to read EDT project directory '{}': {error}",
+                "failed to read source directory entry '{}': {error}",
                 dir.display()
             ))
         })?;
-        for entry in entries {
-            let entry = entry.map_err(|error| {
-                AppError::Runtime(format!(
-                    "failed to read EDT project entry '{}': {error}",
-                    dir.display()
-                ))
-            })?;
-            let path = entry.path();
-            if path.is_dir() {
-                if !should_skip_dir(project_dir, &path) {
-                    dirs.push(path);
-                }
-                continue;
-            }
-            if path.file_name().and_then(|name| name.to_str()) != Some("Configuration.xml") {
-                continue;
-            }
-            match detect_designer_purpose(&path)? {
-                Some(SourcePurpose::Extension) => return Ok(Some(SourcePurpose::Extension)),
-                Some(SourcePurpose::Configuration) => {}
-                None => {}
-            }
+        let path = entry.path();
+        if !path.is_dir() || !path.join(".project").is_file() {
+            continue;
         }
+        has_child_project = true;
+        let Some(kind) = detect_edt_project_purpose(&path)? else {
+            return Ok(None);
+        };
+        if !kind.is_external() {
+            return Ok(None);
+        }
+        kinds.insert(kind);
     }
 
-    Ok(Some(SourcePurpose::Configuration))
+    if !has_child_project || kinds.len() != 1 {
+        return Ok(None);
+    }
+
+    Ok(kinds.into_iter().next())
 }
 
-fn looks_like_edt_project_descriptor(content: &str) -> bool {
-    content.contains("<projectDescription>")
-        && content.contains("<name>")
-        && content.contains("</name>")
+fn classify_edt_project_contents(project_dir: &Path) -> Result<Option<SourcePurpose>, AppError> {
+    let mut detected = HashSet::new();
+    collect_edt_project_descriptor_kinds(project_dir, project_dir, &mut detected)?;
+    if detected.len() == 1 {
+        Ok(detected.into_iter().next())
+    } else {
+        Ok(None)
+    }
+}
+
+fn collect_edt_project_descriptor_kinds(
+    project_root: &Path,
+    dir: &Path,
+    detected: &mut HashSet<SourcePurpose>,
+) -> Result<(), AppError> {
+    let entries = std::fs::read_dir(dir).map_err(|error| {
+        AppError::Runtime(format!(
+            "failed to read EDT project directory '{}': {error}",
+            dir.display()
+        ))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            AppError::Runtime(format!(
+                "failed to read EDT project entry '{}': {error}",
+                dir.display()
+            ))
+        })?;
+        let path = entry.path();
+        if path.is_dir() {
+            if path != project_root && path.join(".project").is_file() {
+                continue;
+            }
+            if !should_skip_dir(project_root, &path) {
+                collect_edt_project_descriptor_kinds(project_root, &path, detected)?;
+            }
+            continue;
+        }
+        if path.extension().and_then(|value| value.to_str()) != Some("xml") {
+            continue;
+        }
+        if let Some(kind) = classify_source_descriptor_file(&path)? {
+            detected.insert(kind);
+        }
+    }
+    Ok(())
+}
+
+fn classify_source_descriptor_file(path: &Path) -> Result<Option<SourcePurpose>, AppError> {
+    let content = std::fs::read_to_string(path).map_err(|error| {
+        AppError::Runtime(format!(
+            "failed to read source marker '{}': {error}",
+            path.display()
+        ))
+    })?;
+    classify_source_descriptor_content(&content, path)
+}
+
+fn classify_external_descriptor_file(path: &Path) -> Result<Option<SourcePurpose>, AppError> {
+    match classify_source_descriptor_file(path)? {
+        Some(kind) if kind.is_external() => Ok(Some(kind)),
+        _ => Ok(None),
+    }
+}
+
+fn classify_source_descriptor_content(
+    content: &str,
+    source_path: &Path,
+) -> Result<Option<SourcePurpose>, AppError> {
+    let scan = scan_xml_descriptor(content, source_path)?;
+    Ok(match scan.kind {
+        Some(XmlDescriptorKind::Configuration) => {
+            if scan.has_configuration_extension_purpose || scan.has_object_belonging {
+                Some(SourcePurpose::Extension)
+            } else {
+                Some(SourcePurpose::Configuration)
+            }
+        }
+        Some(XmlDescriptorKind::ExternalDataProcessor) => {
+            Some(SourcePurpose::ExternalDataProcessors)
+        }
+        Some(XmlDescriptorKind::ExternalReport) => Some(SourcePurpose::ExternalReports),
+        None => None,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum XmlDescriptorKind {
+    Configuration,
+    ExternalDataProcessor,
+    ExternalReport,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct XmlDescriptorScan {
+    kind: Option<XmlDescriptorKind>,
+    has_configuration_extension_purpose: bool,
+    has_object_belonging: bool,
+}
+
+fn scan_xml_descriptor(content: &str, source_path: &Path) -> Result<XmlDescriptorScan, AppError> {
+    let mut reader = Reader::from_str(content);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut root_tag = None::<String>;
+    let mut first_child_tag = None::<String>;
+    let mut depth = 0usize;
+    let mut scan = XmlDescriptorScan::default();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(event)) => {
+                let tag = xml_local_name(event.name().as_ref());
+                if root_tag.is_none() {
+                    root_tag = Some(tag.clone());
+                    depth = 1;
+                } else {
+                    if depth == 1 && first_child_tag.is_none() {
+                        first_child_tag = Some(tag.clone());
+                    }
+                    depth += 1;
+                }
+                if tag == "ConfigurationExtensionPurpose" {
+                    scan.has_configuration_extension_purpose = true;
+                } else if tag == "ObjectBelonging" {
+                    scan.has_object_belonging = true;
+                }
+            }
+            Ok(Event::Empty(event)) => {
+                let tag = xml_local_name(event.name().as_ref());
+                if root_tag.is_none() {
+                    root_tag = Some(tag.clone());
+                    break;
+                }
+                if depth == 1 && first_child_tag.is_none() {
+                    first_child_tag = Some(tag.clone());
+                }
+                if tag == "ConfigurationExtensionPurpose" {
+                    scan.has_configuration_extension_purpose = true;
+                } else if tag == "ObjectBelonging" {
+                    scan.has_object_belonging = true;
+                }
+            }
+            Ok(Event::End(_)) => {
+                depth = depth.saturating_sub(1);
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => {
+                return Err(AppError::Validation(format!(
+                    "failed to parse source marker '{}': {error}",
+                    source_path.display()
+                )));
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    if depth > 0 {
+        return Err(AppError::Validation(format!(
+            "failed to parse source marker '{}': unexpected EOF",
+            source_path.display()
+        )));
+    }
+
+    let effective_tag = match root_tag.as_deref() {
+        Some("MetaDataObject") => first_child_tag.as_deref(),
+        other => other,
+    };
+    scan.kind = match effective_tag {
+        Some("Configuration") => Some(XmlDescriptorKind::Configuration),
+        Some("ExternalDataProcessor") => Some(XmlDescriptorKind::ExternalDataProcessor),
+        Some("ExternalReport") => Some(XmlDescriptorKind::ExternalReport),
+        _ => None,
+    };
+    Ok(scan)
+}
+
+fn xml_local_name(name: &[u8]) -> String {
+    let raw = String::from_utf8_lossy(name);
+    raw.rsplit(':').next().unwrap_or(raw.as_ref()).to_owned()
 }
 
 fn build_source_sets(
@@ -359,10 +690,18 @@ fn build_source_sets(
     detected: &DetectedSources,
     format: ConfigFormatRequest,
 ) -> Vec<ConfigInitSourceSet> {
-    let selected = match format {
+    let mut selected = match format {
         ConfigFormatRequest::Auto | ConfigFormatRequest::Designer => &detected.designer,
         ConfigFormatRequest::Edt => &detected.edt,
-    };
+    }
+    .clone();
+
+    selected.sort_by(|a, b| {
+        a.purpose
+            .sort_rank()
+            .cmp(&b.purpose.sort_rank())
+            .then_with(|| a.path.cmp(&b.path))
+    });
 
     let mut source_sets: Vec<_> = selected
         .iter()
@@ -374,20 +713,6 @@ fn build_source_sets(
         })
         .collect();
 
-    if !source_sets
-        .iter()
-        .any(|source_set| source_set.source_type == "CONFIGURATION")
-    {
-        source_sets.insert(
-            0,
-            ConfigInitSourceSet {
-                name: "main".to_owned(),
-                source_type: "CONFIGURATION".to_owned(),
-                path: ".".to_owned(),
-            },
-        );
-    }
-
     deduplicate_names(&mut source_sets);
     source_sets
 }
@@ -396,6 +721,8 @@ fn source_set_name(path: &Path, purpose: SourcePurpose, index: usize) -> String 
     let fallback = match purpose {
         SourcePurpose::Configuration => "main",
         SourcePurpose::Extension => "extension",
+        SourcePurpose::ExternalDataProcessors => "external-data-processors",
+        SourcePurpose::ExternalReports => "external-reports",
     };
     let raw = path
         .file_name()
@@ -485,6 +812,40 @@ fn render_config(
     yaml
 }
 
+fn validate_discovered_source_sets(
+    project_dir: &Path,
+    builder: ConfigBuilderRequest,
+    source_sets: &[ConfigInitSourceSet],
+) -> Result<(), AppError> {
+    if source_sets.is_empty() {
+        return Err(AppError::Validation(format!(
+            "failed to autodiscover source-set markers in '{}'; add source-set manually",
+            project_dir.display()
+        )));
+    }
+    if !source_sets
+        .iter()
+        .any(|source_set| source_set.source_type == "CONFIGURATION")
+    {
+        return Err(AppError::Validation(
+            "autodiscovery did not find a CONFIGURATION source-set; add it manually".to_owned(),
+        ));
+    }
+    if matches!(builder, ConfigBuilderRequest::Ibcmd)
+        && source_sets.iter().any(|source_set| {
+            matches!(
+                source_set.source_type.as_str(),
+                "EXTERNAL_DATA_PROCESSORS" | "EXTERNAL_REPORTS"
+            )
+        })
+    {
+        return Err(AppError::Validation(
+            "autodiscovery found external source-sets, but builder IBCMD does not support them; rerun with --builder DESIGNER or edit config manually".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn escape_yaml(value: &str) -> String {
     value.replace('\'', "''")
 }
@@ -492,10 +853,26 @@ fn escape_yaml(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        execute, ConfigBuilderRequest, ConfigFormatRequest, ConfigInitRequest, SourcePurpose,
+        discover_sources, execute, ConfigBuilderRequest, ConfigFormatRequest, ConfigInitRequest,
+        SourcePurpose,
     };
     use crate::config::loader::load_config;
+    use std::path::Path;
     use tempfile::tempdir;
+
+    fn write_file(path: &Path, contents: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("parent dir");
+        }
+        std::fs::write(path, contents).expect("write file");
+    }
+
+    fn create_edt_project(project_dir: &Path, name: &str) {
+        write_file(
+            &project_dir.join(".project"),
+            &format!("<projectDescription><name>{name}</name></projectDescription>"),
+        );
+    }
 
     #[test]
     fn creates_config_from_designer_sources() {
@@ -507,7 +884,7 @@ mod tests {
         std::fs::write(main.join("Configuration.xml"), "<Configuration/>").expect("main xml");
         std::fs::write(
             ext.join("Configuration.xml"),
-            "<ConfigurationExtensionPurpose>Customization</ConfigurationExtensionPurpose>",
+            "<Configuration><ConfigurationExtensionPurpose kind=\"Customization\">Customization</ConfigurationExtensionPurpose></Configuration>",
         )
         .expect("ext xml");
 
@@ -550,7 +927,11 @@ mod tests {
     fn extension_detection_uses_designer_xml_marker() {
         let dir = tempdir().expect("tempdir");
         let xml = dir.path().join("Configuration.xml");
-        std::fs::write(&xml, "<ObjectBelonging>Adopted</ObjectBelonging>").expect("xml");
+        std::fs::write(
+            &xml,
+            "<Configuration><ObjectBelonging>Adopted</ObjectBelonging></Configuration>",
+        )
+        .expect("xml");
 
         assert_eq!(
             super::detect_designer_purpose(&xml).expect("designer purpose"),
@@ -566,7 +947,7 @@ mod tests {
         std::fs::create_dir_all(&ext).expect("ext dir");
         std::fs::write(
             ext.join("Configuration.xml"),
-            "<ConfigurationExtensionPurpose>Customization</ConfigurationExtensionPurpose>",
+            "<Configuration><ConfigurationExtensionPurpose kind=\"Customization\">Customization</ConfigurationExtensionPurpose></Configuration>",
         )
         .expect("ext xml");
 
@@ -595,28 +976,16 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let config_project = dir.path().join("workspace").join("cfg-project");
         let extension_project = dir.path().join("workspace").join("addon-project");
-        std::fs::create_dir_all(config_project.join("metadata")).expect("config metadata");
-        std::fs::create_dir_all(extension_project.join("metadata")).expect("ext metadata");
-        std::fs::write(
-            config_project.join(".project"),
-            "<projectDescription><name>configuration</name></projectDescription>",
-        )
-        .expect("config project");
-        std::fs::write(
-            config_project.join("metadata").join("Configuration.xml"),
+        create_edt_project(&config_project, "configuration");
+        write_file(
+            &config_project.join("metadata").join("Configuration.xml"),
             "<Configuration/>",
-        )
-        .expect("config xml");
-        std::fs::write(
-            extension_project.join(".project"),
-            "<projectDescription><name>sales</name></projectDescription>",
-        )
-        .expect("ext project");
-        std::fs::write(
-            extension_project.join("metadata").join("Configuration.xml"),
-            "<ObjectBelonging>Adopted</ObjectBelonging>",
-        )
-        .expect("ext xml");
+        );
+        create_edt_project(&extension_project, "sales");
+        write_file(
+            &extension_project.join("metadata").join("Configuration.xml"),
+            "<Configuration><ObjectBelonging>Adopted</ObjectBelonging></Configuration>",
+        );
 
         let result = execute(&ConfigInitRequest {
             project_dir: dir.path().to_path_buf(),
@@ -634,6 +1003,330 @@ mod tests {
         }));
         assert!(result.source_sets.iter().any(|source| {
             source.path == "workspace/addon-project" && source.source_type == "EXTENSION"
+        }));
+    }
+
+    #[test]
+    fn discovers_designer_external_aggregate_root_from_top_level_descriptors() {
+        let dir = tempdir().expect("tempdir");
+        write_file(&dir.path().join("Configuration.xml"), "<Configuration/>");
+        write_file(
+            &dir.path().join("tools").join("alpha.xml"),
+            "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
+        );
+        write_file(
+            &dir.path().join("tools").join("beta.xml"),
+            "<MetaDataObject><ExternalDataProcessor><Properties><Name>Beta</Name></Properties></ExternalDataProcessor></MetaDataObject>",
+        );
+        write_file(
+            &dir.path().join("tools").join("nested").join("ignored.xml"),
+            "<ExternalReport><Properties><Name>Ignored</Name></Properties></ExternalReport>",
+        );
+
+        let result = execute(&ConfigInitRequest {
+            project_dir: dir.path().to_path_buf(),
+            output_path: "v8project.yaml".into(),
+            force: false,
+            connection: None,
+            format: ConfigFormatRequest::Designer,
+            builder: ConfigBuilderRequest::Designer,
+        })
+        .expect("init config");
+
+        assert!(result.source_sets.iter().any(|source| {
+            source.path == "tools" && source.source_type == "EXTERNAL_DATA_PROCESSORS"
+        }));
+    }
+
+    #[test]
+    fn ignores_mixed_designer_external_root() {
+        let dir = tempdir().expect("tempdir");
+        write_file(&dir.path().join("Configuration.xml"), "<Configuration/>");
+        write_file(
+            &dir.path().join("mixed").join("alpha.xml"),
+            "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
+        );
+        write_file(
+            &dir.path().join("mixed").join("beta.xml"),
+            "<ExternalReport><Properties><Name>Beta</Name></Properties></ExternalReport>",
+        );
+
+        let result = execute(&ConfigInitRequest {
+            project_dir: dir.path().to_path_buf(),
+            output_path: "v8project.yaml".into(),
+            force: false,
+            connection: None,
+            format: ConfigFormatRequest::Designer,
+            builder: ConfigBuilderRequest::Designer,
+        })
+        .expect("init config");
+
+        assert_eq!(result.source_sets.len(), 1);
+        assert_eq!(result.source_sets[0].source_type, "CONFIGURATION");
+    }
+
+    #[test]
+    fn detects_edt_external_aggregate_root_from_direct_child_projects() {
+        let dir = tempdir().expect("tempdir");
+        let workspace = dir.path().join("workspace");
+        let config_project = workspace.join("cfg");
+        let external_root = workspace.join("processors");
+        create_edt_project(&config_project, "configuration");
+        write_file(
+            &config_project.join("metadata").join("Configuration.xml"),
+            "<Configuration/>",
+        );
+        create_edt_project(&external_root.join("alpha"), "alpha");
+        write_file(
+            &external_root.join("alpha").join("src").join("root.xml"),
+            "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
+        );
+        create_edt_project(&external_root.join("beta"), "beta");
+        write_file(
+            &external_root.join("beta").join("src").join("root.xml"),
+            "<MetaDataObject><ExternalDataProcessor><Properties><Name>Beta</Name></Properties></ExternalDataProcessor></MetaDataObject>",
+        );
+        create_edt_project(&external_root.join("nested").join("gamma"), "gamma");
+        write_file(
+            &external_root
+                .join("nested")
+                .join("gamma")
+                .join("src")
+                .join("root.xml"),
+            "<ExternalReport><Properties><Name>Gamma</Name></Properties></ExternalReport>",
+        );
+
+        let result = execute(&ConfigInitRequest {
+            project_dir: dir.path().to_path_buf(),
+            output_path: "v8project.yaml".into(),
+            force: false,
+            connection: None,
+            format: ConfigFormatRequest::Auto,
+            builder: ConfigBuilderRequest::Designer,
+        })
+        .expect("init config");
+
+        assert_eq!(result.format, "EDT");
+        assert!(result.source_sets.iter().any(|source| {
+            source.path == "workspace/cfg" && source.source_type == "CONFIGURATION"
+        }));
+        assert!(result.source_sets.iter().any(|source| {
+            source.path == "workspace/processors"
+                && source.source_type == "EXTERNAL_DATA_PROCESSORS"
+        }));
+    }
+
+    #[test]
+    fn edt_internal_markers_do_not_create_designer_candidates() {
+        let dir = tempdir().expect("tempdir");
+        let project = dir.path().join("workspace").join("cfg");
+        create_edt_project(&project, "configuration");
+        write_file(
+            &project.join("metadata").join("Configuration.xml"),
+            "<Configuration/>",
+        );
+
+        let detected = discover_sources(dir.path()).expect("discover sources");
+
+        assert!(detected.designer.is_empty());
+        assert_eq!(detected.edt.len(), 1);
+        assert_eq!(detected.edt[0].purpose, SourcePurpose::Configuration);
+    }
+
+    #[test]
+    fn external_only_autodiscovery_fails_without_phantom_configuration() {
+        let dir = tempdir().expect("tempdir");
+        write_file(
+            &dir.path().join("tools").join("alpha.xml"),
+            "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
+        );
+
+        let error = execute(&ConfigInitRequest {
+            project_dir: dir.path().to_path_buf(),
+            output_path: "v8project.yaml".into(),
+            force: false,
+            connection: None,
+            format: ConfigFormatRequest::Designer,
+            builder: ConfigBuilderRequest::Designer,
+        })
+        .expect_err("external-only autodetect must fail");
+
+        assert!(error
+            .to_string()
+            .contains("did not find a CONFIGURATION source-set"));
+    }
+
+    #[test]
+    fn ambiguous_edt_external_root_is_not_detected() {
+        let dir = tempdir().expect("tempdir");
+        let workspace = dir.path().join("workspace");
+        let config_project = workspace.join("cfg");
+        let external_root = workspace.join("processors");
+        create_edt_project(&config_project, "configuration");
+        write_file(
+            &config_project.join("metadata").join("Configuration.xml"),
+            "<Configuration/>",
+        );
+        create_edt_project(&external_root.join("alpha"), "alpha");
+        write_file(
+            &external_root.join("alpha").join("src").join("root.xml"),
+            "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
+        );
+        create_edt_project(&external_root.join("beta"), "beta");
+        write_file(
+            &external_root.join("beta").join("src").join("form.xml"),
+            "<Form/>",
+        );
+
+        let result = execute(&ConfigInitRequest {
+            project_dir: dir.path().to_path_buf(),
+            output_path: "v8project.yaml".into(),
+            force: false,
+            connection: None,
+            format: ConfigFormatRequest::Edt,
+            builder: ConfigBuilderRequest::Designer,
+        })
+        .expect("init config");
+
+        assert_eq!(result.source_sets.len(), 1);
+        assert_eq!(result.source_sets[0].source_type, "CONFIGURATION");
+    }
+
+    #[test]
+    fn ibcmd_builder_rejects_external_autodiscovery() {
+        let dir = tempdir().expect("tempdir");
+        write_file(&dir.path().join("Configuration.xml"), "<Configuration/>");
+        write_file(
+            &dir.path().join("tools").join("alpha.xml"),
+            "<ExternalReport><Properties><Name>Alpha</Name></Properties></ExternalReport>",
+        );
+
+        let error = execute(&ConfigInitRequest {
+            project_dir: dir.path().to_path_buf(),
+            output_path: "v8project.yaml".into(),
+            force: false,
+            connection: None,
+            format: ConfigFormatRequest::Designer,
+            builder: ConfigBuilderRequest::Ibcmd,
+        })
+        .expect_err("ibcmd + external must fail");
+
+        assert!(error.to_string().contains("builder IBCMD"));
+    }
+
+    #[test]
+    fn auto_prefers_edt_when_designer_only_has_external_roots() {
+        let dir = tempdir().expect("tempdir");
+        let config_project = dir.path().join("workspace").join("cfg");
+        create_edt_project(&config_project, "configuration");
+        write_file(
+            &config_project.join("metadata").join("Configuration.xml"),
+            "<Configuration/>",
+        );
+        write_file(
+            &dir.path().join("tools").join("alpha.xml"),
+            "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
+        );
+
+        let result = execute(&ConfigInitRequest {
+            project_dir: dir.path().to_path_buf(),
+            output_path: "v8project.yaml".into(),
+            force: false,
+            connection: None,
+            format: ConfigFormatRequest::Auto,
+            builder: ConfigBuilderRequest::Designer,
+        })
+        .expect("init config");
+
+        assert_eq!(result.format, "EDT");
+        assert_eq!(result.source_sets.len(), 1);
+        assert_eq!(result.source_sets[0].path, "workspace/cfg");
+        assert_eq!(result.source_sets[0].source_type, "CONFIGURATION");
+    }
+
+    #[test]
+    fn invalid_root_project_marker_does_not_hide_nested_edt_project() {
+        let dir = tempdir().expect("tempdir");
+        write_file(&dir.path().join(".project"), "<root/>");
+        let config_project = dir.path().join("workspace").join("cfg");
+        create_edt_project(&config_project, "configuration");
+        write_file(
+            &config_project.join("metadata").join("Configuration.xml"),
+            "<Configuration/>",
+        );
+
+        let result = execute(&ConfigInitRequest {
+            project_dir: dir.path().to_path_buf(),
+            output_path: "v8project.yaml".into(),
+            force: false,
+            connection: None,
+            format: ConfigFormatRequest::Edt,
+            builder: ConfigBuilderRequest::Designer,
+        })
+        .expect("init config");
+
+        assert!(result.source_sets.iter().any(|source| {
+            source.path == "workspace/cfg" && source.source_type == "CONFIGURATION"
+        }));
+    }
+
+    #[test]
+    fn malformed_configuration_marker_reports_specific_path() {
+        let dir = tempdir().expect("tempdir");
+        let marker = dir.path().join("Configuration.xml");
+        write_file(&marker, "<Configuration>");
+
+        let error = execute(&ConfigInitRequest {
+            project_dir: dir.path().to_path_buf(),
+            output_path: "v8project.yaml".into(),
+            force: false,
+            connection: None,
+            format: ConfigFormatRequest::Designer,
+            builder: ConfigBuilderRequest::Designer,
+        })
+        .expect_err("malformed marker must fail");
+
+        let error = error.to_string();
+        assert!(error.contains("failed to parse source marker"));
+        assert!(error.contains("Configuration.xml"));
+    }
+
+    #[test]
+    fn edt_aggregate_root_does_not_hide_nested_configuration_project() {
+        let dir = tempdir().expect("tempdir");
+        let external_root = dir.path().join("processors");
+        create_edt_project(&external_root.join("alpha"), "alpha");
+        write_file(
+            &external_root.join("alpha").join("src").join("root.xml"),
+            "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
+        );
+        create_edt_project(&external_root.join("beta"), "beta");
+        write_file(
+            &external_root.join("beta").join("src").join("root.xml"),
+            "<ExternalDataProcessor><Properties><Name>Beta</Name></Properties></ExternalDataProcessor>",
+        );
+        let config_project = external_root.join("apps").join("cfg");
+        create_edt_project(&config_project, "configuration");
+        write_file(
+            &config_project.join("metadata").join("Configuration.xml"),
+            "<Configuration/>",
+        );
+
+        let result = execute(&ConfigInitRequest {
+            project_dir: dir.path().to_path_buf(),
+            output_path: "v8project.yaml".into(),
+            force: false,
+            connection: None,
+            format: ConfigFormatRequest::Edt,
+            builder: ConfigBuilderRequest::Designer,
+        })
+        .expect("init config");
+
+        assert!(result.source_sets.iter().any(|source| {
+            source.path == "processors" && source.source_type == "EXTERNAL_DATA_PROCESSORS"
+        }));
+        assert!(result.source_sets.iter().any(|source| {
+            source.path == "processors/apps/cfg" && source.source_type == "CONFIGURATION"
         }));
     }
 

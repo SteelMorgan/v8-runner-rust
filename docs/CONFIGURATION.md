@@ -20,7 +20,12 @@ v8-runner config init
 
 - автопоиск опирается на имена файлов-маркеров и их содержимое, а не на имена каталогов;
 - Designer-исходники находятся по файлу `Configuration.xml`, а тип определяется по содержимому этого XML;
-- EDT-проекты находятся по файлу `.project`, а для различения конфигурации и расширения дополнительно анализируется содержимое найденных `Configuration.xml` внутри проекта;
+- Designer external aggregate root autodetect-ится как один `source-set`, только если top-level XML descriptors каталога однородно классифицируются по содержимому как `ExternalDataProcessor` или `ExternalReport`;
+- EDT-проекты находятся по файлу `.project`, а для различения конфигурации, расширения и external project классифицируются по содержимому project-local XML descriptors;
+- EDT external aggregate root autodetect-ится как один `source-set`, только если direct child projects каталога однородно классифицируются как внешние обработки или внешние отчёты;
+- mixed или ambiguous external roots не autodetect-ятся и остаются manual config case;
+- команда не пишет synthetic `CONFIGURATION`: если autodiscovery не нашёл ни одного `CONFIGURATION`, `config init` завершается validation error;
+- external `source-set` требуют `builder=DESIGNER`, поэтому при `--builder IBCMD` и найденных external root команда завершается validation error;
 - существующий файл не перезаписывается без `--force`.
 
 После чтения конфига относительные `basePath`, `workPath`, пути Vanessa Automation и файловая строка подключения `File=...` / `/F ...` приводятся к абсолютным путям относительно каталога, где находится `v8project.yaml`. Серверная строка подключения должна сохраняться как строка подключения, а не трактоваться как путь.

@@ -21,7 +21,7 @@
 ## Что умеет
 
 - `build`: загружать изменённые исходники в ИБ, выбирая частичное или полное выполнение в зависимости от формата исходников и бэкенда.
-- `config init`: создавать `v8project.yaml` в текущем каталоге и добавлять найденные исходники в `source-set`.
+- `config init`: создавать `v8project.yaml` в текущем каталоге, добавлять найденные Designer/EDT source-set и autodetect aggregate-root каталоги внешних обработок и отчётов.
 - `init`: первично создавать файловую ИБ, а для `builder=IBCMD` при server connection выполнять `ensure` серверной ИБ через `ibcmd infobase create --create-database`; для EDT-проектов инициализировать workspace импортом всех настроенных `source-set`.
 - `extensions`: обновлять свойства расширений в информационной базе по настроенным `source-set`.
 - `test yaxunit`: сначала выполнять `build`, затем запускать все YaXUnit-тесты или один модуль.
@@ -47,7 +47,7 @@ cargo build --release
 ./target/release/v8-runner config init
 ```
 
-Команда сканирует текущий каталог, опирается на файлы-маркеры и их содержимое: ищет Designer-исходники по `Configuration.xml`, EDT-проекты по `.project`, определяет `source-set[].type` по содержимому найденных XML и не перезаписывает существующий файл без `--force`.
+Команда сканирует текущий каталог, опирается на файлы-маркеры и их содержимое: ищет Designer-исходники по `Configuration.xml`, EDT-проекты по `.project`, определяет `source-set[].type` по содержимому найденных XML, autodetect-ит aggregate-root каталоги внешних обработок и отчётов и не перезаписывает существующий файл без `--force`. Для Designer external root нужен однородный набор top-level XML дескрипторов, для EDT external root — однородные direct child projects одного external-kind. Mixed/ambiguous external roots не автогенерируются. Если autodiscovery не нашёл ни одного `CONFIGURATION` или external source-set требует `--builder DESIGNER`, команда завершится validation error вместо записи phantom-конфига.
 
 Или создайте минимальный `v8project.yaml` вручную:
 
@@ -111,7 +111,7 @@ tests:
 
 | Сценарий | Текущая поддержка |
 | --- | --- |
-| `config init` | Создание `v8project.yaml` в текущем каталоге; автопоиск Designer/EDT source-set; `--force` для перезаписи |
+| `config init` | Создание `v8project.yaml` в текущем каталоге; content-based автопоиск Designer/EDT source-set и external aggregate roots; `--force` для перезаписи |
 | `init` | `format=DESIGNER` или `format=EDT` с `builder=DESIGNER` или `IBCMD`; `builder=IBCMD` поддерживает file и server ИБ, `builder=DESIGNER` автоматически создаёт только файловую ИБ |
 | `extensions` | Обновление свойств расширений для EDT и Designer-проектов по настроенным extension `source-set`; file и server ИБ через IBCMD adapter |
 | `build` | `format=DESIGNER` или `format=EDT` с `builder=DESIGNER` или `IBCMD`; EDT сначала экспортируется в Designer-файлы |

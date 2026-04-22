@@ -67,6 +67,7 @@ This result grammar is governed by [ADR-0016](docs/decisions/0016-edinyy-executi
 `v8project.yaml`, loaded into `AppConfig` and accepted by `config::validate`, is the main project configuration contract.
 `source-set.name` is a stable identity for runtime state, generated directories, diagnostics, and source-set selection.
 The supported `source-set[].type` contract and validation boundary are governed by [ADR-0017](docs/decisions/0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md).
+`config init` must autodetect source-set types only from marker content: `Configuration.xml` / `.project` classify `CONFIGURATION` and `EXTENSION`, while external `.epf`/`.erf` sources are discovered only through homogeneous aggregate roots, never through per-artifact or phantom fallback source-set generation.
 
 The typed config model now splits MCP knobs into active HTTP/session settings and shared execution guardrails:
 

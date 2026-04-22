@@ -15,7 +15,7 @@ fn config_init_creates_yaml_with_detected_designer_sources() {
     fs::write(main.join("Configuration.xml"), "<Configuration/>").expect("main xml");
     fs::write(
         ext.join("Configuration.xml"),
-        "<ConfigurationExtensionPurpose>Customization</ConfigurationExtensionPurpose>",
+        "<Configuration><ConfigurationExtensionPurpose kind=\"Customization\">Customization</ConfigurationExtensionPurpose></Configuration>",
     )
     .expect("ext xml");
 
@@ -95,7 +95,7 @@ fn config_init_detects_edt_extension_by_marker_contents() {
     .expect("ext project");
     fs::write(
         extension_project.join("metadata").join("Configuration.xml"),
-        "<ConfigurationExtensionPurpose>Customization</ConfigurationExtensionPurpose>",
+        "<Configuration><ConfigurationExtensionPurpose kind=\"Customization\">Customization</ConfigurationExtensionPurpose></Configuration>",
     )
     .expect("ext xml");
 
@@ -129,4 +129,170 @@ fn config_init_refuses_to_overwrite_without_force() {
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("already exists"));
+}
+
+#[test]
+fn config_init_detects_designer_external_aggregate_source_set() {
+    let dir = tempdir().expect("tempdir");
+    fs::write(dir.path().join("Configuration.xml"), "<Configuration/>").expect("config xml");
+    fs::create_dir_all(dir.path().join("tools")).expect("tools dir");
+    fs::write(
+        dir.path().join("tools").join("alpha.xml"),
+        "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
+    )
+    .expect("alpha xml");
+    fs::write(
+        dir.path().join("tools").join("beta.xml"),
+        "<MetaDataObject><ExternalDataProcessor><Properties><Name>Beta</Name></Properties></ExternalDataProcessor></MetaDataObject>",
+    )
+    .expect("beta xml");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .current_dir(dir.path())
+        .args(["config", "init", "--format", "designer"])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let config = fs::read_to_string(dir.path().join("v8project.yaml")).expect("config");
+    assert!(config.contains("type: EXTERNAL_DATA_PROCESSORS"));
+    assert!(config.contains("path: 'tools'"));
+}
+
+#[test]
+fn config_init_rejects_external_only_autodiscovery_without_configuration() {
+    let dir = tempdir().expect("tempdir");
+    fs::create_dir_all(dir.path().join("tools")).expect("tools dir");
+    fs::write(
+        dir.path().join("tools").join("alpha.xml"),
+        "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
+    )
+    .expect("alpha xml");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .current_dir(dir.path())
+        .args(["config", "init", "--format", "designer"])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("did not find a CONFIGURATION source-set"));
+}
+
+#[test]
+fn config_init_auto_prefers_edt_when_designer_only_has_external_root() {
+    let dir = tempdir().expect("tempdir");
+    let config_project = dir.path().join("workspace").join("cfg");
+    fs::create_dir_all(config_project.join("metadata")).expect("config metadata");
+    fs::write(
+        config_project.join(".project"),
+        "<projectDescription><name>configuration</name></projectDescription>",
+    )
+    .expect("config project");
+    fs::write(
+        config_project.join("metadata").join("Configuration.xml"),
+        "<Configuration/>",
+    )
+    .expect("config xml");
+    fs::create_dir_all(dir.path().join("tools")).expect("tools dir");
+    fs::write(
+        dir.path().join("tools").join("alpha.xml"),
+        "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
+    )
+    .expect("alpha xml");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .current_dir(dir.path())
+        .args(["config", "init"])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let config = fs::read_to_string(dir.path().join("v8project.yaml")).expect("config");
+    assert!(config.contains("format: EDT"));
+    assert!(config.contains("path: 'workspace/cfg'"));
+    assert!(!config.contains("path: 'tools'"));
+}
+
+#[test]
+fn config_init_keeps_nested_edt_configuration_under_external_root() {
+    let dir = tempdir().expect("tempdir");
+    let external_root = dir.path().join("processors");
+    for name in ["alpha", "beta"] {
+        let project = external_root.join(name);
+        fs::create_dir_all(project.join("src")).expect("external project dir");
+        fs::write(
+            project.join(".project"),
+            format!("<projectDescription><name>{name}</name></projectDescription>"),
+        )
+        .expect("external project");
+        fs::write(
+            project.join("src").join("root.xml"),
+            format!(
+                "<ExternalDataProcessor><Properties><Name>{name}</Name></Properties></ExternalDataProcessor>"
+            ),
+        )
+        .expect("external xml");
+    }
+    let config_project = external_root.join("apps").join("cfg");
+    fs::create_dir_all(config_project.join("metadata")).expect("config metadata");
+    fs::write(
+        config_project.join(".project"),
+        "<projectDescription><name>configuration</name></projectDescription>",
+    )
+    .expect("config project");
+    fs::write(
+        config_project.join("metadata").join("Configuration.xml"),
+        "<Configuration/>",
+    )
+    .expect("config xml");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .current_dir(dir.path())
+        .args(["config", "init", "--format", "edt"])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let config = fs::read_to_string(dir.path().join("v8project.yaml")).expect("config");
+    assert!(config.contains("path: 'processors'"));
+    assert!(config.contains("type: EXTERNAL_DATA_PROCESSORS"));
+    assert!(config.contains("path: 'processors/apps/cfg'"));
+    assert!(config.contains("type: CONFIGURATION"));
+}
+
+#[test]
+fn config_init_ignores_non_edt_root_project_marker_when_nested_project_exists() {
+    let dir = tempdir().expect("tempdir");
+    fs::write(dir.path().join(".project"), "<root/>").expect("root project marker");
+    let config_project = dir.path().join("workspace").join("cfg");
+    fs::create_dir_all(config_project.join("metadata")).expect("config metadata");
+    fs::write(
+        config_project.join(".project"),
+        "<projectDescription><name>configuration</name></projectDescription>",
+    )
+    .expect("config project");
+    fs::write(
+        config_project.join("metadata").join("Configuration.xml"),
+        "<Configuration/>",
+    )
+    .expect("config xml");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .current_dir(dir.path())
+        .args(["config", "init", "--format", "edt"])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let config = fs::read_to_string(dir.path().join("v8project.yaml")).expect("config");
+    assert!(config.contains("path: 'workspace/cfg'"));
+    assert!(config.contains("type: CONFIGURATION"));
 }

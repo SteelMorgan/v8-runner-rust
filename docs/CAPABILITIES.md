@@ -12,7 +12,7 @@
 
 | Сценарий | Поддерживаемые комбинации | Примечания |
 | --- | --- | --- |
-| `config init` | Работает без существующего конфига | Создаёт `v8project.yaml`, ищет Designer/EDT-исходники и пишет `source-set[].type` |
+| `config init` | Работает без существующего конфига | Создаёт `v8project.yaml`, content-based autodetect-ит Designer/EDT-исходники и external aggregate roots, пишет `source-set[].type` |
 | `init` | `format=DESIGNER` + `builder=DESIGNER` | Создаёт файловую ИБ через `1cv8 CREATEINFOBASE`, если отсутствует; server connection остаётся manual prerequisite |
 | `init` | `format=DESIGNER` + `builder=IBCMD` | Выполняет `ensure` файловой или серверной ИБ через `ibcmd infobase create`; для server path добавляет `--create-database` и трактует benign `already exists` как non-fatal |
 | `init` | `format=EDT` + `builder=DESIGNER` или `IBCMD` | Подготавливает ИБ по правилам builder и, если workspace отсутствует, импортирует все EDT `source-set` в `workPath/edt-workspace` |
@@ -58,7 +58,12 @@ v8-runner config init [--force] [--file <FILE>] [--connection <CONNECTION>] [--f
 - Не требует существующего `v8project.yaml`.
 - По умолчанию создаёт конфиг в текущем каталоге; путь можно переопределить через `--file` или глобальный `--config`.
 - Не перезаписывает существующий файл без `--force`.
-- Ищет Designer-исходники по `Configuration.xml`, EDT-проекты по `.project`.
+- Ищет Designer-исходники по `Configuration.xml`, EDT-проекты по `.project`, а внешние обработки и отчёты autodetect-ит только как aggregate-root source-set.
+- Для Designer external root нужны однородные top-level XML descriptors одного external-kind.
+- Для EDT external root нужны однородные direct child projects одного external-kind.
+- Mixed/ambiguous external roots не autodetect-ятся.
+- Не пишет synthetic `CONFIGURATION`: если autodiscovery не нашёл `CONFIGURATION`, команда завершается validation error.
+- При `--builder IBCMD` найденные external source-set считаются validation error и требуют `--builder DESIGNER` или ручной правки конфига.
 - Генерирует `workPath: 'build'`, секцию `infobase.connection: 'File=build/ib'` и элементы `source-set` с ключом `type`.
 
 ## Команда `build`
