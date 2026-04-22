@@ -1,7 +1,5 @@
 /// Per-call MCP service context.
 pub mod context;
-/// Shared EDT actor reserved for MCP transports.
-pub mod edt_session;
 /// MCP-specific EDT syntax execution over the shared actor.
 pub mod edt_syntax;
 /// MCP-facing error and result contracts.

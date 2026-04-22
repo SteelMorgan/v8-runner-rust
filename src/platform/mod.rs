@@ -1,6 +1,7 @@
 pub mod connection;
 pub mod designer;
 pub mod edt;
+pub mod edt_session;
 pub mod enterprise;
 pub mod ibcmd;
 pub mod interactive;

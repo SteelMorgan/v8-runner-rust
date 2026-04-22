@@ -368,10 +368,10 @@ tools:
 
 Если включён:
 
-- поддержанные EDT-сценарии используют interactive `1cedtcli` вместо one-shot вызовов;
-- для MCP это означает shared actor/manager и одну shared interactive session;
-- в текущем CLI interactive EDT стартует лениво при первом EDT-вызове и живёт только в рамках текущего процесса команды;
-- `auto-start` влияет только на shared MCP EDT session.
+- поддержанные EDT-сценарии используют общий shared actor/manager и interactive `1cedtcli` вместо one-shot вызовов;
+- для CLI shared EDT session стартует лениво при первом EDT-вызове и живёт только в рамках текущего процесса команды;
+- для MCP long-lived host process тот же shared component может переиспользовать одну interactive session между вызовами;
+- `auto-start` влияет только на long-lived host process с shared EDT session.
 
 Если выключен:
 
@@ -405,9 +405,9 @@ tools:
 
 - автопоиск `1cedtcli`;
 - отдельное переключение через `tools.edt_cli.interactive_mode`;
-- интерактивный backend для всех EDT-операций;
-- ленивый старт shared MCP session;
-- eager prewarm через `auto-start`, если включён interactive-mode;
+- shared interactive backend для поддержанных CLI/MCP EDT-сценариев;
+- ленивый старт shared CLI session при первом EDT-вызове;
+- eager prewarm shared MCP session через `auto-start`, если включён interactive-mode;
 - timeout старта через `tools.edt_cli.startup_timeout_ms`;
 - timeout команды через `tools.edt_cli.command_timeout_ms`;
 - workspace в `workPath/edt-workspace`.

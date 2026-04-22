@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -11,6 +12,7 @@ use crate::parsers::designer_validation;
 use crate::parsers::edt_validation;
 use crate::platform::designer::DesignerDsl;
 use crate::platform::edt::EdtDsl;
+use crate::platform::edt_session::{EdtSessionHostOptions, EdtSessionManager};
 use crate::platform::locator::UtilityType;
 use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
@@ -497,19 +499,40 @@ fn run_edt_syntax(
 
     let edt_binary = location.path;
     let interactive_dsl = if config.tools.edt_cli.interactive_mode {
-        match EdtDsl::new_interactive(
-            edt_binary.clone(),
-            config.work_path.join("edt-workspace"),
-            Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
-            Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
-        ) {
-            Ok(dsl) => Some(
-                dsl.with_timeout(context.edt_timeout())
-                    .with_execution_policy(context.process_policy(
-                        InterruptionSafetyClass::GracefulThenKill,
-                        context.edt_timeout(),
-                    )),
-            ),
+        match EdtSessionManager::for_config(config, EdtSessionHostOptions::for_cli_command(config))
+        {
+            Ok(manager) => match EdtDsl::new_shared_session(
+                edt_binary.clone(),
+                config.work_path.join("edt-workspace"),
+                Arc::new(manager),
+                Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
+                Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
+            ) {
+                Ok(dsl) => Some(
+                    dsl.with_timeout(context.edt_timeout())
+                        .with_execution_policy(context.process_policy(
+                            InterruptionSafetyClass::GracefulThenKill,
+                            context.edt_timeout(),
+                        )),
+                ),
+                Err(error) => {
+                    let message = error.to_string();
+                    let app_error = AppError::Platform(message.clone());
+                    return Err(SyntaxExecutionFailure::with_payload(
+                        app_error,
+                        failed_result(
+                            "edt",
+                            SyntaxCheckStatus::ToolFailed,
+                            -1,
+                            started,
+                            vec![],
+                            None,
+                            Some(message),
+                            None,
+                        ),
+                    ));
+                }
+            },
             Err(error) => {
                 let message = error.to_string();
                 let app_error = AppError::Platform(message.clone());
@@ -1025,6 +1048,64 @@ mod tests {
         write_script(path, &body);
     }
 
+    fn write_edt_script_with_calls(path: &Path, calls_log: &Path) {
+        let body = format!(
+            "out=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--file\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nprintf '%s\\n' \"$*\" >> '{}'\nif [ -n \"$out\" ]; then : > \"$out\"; fi\nexit 0",
+            calls_log.display()
+        );
+        write_script(path, &body);
+    }
+
+    #[cfg(unix)]
+    fn write_interactive_edt_script_with_calls(path: &Path, calls_log: &Path) {
+        let body = format!(
+            "set -eu\n\
+             prompt() {{ printf '1C:EDT>'; }}\n\
+             current_dir=\"\"\n\
+             prev=\"\"\n\
+             for arg in \"$@\"; do\n\
+               if [ \"$prev\" = \"-data\" ]; then current_dir=\"$arg\"; fi\n\
+               prev=\"$arg\"\n\
+             done\n\
+             printf 'START\\n' >> '{}'\n\
+             trap 'printf \"EXIT\\\\n\" >> \"{}\"' EXIT\n\
+             prompt\n\
+             while IFS= read -r line; do\n\
+               printf '%s\\n' \"$line\" >> '{}'\n\
+               eval \"set -- $line\"\n\
+               cmd=\"${{1:-}}\"\n\
+               if [ \"$#\" -gt 0 ]; then shift; fi\n\
+               case \"$cmd\" in\n\
+                 cd)\n\
+                   if [ \"$#\" -eq 0 ]; then\n\
+                     printf '%s\\n' \"$current_dir\"\n\
+                   else\n\
+                     current_dir=\"$1\"\n\
+                   fi\n\
+                   prompt\n\
+                   ;;\n\
+                 validate)\n\
+                   out=\"\"\n\
+                   prev=\"\"\n\
+                   for arg in \"$@\"; do\n\
+                     if [ \"$prev\" = \"--file\" ]; then out=\"$arg\"; fi\n\
+                     prev=\"$arg\"\n\
+                   done\n\
+                   if [ -n \"$out\" ]; then : > \"$out\"; fi\n\
+                   prompt\n\
+                   ;;\n\
+                 *)\n\
+                   prompt\n\
+                   ;;\n\
+               esac\n\
+             done\n",
+            calls_log.display(),
+            calls_log.display(),
+            calls_log.display()
+        );
+        write_script(path, &body);
+    }
+
     fn sample_config(base_path: &Path, work_path: &Path, platform_path: &Path) -> AppConfig {
         AppConfig {
             base_path: base_path.to_path_buf(),
@@ -1423,6 +1504,66 @@ mod tests {
         assert!(message.contains("timed out") || message.contains("timeout expired"));
         assert_eq!(payload.status, SyntaxCheckStatus::ToolFailed);
         assert_eq!(payload.exit_code, -1);
+    }
+
+    #[test]
+    fn syntax_edt_uses_one_shot_execution_when_interactive_mode_is_disabled() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let main_dir = base.join("main-edt");
+        let ext_dir = base.join("ext-edt");
+        let binary = dir.path().join("edt").join("1cedtcli");
+        let calls_log = dir.path().join("edt-calls.log");
+        fs::create_dir_all(&work).expect("work");
+        fs::create_dir_all(&main_dir).expect("main");
+        fs::create_dir_all(&ext_dir).expect("ext");
+        write_edt_script_with_calls(&binary, &calls_log);
+        let mut config = sample_edt_config(&base, &work, &binary);
+        config.tools.edt_cli.interactive_mode = false;
+        let args = SyntaxArgs {
+            target: SyntaxTarget::Edt {
+                projects: vec!["main".to_owned()],
+            },
+        };
+
+        let result = run_syntax(&config, &args).expect("syntax");
+        let calls = fs::read_to_string(&calls_log).expect("calls log");
+
+        assert_eq!(result.status, SyntaxCheckStatus::Clean);
+        assert!(calls.contains("-command validate"));
+        assert!(!calls.contains("START"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn syntax_edt_uses_shared_session_execution_when_interactive_mode_is_enabled() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let main_dir = base.join("main-edt");
+        let ext_dir = base.join("ext-edt");
+        let binary = dir.path().join("edt").join("1cedtcli");
+        let calls_log = dir.path().join("edt-calls.log");
+        fs::create_dir_all(&work).expect("work");
+        fs::create_dir_all(&main_dir).expect("main");
+        fs::create_dir_all(&ext_dir).expect("ext");
+        write_interactive_edt_script_with_calls(&binary, &calls_log);
+        let mut config = sample_edt_config(&base, &work, &binary);
+        config.tools.edt_cli.interactive_mode = true;
+        let args = SyntaxArgs {
+            target: SyntaxTarget::Edt {
+                projects: vec!["main".to_owned()],
+            },
+        };
+
+        let result = run_syntax(&config, &args).expect("syntax");
+        let calls = fs::read_to_string(&calls_log).expect("calls log");
+
+        assert_eq!(result.status, SyntaxCheckStatus::Clean);
+        assert_eq!(calls.matches("START").count(), 1);
+        assert_eq!(calls.matches("EXIT").count(), 1);
+        assert!(calls.contains("validate"));
     }
 
     #[test]

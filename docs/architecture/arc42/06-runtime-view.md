@@ -75,10 +75,9 @@ sequenceDiagram
 
 - MCP-запрос приходит через stdio или HTTP.
 - Глобальный admission control ограничивает параллельные tool-вызовы.
-- `check_syntax_edt` идёт через общий менеджер EDT-сессии вместо one-shot исполнения.
+- `check_syntax_edt` идёт через общий `platform::edt_session` manager вместо one-shot исполнения; тот же actor также используется CLI interactive EDT use cases.
 - Ожидание в очереди, baseline reset/probe и выполнение команды используют один и тот же ограниченный бюджет таймаута.
-- Отмена запроса может завершить клиентский путь раньше, чем фактическая серверная работа будет полностью дренирована.
-- Целевая семантика по ADR-0014 требует не возвращать cancelled/timed out наружу до terminal state underlying operation; текущие detached/early-return механизмы считаются transition gaps.
+- Host policy различается: MCP может отпустить caller после running cancel/timeout и дождаться terminal state асинхронно внутри shared actor, а CLI blocking adapter ждёт terminal cleanup или завершает собственный short-lived manager принудительно перед возвратом.
 
 ### 6.5 Full Replacement `dump` / `artifacts` Publication
 

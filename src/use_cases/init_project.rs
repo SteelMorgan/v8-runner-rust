@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -10,6 +11,7 @@ use crate::config::model::{
 use crate::domain::init::{InitResult, InitStep, InitStepStatus};
 use crate::platform::designer::DesignerDsl;
 use crate::platform::edt::EdtDsl;
+use crate::platform::edt_session::{EdtSessionHostOptions, EdtSessionManager};
 use crate::platform::ibcmd::{
     IbcmdConnection, IbcmdDsl, IbcmdInfobaseCreateOutcome, IbcmdInfobaseCreateStatus,
 };
@@ -355,15 +357,27 @@ fn ensure_edt_workspace(
     };
 
     let dsl = if config.tools.edt_cli.interactive_mode {
-        match EdtDsl::new_interactive(
-            binary,
-            workspace.clone(),
-            Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
-            Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
-        ) {
-            Ok(dsl) => dsl.with_execution_policy(
-                context.process_policy(InterruptionSafetyClass::GracefulThenKill, None),
-            ),
+        match EdtSessionManager::for_config(config, EdtSessionHostOptions::for_cli_command(config))
+        {
+            Ok(manager) => match EdtDsl::new_shared_session(
+                binary,
+                workspace.clone(),
+                Arc::new(manager),
+                Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
+                Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
+            ) {
+                Ok(dsl) => dsl.with_execution_policy(
+                    context.process_policy(InterruptionSafetyClass::GracefulThenKill, None),
+                ),
+                Err(error) => {
+                    return StepOutcome::failed(
+                        "edt_workspace",
+                        "import",
+                        started,
+                        AppError::Platform(error.to_string()),
+                    )
+                }
+            },
             Err(error) => {
                 return StepOutcome::failed(
                     "edt_workspace",
@@ -669,6 +683,7 @@ mod tests {
         AppConfig, BuildConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
         TestsConfig, ToolsConfig,
     };
+    use std::fs;
     use std::path::{Path, PathBuf};
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
@@ -698,6 +713,59 @@ mod tests {
             mcp: Default::default(),
             tests: TestsConfig::default(),
         }
+    }
+
+    #[cfg(unix)]
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = fs::metadata(path).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).expect("chmod");
+    }
+
+    #[cfg(unix)]
+    fn write_one_shot_edt_script(path: &Path, calls_log: &Path) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create dirs");
+        }
+        fs::write(
+            path,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexit 0\n",
+                calls_log.display()
+            ),
+        )
+        .expect("write edt script");
+        make_executable(path);
+    }
+
+    #[cfg(unix)]
+    fn write_interactive_edt_script(path: &Path, calls_log: &Path) {
+        write_interactive_edt_script_with_startup_delay(path, calls_log, 0);
+    }
+
+    #[cfg(unix)]
+    fn write_interactive_edt_script_with_startup_delay(
+        path: &Path,
+        calls_log: &Path,
+        startup_delay_ms: u64,
+    ) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create dirs");
+        }
+        fs::write(
+            path,
+            format!(
+                "#!/bin/sh\nset -eu\nprompt() {{ printf '1C:EDT>'; }}\ncurrent_dir=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"-data\" ]; then current_dir=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nsleep {}\nprintf 'START\\n' >> '{}'\ntrap 'printf \"EXIT\\\\n\" >> \"{}\"' EXIT\nprompt\nwhile IFS= read -r line; do\n  printf '%s\\n' \"$line\" >> '{}'\n  eval \"set -- $line\"\n  cmd=\"${{1:-}}\"\n  if [ \"$#\" -gt 0 ]; then shift; fi\n  case \"$cmd\" in\n    cd)\n      if [ \"$#\" -eq 0 ]; then\n        printf '%s\\n' \"$current_dir\"\n      else\n        current_dir=\"$1\"\n      fi\n      prompt\n      ;;\n    import)\n      prompt\n      ;;\n    *)\n      prompt\n      ;;\n  esac\ndone\n",
+                startup_delay_ms as f64 / 1000.0,
+                calls_log.display(),
+                calls_log.display(),
+                calls_log.display()
+            ),
+        )
+        .expect("write interactive edt script");
+        make_executable(path);
     }
 
     #[test]
@@ -779,5 +847,118 @@ mod tests {
             .as_deref()
             .expect("message")
             .contains("before entering infobase create safe point"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn init_uses_one_shot_edt_when_interactive_mode_is_disabled() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let main_dir = base.join("main");
+        let ext_dir = base.join("ext");
+        let edt_script = dir.path().join("edt").join("1cedtcli");
+        let edt_calls = dir.path().join("edt-calls.log");
+        fs::create_dir_all(&main_dir).expect("main dir");
+        fs::create_dir_all(&ext_dir).expect("ext dir");
+        write_one_shot_edt_script(&edt_script, &edt_calls);
+
+        let mut config = sample_config();
+        config.base_path = base;
+        config.work_path = work.clone();
+        config.infobase.connection = "Srvr=server;Ref=demo".to_owned();
+        config.tools.edt_cli.path = Some(edt_script);
+        config.tools.edt_cli.interactive_mode = false;
+
+        let result = super::run_init(
+            &crate::use_cases::context::ExecutionContext::cli(
+                crate::use_cases::context::CommandName::Init,
+            ),
+            &config,
+        )
+        .expect("init");
+
+        let edt_calls_text = fs::read_to_string(&edt_calls).expect("edt calls");
+        assert!(result.ok);
+        assert!(edt_calls_text.contains("-command import --project"));
+        assert_eq!(edt_calls_text.matches("-command import --project").count(), 2);
+        assert!(!edt_calls_text.contains("START"));
+        assert!(edt_workspace_marker_path(&work.join("edt-workspace")).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn init_cli_interactive_auto_start_remains_lazy_without_edt_commands() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let edt_script = dir.path().join("edt").join("1cedtcli");
+        let edt_calls = dir.path().join("edt-calls.log");
+        fs::create_dir_all(&base).expect("base dir");
+        write_interactive_edt_script(&edt_script, &edt_calls);
+
+        let mut config = sample_config();
+        config.base_path = base;
+        config.work_path = work.clone();
+        config.infobase.connection = "Srvr=server;Ref=demo".to_owned();
+        config.source_sets = vec![];
+        config.tools.edt_cli.path = Some(edt_script);
+        config.tools.edt_cli.interactive_mode = true;
+        config.tools.edt_cli.auto_start = true;
+
+        let result = super::run_init(
+            &crate::use_cases::context::ExecutionContext::cli(
+                crate::use_cases::context::CommandName::Init,
+            ),
+            &config,
+        )
+        .expect("init");
+
+        assert!(result.ok);
+        assert!(
+            !edt_calls.exists()
+                || fs::read_to_string(&edt_calls)
+                    .expect("edt calls")
+                    .trim()
+                    .is_empty()
+        );
+        assert!(edt_workspace_marker_path(&work.join("edt-workspace")).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn init_cli_shared_session_does_not_charge_startup_against_first_command_timeout() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let main_dir = base.join("main");
+        let ext_dir = base.join("ext");
+        let edt_script = dir.path().join("edt").join("1cedtcli");
+        let edt_calls = dir.path().join("edt-calls.log");
+        fs::create_dir_all(&main_dir).expect("main dir");
+        fs::create_dir_all(&ext_dir).expect("ext dir");
+        write_interactive_edt_script_with_startup_delay(&edt_script, &edt_calls, 150);
+
+        let mut config = sample_config();
+        config.base_path = base;
+        config.work_path = work.clone();
+        config.infobase.connection = "Srvr=server;Ref=demo".to_owned();
+        config.tools.edt_cli.path = Some(edt_script);
+        config.tools.edt_cli.interactive_mode = true;
+        config.tools.edt_cli.startup_timeout_ms = 500;
+        config.tools.edt_cli.command_timeout_ms = 50;
+
+        let result = super::run_init(
+            &crate::use_cases::context::ExecutionContext::cli(
+                crate::use_cases::context::CommandName::Init,
+            ),
+            &config,
+        )
+        .expect("init");
+
+        let edt_calls_text = fs::read_to_string(&edt_calls).expect("edt calls");
+        assert!(result.ok);
+        assert_eq!(edt_calls_text.matches("START").count(), 1);
+        assert_eq!(edt_calls_text.matches("import --project").count(), 2);
     }
 }

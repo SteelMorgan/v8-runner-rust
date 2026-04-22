@@ -32,7 +32,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::model::AppConfig;
 use crate::mcp::context::McpCallContext;
-use crate::mcp::edt_session::{EdtSessionManager, EdtSessionShutdownError};
 use crate::mcp::edt_syntax;
 use crate::mcp::error::{McpInternalError, McpServiceResult};
 use crate::mcp::port::{DefaultMcpUseCasePort, McpUseCasePort};
@@ -43,8 +42,13 @@ use crate::mcp::request::{
 };
 use crate::mcp::service::McpService;
 use crate::mcp::service::{map_syntax_use_case_result, normalize_check_syntax_edt_request};
-use crate::mcp::telemetry::{McpTelemetry, SemaphoreWaitErrorKind, SemaphoreWaitOutcome};
+use crate::mcp::telemetry::{
+    McpEdtSessionObserver, McpTelemetry, SemaphoreWaitErrorKind, SemaphoreWaitOutcome,
+};
 use crate::mcp::tool_result::McpToolResult;
+use crate::platform::edt_session::{
+    EdtSessionHostOptions, EdtSessionManager, EdtSessionShutdownError,
+};
 
 type SharedMcpUseCasePort = Arc<dyn McpUseCasePort + Send + Sync>;
 const HTTP_BODY_LIMIT_BYTES: usize = 1024 * 1024;
@@ -257,8 +261,12 @@ impl McpToolServer {
         let telemetry = Arc::new(McpTelemetry::default());
         Ok(Self {
             edt_session: Arc::new(
-                EdtSessionManager::for_config_with_telemetry(config.as_ref(), telemetry.edt())
-                    .map_err(|error| McpServerError::Bootstrap(error.to_string()))?,
+                EdtSessionManager::for_config_with_observer(
+                    config.as_ref(),
+                    EdtSessionHostOptions::for_mcp_host(config.as_ref()),
+                    Arc::new(McpEdtSessionObserver::new(telemetry.edt())),
+                )
+                .map_err(|error| McpServerError::Bootstrap(error.to_string()))?,
             ),
             concurrency_limit: Arc::new(Semaphore::new(max_concurrent_calls(config.as_ref()))),
             telemetry,

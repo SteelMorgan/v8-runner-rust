@@ -4,6 +4,10 @@ use std::time::Duration;
 
 use tracing::info;
 
+use crate::platform::edt_session::{
+    EdtDrainReason, EdtQueueDepthAction, EdtQueueDepthReason, EdtRestartReason,
+    EdtSessionObserver,
+};
 use crate::use_cases::context::ExecutionTransport;
 
 #[derive(Debug, Clone)]
@@ -144,9 +148,9 @@ impl EdtTelemetry {
             .fetch_max(queue_depth, Ordering::Relaxed);
         info!(
             event = "mcp_edt_queue_depth",
-            action = action.as_str(),
+            action = edt_queue_depth_action_name(action),
             queue_depth,
-            reason = reason.map(EdtQueueDepthReason::as_str),
+            reason = reason.map(edt_queue_depth_reason_name),
             "recorded shared EDT queue depth"
         );
     }
@@ -164,27 +168,27 @@ impl EdtTelemetry {
         info!(
             event = "mcp_edt_session_restart",
             restart_count,
-            reason = reason.as_str(),
+            reason = edt_restart_reason_name(reason),
             "recorded shared EDT session restart"
         );
     }
 
-    pub(crate) fn record_drain(&self, reason: EdtDrainTelemetryReason, drained_jobs: usize) {
+    pub(crate) fn record_drain(&self, reason: EdtDrainReason, drained_jobs: usize) {
         self.last_drained_jobs
             .store(drained_jobs, Ordering::Relaxed);
         let (drain_restart_total, drain_shutdown_total) = match reason {
-            EdtDrainTelemetryReason::Restart => (
+            EdtDrainReason::Restart => (
                 self.drain_restart_total.fetch_add(1, Ordering::Relaxed) + 1,
                 self.drain_shutdown_total.load(Ordering::Relaxed),
             ),
-            EdtDrainTelemetryReason::Shutdown => (
+            EdtDrainReason::Shutdown => (
                 self.drain_restart_total.load(Ordering::Relaxed),
                 self.drain_shutdown_total.fetch_add(1, Ordering::Relaxed) + 1,
             ),
         };
         info!(
             event = "mcp_edt_shutdown_drain",
-            reason = reason.as_str(),
+            reason = edt_drain_reason_name(reason),
             drained_jobs,
             drain_restart_total,
             drain_shutdown_total,
@@ -206,73 +210,69 @@ impl EdtTelemetry {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EdtQueueDepthAction {
-    Enqueue,
-    Dequeue,
-    RemoveQueued,
-    Drain,
+pub(crate) struct McpEdtSessionObserver {
+    inner: Arc<EdtTelemetry>,
 }
 
-impl EdtQueueDepthAction {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Enqueue => "enqueue",
-            Self::Dequeue => "dequeue",
-            Self::RemoveQueued => "remove_queued",
-            Self::Drain => "drain",
-        }
+impl McpEdtSessionObserver {
+    pub(crate) fn new(inner: Arc<EdtTelemetry>) -> Self {
+        Self { inner }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EdtQueueDepthReason {
-    QueuedCancelled,
-    QueuedTimeout,
-    Restart,
-    Shutdown,
-}
+impl EdtSessionObserver for McpEdtSessionObserver {
+    fn record_queue_depth(
+        &self,
+        action: EdtQueueDepthAction,
+        queue_depth: usize,
+        reason: Option<EdtQueueDepthReason>,
+    ) {
+        self.inner.record_queue_depth(action, queue_depth, reason);
+    }
 
-impl EdtQueueDepthReason {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::QueuedCancelled => "queued_cancelled",
-            Self::QueuedTimeout => "queued_timeout",
-            Self::Restart => "restart",
-            Self::Shutdown => "shutdown",
-        }
+    fn record_startup_failure(&self) {
+        self.inner.record_startup_failure();
+    }
+
+    fn record_restart(&self, reason: EdtRestartReason) {
+        self.inner.record_restart(reason);
+    }
+
+    fn record_drain(&self, reason: EdtDrainReason, drained_jobs: usize) {
+        self.inner.record_drain(reason, drained_jobs);
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EdtRestartReason {
-    BaselineFailure,
-    CommandTimeout,
-    SessionFailure,
-}
-
-impl EdtRestartReason {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::BaselineFailure => "baseline_failure",
-            Self::CommandTimeout => "command_timeout",
-            Self::SessionFailure => "session_failure",
-        }
+const fn edt_queue_depth_action_name(action: EdtQueueDepthAction) -> &'static str {
+    match action {
+        EdtQueueDepthAction::Enqueue => "enqueue",
+        EdtQueueDepthAction::Dequeue => "dequeue",
+        EdtQueueDepthAction::RemoveQueued => "remove_queued",
+        EdtQueueDepthAction::Drain => "drain",
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EdtDrainTelemetryReason {
-    Restart,
-    Shutdown,
+const fn edt_queue_depth_reason_name(reason: EdtQueueDepthReason) -> &'static str {
+    match reason {
+        EdtQueueDepthReason::QueuedCancelled => "queued_cancelled",
+        EdtQueueDepthReason::QueuedTimeout => "queued_timeout",
+        EdtQueueDepthReason::Restart => "restart",
+        EdtQueueDepthReason::Shutdown => "shutdown",
+    }
 }
 
-impl EdtDrainTelemetryReason {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Restart => "restart",
-            Self::Shutdown => "shutdown",
-        }
+const fn edt_restart_reason_name(reason: EdtRestartReason) -> &'static str {
+    match reason {
+        EdtRestartReason::BaselineFailure => "baseline_failure",
+        EdtRestartReason::CommandTimeout => "command_timeout",
+        EdtRestartReason::SessionFailure => "session_failure",
+    }
+}
+
+const fn edt_drain_reason_name(reason: EdtDrainReason) -> &'static str {
+    match reason {
+        EdtDrainReason::Restart => "restart",
+        EdtDrainReason::Shutdown => "shutdown",
     }
 }
 
@@ -314,8 +314,10 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        EdtDrainTelemetryReason, EdtQueueDepthAction, EdtQueueDepthReason, EdtRestartReason,
         EdtTelemetry, ExecutionTelemetry, SemaphoreWaitErrorKind, SemaphoreWaitOutcome,
+    };
+    use crate::platform::edt_session::{
+        EdtDrainReason, EdtQueueDepthAction, EdtQueueDepthReason, EdtRestartReason,
     };
     use crate::use_cases::context::ExecutionTransport;
 
@@ -386,8 +388,8 @@ mod tests {
         telemetry.record_restart(EdtRestartReason::BaselineFailure);
         telemetry.record_restart(EdtRestartReason::CommandTimeout);
         telemetry.record_restart(EdtRestartReason::SessionFailure);
-        telemetry.record_drain(EdtDrainTelemetryReason::Restart, 3);
-        telemetry.record_drain(EdtDrainTelemetryReason::Shutdown, 1);
+        telemetry.record_drain(EdtDrainReason::Restart, 3);
+        telemetry.record_drain(EdtDrainReason::Shutdown, 1);
 
         let snapshot = telemetry.snapshot();
         assert_eq!(snapshot.queue_depth, 0);

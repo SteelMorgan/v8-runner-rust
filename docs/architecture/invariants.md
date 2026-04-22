@@ -135,7 +135,7 @@
 ## Platform Backends
 
 1. Низкоуровневые DSL для платформенных инструментов остаются в `src/platform`.
-2. `DesignerDsl`, `IbcmdDsl`, `EdtDsl`, `EnterpriseDsl`, `platform::locator`, `platform::process` и interactive executor не должны протаскивать process details в presentation или transport adapters.
+2. `DesignerDsl`, `IbcmdDsl`, `EdtDsl`, `EnterpriseDsl`, `platform::edt_session`, `platform::locator`, `platform::process` и interactive executor не должны протаскивать process details в presentation или transport adapters.
 3. Orchestration вызывает backend DSL через доменные операции и анализирует `PlatformCommandResult`, но не собирает сырые process arguments выше платформенного слоя.
 4. Новый backend добавляется как отдельный adapter/DSL с явными gap и матрицей поддержки.
 

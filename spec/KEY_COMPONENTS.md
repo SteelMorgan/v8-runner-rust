@@ -1,6 +1,6 @@
 # Ключевые компоненты и их функциональность
 
-Документ собран по актуальному коду проекта. Его задача: зафиксировать состав системы, границы ответственности компонентов и критичные технические детали, которые важны для переписывания на другой стек.
+Документ фиксирует высокоуровневую карту системы, границы ответственности компонентов и критичные технические детали, которые важны для переписывания на другой стек. Часть названий сохранена в legacy-нотации раннего JVM/Spring прототипа для сопоставления со старыми ADR/spec, поэтому для точного соответствия текущему Rust-коду canonical references остаются `ARCHITECTURE.md` и реальные module paths.
 
 ## 1. Общая карта компонентов
 
@@ -62,7 +62,7 @@
 
 Критичные детали:
 
-- актуален только для long-lived host с shared EDT session, сейчас это MCP mode;
+- актуален только для long-lived host с shared EDT session; на текущем этапе eager prewarm используется MCP server, а short-lived CLI команды всегда стартуют shared EDT лениво;
 - включается только при `app.tools.edt-cli.auto-start == true` и `interactive_mode == true`;
 - использует lazy/single-flight запуск через `Deferred`;
 - CLI не делает eager prewarm и стартует EDT лениво при первом EDT-вызове;
@@ -486,7 +486,7 @@
 
 - подставляет фактическую версию платформы или EDT;
 - ищет binary нужного utility type;
-- для EDT поддерживает one-shot и interactive execution; eager prewarm через `auto-start` относится только к shared MCP session, а CLI стартует interactive EDT лениво;
+- для EDT поддерживает one-shot и shared interactive execution; eager prewarm через `auto-start` относится только к long-lived shared host process, а CLI стартует interactive EDT лениво;
 - для остальных случаев выдает обычный `ProcessExecutor`.
 
 ### 11.2. `UtilityLocator` и `SearchStrategy`

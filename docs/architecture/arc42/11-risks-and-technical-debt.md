@@ -2,7 +2,7 @@
 
 - Журнал ADR уже введён, но его нужно поддерживать синхронно с кодом и публичной документацией.
 - Публичная и внутренняя документация могут расходиться, если их не обновлять вместе с кодом.
-- Общий shared interactive EDT-path покрывает только MCP syntax, а CLI пока создаёт non-shared interactive EDT sessions; это implementation gap к ADR-0007 и увеличивает число execution paths.
+- Общий shared interactive EDT-path теперь вынесен в `platform`, но остаётся риск регрессии к третьему публичному execution path, если новые EDT-сценарии начнут обходить общий actor/manager или документация/tests перестанут держать инварианты ADR-0007.
 - Поддержка `IBCMD` остаётся уже, чем поддержка Designer.
 - Provisioning contract из ADR-0019 реализован только для `builder=IBCMD`; `builder=DESIGNER` по-прежнему пропускает server infobase create step и это остаётся документированным ограничением.
 - Общая timeout/cancellation policy из ADR-0014 является целевой архитектурой и ещё не полностью реализована во всех public commands.

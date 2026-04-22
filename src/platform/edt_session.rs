@@ -1,19 +1,17 @@
 use std::collections::VecDeque;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+#[cfg(test)]
+use std::{collections::HashMap, sync::OnceLock};
 
 use thiserror::Error;
 use tokio::sync::{oneshot, Notify, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::model::AppConfig;
-use crate::mcp::telemetry::{
-    EdtDrainTelemetryReason, EdtQueueDepthAction, EdtQueueDepthReason, EdtRestartReason,
-    EdtTelemetry,
-};
 use crate::platform::edt::{
     render_interactive_change_dir_command, render_interactive_probe_workdir_command,
 };
@@ -110,27 +108,124 @@ pub enum EdtSessionShutdownError {
     Internal { message: String },
 }
 
-/// Shared single-session EDT actor reserved for MCP mode.
+/// Queue depth actions observed on the shared EDT actor boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdtQueueDepthAction {
+    Enqueue,
+    Dequeue,
+    RemoveQueued,
+    Drain,
+}
+
+/// Reasons explaining why a queued request left the shared EDT queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdtQueueDepthReason {
+    QueuedCancelled,
+    QueuedTimeout,
+    Restart,
+    Shutdown,
+}
+
+/// Reasons explaining why the shared EDT session was restarted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdtRestartReason {
+    BaselineFailure,
+    CommandTimeout,
+    SessionFailure,
+}
+
+/// Reasons explaining why the shared EDT actor drained queued work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdtDrainReason {
+    Restart,
+    Shutdown,
+}
+
+/// Thin host-side observer for shared EDT lifecycle events.
+pub trait EdtSessionObserver: Send + Sync {
+    fn record_queue_depth(
+        &self,
+        _action: EdtQueueDepthAction,
+        _queue_depth: usize,
+        _reason: Option<EdtQueueDepthReason>,
+    ) {
+    }
+
+    fn record_startup_failure(&self) {}
+
+    fn record_restart(&self, _reason: EdtRestartReason) {}
+
+    fn record_drain(&self, _reason: EdtDrainReason, _drained_jobs: usize) {}
+}
+
+#[derive(Debug, Default)]
+struct NoopEdtSessionObserver;
+
+impl EdtSessionObserver for NoopEdtSessionObserver {}
+
+/// Host-specific runtime options for one shared EDT session owner.
+#[derive(Debug, Clone)]
+pub struct EdtSessionHostOptions {
+    pub queue_capacity: usize,
+    pub shutdown_timeout: Duration,
+    pub startup_timeout: Duration,
+    pub workspace: PathBuf,
+    pub prewarm: bool,
+}
+
+impl EdtSessionHostOptions {
+    /// Shared EDT policy for short-lived CLI command processes.
+    pub fn for_cli_command(config: &AppConfig) -> Self {
+        Self {
+            queue_capacity: 1,
+            shutdown_timeout: Duration::from_millis(
+                config.tools.edt_cli.command_timeout_ms.min(5_000),
+            ),
+            startup_timeout: Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
+            workspace: config.work_path.join("edt-workspace"),
+            prewarm: false,
+        }
+    }
+
+    /// Shared EDT policy for long-lived MCP hosts.
+    pub fn for_mcp_host(config: &AppConfig) -> Self {
+        Self {
+            queue_capacity: config.mcp.execution.max_concurrent_calls.max(1),
+            shutdown_timeout: Duration::from_secs(
+                config.mcp.execution.shutdown_grace_period_secs.max(1),
+            ),
+            startup_timeout: Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
+            workspace: config.work_path.join("edt-workspace"),
+            prewarm: config.tools.edt_cli.interactive_mode && config.tools.edt_cli.auto_start,
+        }
+    }
+}
+
+/// Shared single-session EDT actor used by CLI and MCP flows.
 #[derive(Clone)]
 pub struct EdtSessionManager {
     inner: Arc<EdtSessionManagerInner>,
 }
 
 impl EdtSessionManager {
-    pub(crate) fn for_config_with_telemetry(
+    pub fn for_config(
         config: &AppConfig,
-        telemetry: Arc<EdtTelemetry>,
+        options: EdtSessionHostOptions,
     ) -> Result<Self, EdtSessionError> {
-        let queue_capacity = config.mcp.execution.max_concurrent_calls.max(1);
-        let shutdown_timeout =
-            Duration::from_secs(config.mcp.execution.shutdown_grace_period_secs.max(1));
-        let prewarm = config.tools.edt_cli.interactive_mode && config.tools.edt_cli.auto_start;
-        Self::with_factory_and_telemetry(
-            Arc::new(DefaultSessionFactory::new(config.clone())),
-            telemetry,
-            queue_capacity,
-            shutdown_timeout,
-            prewarm,
+        Self::for_config_with_observer(config, options, Arc::new(NoopEdtSessionObserver))
+    }
+
+    pub fn for_config_with_observer(
+        config: &AppConfig,
+        options: EdtSessionHostOptions,
+        observer: Arc<dyn EdtSessionObserver>,
+    ) -> Result<Self, EdtSessionError> {
+        Self::with_factory_and_observer(
+            Arc::new(DefaultSessionFactory::new(config.clone(), options.clone())),
+            observer,
+            options.queue_capacity,
+            options.shutdown_timeout,
+            options.prewarm,
         )
     }
 
@@ -141,6 +236,69 @@ impl EdtSessionManager {
         request: EdtSessionRequest,
     ) -> Result<EdtSessionResponse, EdtSessionError> {
         self.execute_observed(request).await.result
+    }
+
+    pub(crate) fn execute_blocking(
+        &self,
+        request: EdtSessionRequest,
+    ) -> Result<EdtSessionResponse, EdtSessionError> {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return Err(EdtSessionError::InternalFailure {
+                message: "shared EDT blocking adapter cannot run inside an active Tokio runtime"
+                    .to_owned(),
+            });
+        }
+
+        let completion_wait_timeout = self.inner.shutdown_timeout;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| EdtSessionError::InternalFailure {
+                message: format!("failed to build shared EDT blocking runtime: {error}"),
+            })?;
+
+        let execution = runtime.block_on(async { self.execute_observed(request).await });
+        match execution.result {
+            Err(EdtSessionError::RunningCancelled) => {
+                if let Some(completion) = execution.completion {
+                    let completed = runtime.block_on(async {
+                        tokio::time::timeout(completion_wait_timeout, completion.wait())
+                            .await
+                            .is_ok()
+                    });
+                    if !completed {
+                        drop(runtime);
+                        self.shutdown().map_err(|error| EdtSessionError::InternalFailure {
+                            message: format!(
+                                "shared EDT running cancellation cleanup failed: {error}"
+                            ),
+                        })?;
+                    }
+                }
+                Err(EdtSessionError::RunningCancelled)
+            }
+            Err(EdtSessionError::RunningTimeout) => {
+                if let Some(completion) = execution.completion {
+                    let completed = runtime.block_on(async {
+                        tokio::time::timeout(completion_wait_timeout, completion.wait())
+                            .await
+                            .is_ok()
+                    });
+                    if !completed {
+                        drop(runtime);
+                        self.shutdown().map_err(|error| EdtSessionError::InternalFailure {
+                            message: format!("shared EDT running timeout cleanup failed: {error}"),
+                        })?;
+                    }
+                }
+                Err(EdtSessionError::RunningTimeout)
+            }
+            other => other,
+        }
+    }
+
+    pub(crate) fn has_live_session(&self) -> bool {
+        self.inner.active_pid.load(Ordering::SeqCst) != 0
     }
 
     pub(crate) async fn execute_observed(
@@ -185,7 +343,7 @@ impl EdtSessionManager {
             queue.push_back(queued.clone());
             let queue_depth = queue.len();
             drop(queue);
-            self.inner.telemetry.record_queue_depth(
+            self.inner.observer.record_queue_depth(
                 EdtQueueDepthAction::Enqueue,
                 queue_depth,
                 None,
@@ -211,8 +369,8 @@ impl EdtSessionManager {
                     Ok(true)
                 ) {
                     self.inner
-                        .telemetry
-                        .record_drain(EdtDrainTelemetryReason::Shutdown, 1);
+                        .observer
+                        .record_drain(EdtDrainReason::Shutdown, 1);
                 }
                 return Some(ObservedEdtExecution::ready(Err(
                     queued_shutdown_error.clone()
@@ -281,24 +439,9 @@ impl EdtSessionManager {
         self.inner.join_worker()
     }
 
-    #[cfg(test)]
-    fn with_factory(
+    fn with_factory_and_observer(
         factory: Arc<dyn SessionFactory>,
-        queue_capacity: usize,
-        shutdown_timeout: Duration,
-    ) -> Result<Self, EdtSessionError> {
-        Self::with_factory_and_telemetry(
-            factory,
-            Arc::new(EdtTelemetry::default()),
-            queue_capacity,
-            shutdown_timeout,
-            false,
-        )
-    }
-
-    fn with_factory_and_telemetry(
-        factory: Arc<dyn SessionFactory>,
-        telemetry: Arc<EdtTelemetry>,
+        observer: Arc<dyn EdtSessionObserver>,
         queue_capacity: usize,
         shutdown_timeout: Duration,
         prewarm: bool,
@@ -307,7 +450,7 @@ impl EdtSessionManager {
             queue: Mutex::new(VecDeque::new()),
             queue_ready: Condvar::new(),
             admission: Arc::new(Semaphore::new(queue_capacity.max(1))),
-            telemetry,
+            observer,
             shutdown_token: CancellationToken::new(),
             shutdown_started: AtomicBool::new(false),
             shutdown_timed_out: AtomicBool::new(false),
@@ -387,7 +530,7 @@ struct EdtSessionManagerInner {
     queue: Mutex<VecDeque<Arc<QueuedRequest>>>,
     queue_ready: Condvar,
     admission: Arc<Semaphore>,
-    telemetry: Arc<EdtTelemetry>,
+    observer: Arc<dyn EdtSessionObserver>,
     shutdown_token: CancellationToken,
     shutdown_started: AtomicBool,
     shutdown_timed_out: AtomicBool,
@@ -423,7 +566,7 @@ impl EdtSessionManagerInner {
         queue.remove(position);
         let queue_depth = queue.len();
         drop(queue);
-        self.telemetry.record_queue_depth(
+        self.observer.record_queue_depth(
             EdtQueueDepthAction::RemoveQueued,
             queue_depth,
             Some(reason),
@@ -440,7 +583,7 @@ impl EdtSessionManagerInner {
             if let Some(queued) = queue.pop_front() {
                 let queue_depth = queue.len();
                 drop(queue);
-                self.telemetry
+                self.observer
                     .record_queue_depth(EdtQueueDepthAction::Dequeue, queue_depth, None);
                 return Some(queued);
             }
@@ -462,7 +605,7 @@ impl EdtSessionManagerInner {
             };
             queue.drain(..).collect::<Vec<_>>()
         };
-        self.telemetry.record_queue_depth(
+        self.observer.record_queue_depth(
             EdtQueueDepthAction::Drain,
             0,
             Some(match reason {
@@ -470,10 +613,10 @@ impl EdtSessionManagerInner {
                 EdtSessionDrainReason::Shutdown => EdtQueueDepthReason::Shutdown,
             }),
         );
-        self.telemetry.record_drain(
+        self.observer.record_drain(
             match reason {
-                EdtSessionDrainReason::Restart => EdtDrainTelemetryReason::Restart,
-                EdtSessionDrainReason::Shutdown => EdtDrainTelemetryReason::Shutdown,
+                EdtSessionDrainReason::Restart => EdtDrainReason::Restart,
+                EdtSessionDrainReason::Shutdown => EdtDrainReason::Shutdown,
             },
             drained.len(),
         );
@@ -689,11 +832,12 @@ trait SessionFactory: Send + Sync {
 #[derive(Clone)]
 struct DefaultSessionFactory {
     config: AppConfig,
+    options: EdtSessionHostOptions,
 }
 
 impl DefaultSessionFactory {
-    fn new(config: AppConfig) -> Self {
-        Self { config }
+    fn new(config: AppConfig, options: EdtSessionHostOptions) -> Self {
+        Self { config, options }
     }
 }
 
@@ -707,20 +851,13 @@ impl SessionFactory for DefaultSessionFactory {
         })?;
         let request = InteractiveProcessRequest::new(location.path).with_args([
             "-data".to_owned(),
-            self.config
-                .work_path
-                .join("edt-workspace")
-                .display()
-                .to_string(),
+            self.options.workspace.display().to_string(),
         ]);
-        InteractiveProcessExecutor::spawn(
-            request,
-            Duration::from_millis(self.config.tools.edt_cli.startup_timeout_ms),
-        )
-        .map(|session| Box::new(session) as Box<dyn ManagedSession>)
-        .map_err(|error| EdtSessionError::StartupFailed {
-            message: error.to_string(),
-        })
+        InteractiveProcessExecutor::spawn(request, self.options.startup_timeout)
+            .map(|session| Box::new(session) as Box<dyn ManagedSession>)
+            .map_err(|error| EdtSessionError::StartupFailed {
+                message: error.to_string(),
+            })
     }
 
     fn pre_dispatch(
@@ -730,7 +867,7 @@ impl SessionFactory for DefaultSessionFactory {
     ) -> Result<(), EdtSessionError> {
         run_baseline_reset(
             session,
-            &self.config.work_path.join("edt-workspace"),
+            &self.options.workspace,
             request,
             BASELINE_RESET_TIMEOUT_CAP,
         )
@@ -748,7 +885,7 @@ fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactor
                 session = Some(new_session);
             }
             Err(_) => {
-                inner.telemetry.record_startup_failure();
+                inner.observer.record_startup_failure();
                 inner.active_pid.store(0, Ordering::SeqCst);
             }
         }
@@ -760,8 +897,8 @@ fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactor
                 reason: EdtSessionDrainReason::Shutdown,
             }));
             inner
-                .telemetry
-                .record_drain(EdtDrainTelemetryReason::Shutdown, 1);
+                .observer
+                .record_drain(EdtDrainReason::Shutdown, 1);
             inner.drain_pending(
                 EdtSessionError::DrainedByRestartOrShutdown {
                     reason: EdtSessionDrainReason::Shutdown,
@@ -793,7 +930,7 @@ fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactor
                 Err(error) => {
                     queued.state.release_queued();
                     queued.reply(Err(error));
-                    inner.telemetry.record_startup_failure();
+                    inner.observer.record_startup_failure();
                     inner.drain_pending(
                         EdtSessionError::DrainedByRestartOrShutdown {
                             reason: EdtSessionDrainReason::Restart,
@@ -822,7 +959,7 @@ fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactor
             ) {
                 if kill_and_drop_session(&mut session, inner.active_pid.as_ref()) {
                     inner
-                        .telemetry
+                        .observer
                         .record_restart(EdtRestartReason::BaselineFailure);
                 }
                 inner.drain_pending(
@@ -873,7 +1010,7 @@ fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactor
                 queued.reply(Err(EdtSessionError::RunningTimeout));
                 if kill_and_drop_session(&mut session, inner.active_pid.as_ref()) {
                     inner
-                        .telemetry
+                        .observer
                         .record_restart(EdtRestartReason::CommandTimeout);
                 }
                 inner.drain_pending(
@@ -890,7 +1027,7 @@ fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactor
                 }));
                 if kill_and_drop_session(&mut session, inner.active_pid.as_ref()) {
                     inner
-                        .telemetry
+                        .observer
                         .record_restart(EdtRestartReason::SessionFailure);
                 }
                 inner.drain_pending(
@@ -1085,6 +1222,10 @@ fn kill_process_group_by_pid(pid: u32) -> std::io::Result<()> {
     if pid == 0 {
         return Ok(());
     }
+    #[cfg(test)]
+    if kill_registered_test_session(pid) {
+        return Ok(());
+    }
     unsafe {
         let pgid = -(pid as i32);
         if libc::kill(pgid, libc::SIGKILL) != 0 {
@@ -1103,11 +1244,49 @@ fn kill_process_group_by_pid(_pid: u32) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
+fn test_session_kill_registry() -> &'static Mutex<HashMap<u32, Arc<AtomicBool>>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<u32, Arc<AtomicBool>>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(test)]
+fn register_test_session(pid: u32, killed: Arc<AtomicBool>) {
+    test_session_kill_registry()
+        .lock()
+        .expect("test session registry lock")
+        .insert(pid, killed);
+}
+
+#[cfg(test)]
+fn unregister_test_session(pid: u32) {
+    test_session_kill_registry()
+        .lock()
+        .expect("test session registry lock")
+        .remove(&pid);
+}
+
+#[cfg(test)]
+fn kill_registered_test_session(pid: u32) -> bool {
+    let Some(killed) = test_session_kill_registry()
+        .lock()
+        .expect("test session registry lock")
+        .get(&pid)
+        .cloned()
+    else {
+        return false;
+    };
+    killed.store(true, Ordering::SeqCst);
+    true
+}
+
+#[cfg(test)]
 mod tests {
     use super::{
         render_interactive_change_dir_command, render_interactive_probe_workdir_command,
-        run_baseline_reset, EdtSessionDrainReason, EdtSessionError, EdtSessionManager,
-        EdtSessionRequest, EdtSessionShutdownError, ManagedSession, SessionFactory,
+        run_baseline_reset, EdtDrainReason, EdtQueueDepthAction, EdtQueueDepthReason,
+        EdtRestartReason, EdtSessionDrainReason, EdtSessionError, EdtSessionManager,
+        EdtSessionObserver, EdtSessionRequest, EdtSessionShutdownError, ManagedSession,
+        SessionFactory,
     };
     use crate::platform::interactive::{
         InteractiveCommandOutput, InteractiveProcessError, ShutdownOutcome,
@@ -1234,7 +1413,7 @@ mod tests {
         commands: Arc<Mutex<Vec<String>>>,
         shutdowns: Arc<AtomicUsize>,
         behaviors: Mutex<VecDeque<CommandBehavior>>,
-        killed: AtomicBool,
+        killed: Arc<AtomicBool>,
     }
 
     impl FakeSession {
@@ -1244,12 +1423,88 @@ mod tests {
             shutdowns: Arc<AtomicUsize>,
             behaviors: Vec<CommandBehavior>,
         ) -> Self {
+            let killed = Arc::new(AtomicBool::new(false));
+            super::register_test_session(pid, killed.clone());
             Self {
                 pid,
                 commands,
                 shutdowns,
                 behaviors: Mutex::new(behaviors.into()),
-                killed: AtomicBool::new(false),
+                killed,
+            }
+        }
+    }
+
+    impl Drop for FakeSession {
+        fn drop(&mut self) {
+            super::unregister_test_session(self.pid);
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct ObserverSnapshot {
+        queue_depth: usize,
+        max_queue_depth: usize,
+        startup_failure_total: u64,
+        restart_total: u64,
+        drain_restart_total: u64,
+        drain_shutdown_total: u64,
+        last_drained_jobs: usize,
+    }
+
+    #[derive(Default)]
+    struct RecordingObserver {
+        queue_depth: AtomicUsize,
+        max_queue_depth: AtomicUsize,
+        startup_failure_total: AtomicUsize,
+        restart_total: AtomicUsize,
+        drain_restart_total: AtomicUsize,
+        drain_shutdown_total: AtomicUsize,
+        last_drained_jobs: AtomicUsize,
+    }
+
+    impl RecordingObserver {
+        fn snapshot(&self) -> ObserverSnapshot {
+            ObserverSnapshot {
+                queue_depth: self.queue_depth.load(Ordering::SeqCst),
+                max_queue_depth: self.max_queue_depth.load(Ordering::SeqCst),
+                startup_failure_total: self.startup_failure_total.load(Ordering::SeqCst) as u64,
+                restart_total: self.restart_total.load(Ordering::SeqCst) as u64,
+                drain_restart_total: self.drain_restart_total.load(Ordering::SeqCst) as u64,
+                drain_shutdown_total: self.drain_shutdown_total.load(Ordering::SeqCst) as u64,
+                last_drained_jobs: self.last_drained_jobs.load(Ordering::SeqCst),
+            }
+        }
+    }
+
+    impl EdtSessionObserver for RecordingObserver {
+        fn record_queue_depth(
+            &self,
+            _action: EdtQueueDepthAction,
+            queue_depth: usize,
+            _reason: Option<EdtQueueDepthReason>,
+        ) {
+            self.queue_depth.store(queue_depth, Ordering::SeqCst);
+            self.max_queue_depth.fetch_max(queue_depth, Ordering::SeqCst);
+        }
+
+        fn record_startup_failure(&self) {
+            self.startup_failure_total.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn record_restart(&self, _reason: EdtRestartReason) {
+            self.restart_total.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn record_drain(&self, reason: EdtDrainReason, drained_jobs: usize) {
+            self.last_drained_jobs.store(drained_jobs, Ordering::SeqCst);
+            match reason {
+                EdtDrainReason::Restart => {
+                    self.drain_restart_total.fetch_add(1, Ordering::SeqCst);
+                }
+                EdtDrainReason::Shutdown => {
+                    self.drain_shutdown_total.fetch_add(1, Ordering::SeqCst);
+                }
             }
         }
     }
@@ -1312,7 +1567,16 @@ mod tests {
                     stderr,
                 } => {
                     if delay > timeout {
-                        thread::sleep(timeout + Duration::from_millis(5));
+                        if sleep_until_finished_or_killed(
+                            self.killed.as_ref(),
+                            timeout + Duration::from_millis(5),
+                        ) {
+                            return Err(InteractiveProcessError::ProcessExited {
+                                exit_code: 9,
+                                stdout: String::new(),
+                                stderr: String::new(),
+                            });
+                        }
                         Err(InteractiveProcessError::CommandTimeout {
                             command: command.to_owned(),
                             timeout_ms: timeout.as_millis() as u64,
@@ -1320,12 +1584,24 @@ mod tests {
                             stderr: String::new(),
                         })
                     } else {
-                        thread::sleep(delay);
+                        if sleep_until_finished_or_killed(self.killed.as_ref(), delay) {
+                            return Err(InteractiveProcessError::ProcessExited {
+                                exit_code: 9,
+                                stdout: String::new(),
+                                stderr: String::new(),
+                            });
+                        }
                         Ok(InteractiveCommandOutput { stdout, stderr })
                     }
                 }
                 CommandBehavior::FatalProcessExitAfter { delay } => {
-                    thread::sleep(delay);
+                    if sleep_until_finished_or_killed(self.killed.as_ref(), delay) {
+                        return Err(InteractiveProcessError::ProcessExited {
+                            exit_code: 9,
+                            stdout: String::new(),
+                            stderr: String::new(),
+                        });
+                    }
                     Err(InteractiveProcessError::ProcessExited {
                         exit_code: 17,
                         stdout: String::new(),
@@ -1349,23 +1625,54 @@ mod tests {
         }
     }
 
+    fn sleep_until_finished_or_killed(killed: &AtomicBool, total: Duration) -> bool {
+        let start = Instant::now();
+        loop {
+            if killed.load(Ordering::SeqCst) {
+                return true;
+            }
+            let elapsed = start.elapsed();
+            if elapsed >= total {
+                return killed.load(Ordering::SeqCst);
+            }
+            let remaining = total.saturating_sub(elapsed);
+            thread::sleep(remaining.min(Duration::from_millis(5)));
+        }
+    }
+
     fn manager(
         factory: impl SessionFactory + 'static,
         capacity: usize,
         shutdown: Duration,
     ) -> EdtSessionManager {
-        EdtSessionManager::with_factory(Arc::new(factory), capacity, shutdown)
-            .expect("create edt session manager")
+        manager_with_observer(factory, Arc::new(RecordingObserver::default()), capacity, shutdown).0
     }
 
     fn queued_len(manager: &EdtSessionManager) -> usize {
         manager.inner.queue.lock().expect("queue lock").len()
     }
 
-    fn telemetry_snapshot(
-        manager: &EdtSessionManager,
-    ) -> crate::mcp::telemetry::EdtTelemetrySnapshot {
-        manager.inner.telemetry.snapshot()
+    fn manager_with_observer(
+        factory: impl SessionFactory + 'static,
+        observer: Arc<RecordingObserver>,
+        capacity: usize,
+        shutdown: Duration,
+    ) -> (EdtSessionManager, Arc<RecordingObserver>) {
+        (
+            EdtSessionManager::with_factory_and_observer(
+                Arc::new(factory),
+                observer.clone(),
+                capacity,
+                shutdown,
+                false,
+            )
+            .expect("create edt session manager"),
+            observer,
+        )
+    }
+
+    fn observer_snapshot(observer: &Arc<RecordingObserver>) -> ObserverSnapshot {
+        observer.snapshot()
     }
 
     fn request(command: &str, after_ms: u64) -> EdtSessionRequest {
@@ -1575,7 +1882,12 @@ mod tests {
             workspace.clone(),
             Duration::from_millis(30),
         );
-        let manager = manager(factory, 2, Duration::from_millis(100));
+        let (manager, observer) = manager_with_observer(
+            factory,
+            Arc::new(RecordingObserver::default()),
+            2,
+            Duration::from_millis(100),
+        );
 
         let first = tokio::spawn({
             let manager = manager.clone();
@@ -1607,7 +1919,7 @@ mod tests {
             "fresh"
         );
         assert_eq!(inner.start_count(), 2);
-        let telemetry = telemetry_snapshot(&manager);
+        let telemetry = observer_snapshot(&observer);
         assert_eq!(telemetry.restart_total, 1);
         assert_eq!(telemetry.drain_restart_total, 1);
         assert_eq!(telemetry.last_drained_jobs, 1);
@@ -1650,7 +1962,12 @@ mod tests {
                 stderr: String::new(),
             },
         ])]);
-        let manager = manager(factory.clone(), 2, Duration::from_millis(100));
+        let (manager, observer) = manager_with_observer(
+            factory.clone(),
+            Arc::new(RecordingObserver::default()),
+            2,
+            Duration::from_millis(100),
+        );
 
         let running = tokio::spawn({
             let manager = manager.clone();
@@ -1688,7 +2005,7 @@ mod tests {
             factory.commands(),
             vec!["cmd-1".to_owned(), "cmd-3".to_owned()]
         );
-        let telemetry = telemetry_snapshot(&manager);
+        let telemetry = observer_snapshot(&observer);
         assert_eq!(telemetry.queue_depth, 0);
         assert_eq!(telemetry.max_queue_depth, 1);
         assert_eq!(telemetry.restart_total, 0);
@@ -1708,7 +2025,12 @@ mod tests {
                 stderr: String::new(),
             },
         ])]);
-        let manager = manager(factory.clone(), 2, Duration::from_millis(100));
+        let (manager, observer) = manager_with_observer(
+            factory.clone(),
+            Arc::new(RecordingObserver::default()),
+            2,
+            Duration::from_millis(100),
+        );
 
         let running = tokio::spawn({
             let manager = manager.clone();
@@ -1732,7 +2054,7 @@ mod tests {
             factory.commands(),
             vec!["cmd-1".to_owned(), "cmd-3".to_owned()]
         );
-        let telemetry = telemetry_snapshot(&manager);
+        let telemetry = observer_snapshot(&observer);
         assert_eq!(telemetry.queue_depth, 0);
         assert_eq!(telemetry.max_queue_depth, 1);
         assert_eq!(telemetry.restart_total, 0);
@@ -1987,6 +2309,75 @@ mod tests {
         assert!(execution.completion.is_none());
     }
 
+    #[test]
+    fn execute_blocking_returns_typed_error_inside_active_tokio_runtime() {
+        let factory = FakeSessionFactory::new(vec![SessionPlan::Session(vec![])]);
+        let manager = manager(factory, 1, Duration::from_millis(20));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        let error = runtime.block_on(async { manager.execute_blocking(request("cmd-1", 200)) });
+
+        assert!(matches!(
+            error,
+            Err(EdtSessionError::InternalFailure { ref message })
+                if message.contains("active Tokio runtime")
+        ));
+    }
+
+    #[test]
+    fn execute_blocking_running_cancellation_preserves_cancelled_result_after_forced_cleanup() {
+        let cancellation = CancellationToken::new();
+        let factory = FakeSessionFactory::new(vec![SessionPlan::Session(vec![
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(150),
+                stdout: "late".to_owned(),
+                stderr: String::new(),
+            },
+        ])]);
+        let manager = manager(factory.clone(), 1, Duration::from_millis(60));
+        let cancellation_thread = thread::spawn({
+            let cancellation = cancellation.clone();
+            let factory = factory.clone();
+            move || {
+                for _ in 0..50 {
+                    if !factory.commands().is_empty() {
+                        cancellation.cancel();
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+                panic!("timed out waiting for running shared EDT command");
+            }
+        });
+
+        let error =
+            manager.execute_blocking(request("cmd-1", 200).with_cancellation(cancellation));
+        cancellation_thread.join().expect("cancellation thread");
+
+        assert_eq!(error, Err(EdtSessionError::RunningCancelled));
+        assert!(!manager.has_live_session());
+    }
+
+    #[test]
+    fn execute_blocking_running_timeout_preserves_timeout_result_after_forced_cleanup() {
+        let factory = FakeSessionFactory::new(vec![SessionPlan::Session(vec![
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(150),
+                stdout: "late".to_owned(),
+                stderr: String::new(),
+            },
+        ])]);
+        let manager = manager(factory, 1, Duration::from_millis(60));
+
+        let error = manager.execute_blocking(request("cmd-1", 20));
+
+        assert_eq!(error, Err(EdtSessionError::RunningTimeout));
+        assert!(!manager.has_live_session());
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn running_timeout_forces_lazy_restart_and_drains_queued_calls() {
         let factory = FakeSessionFactory::new(vec![
@@ -2001,7 +2392,12 @@ mod tests {
                 stderr: String::new(),
             }]),
         ]);
-        let manager = manager(factory.clone(), 2, Duration::from_millis(100));
+        let (manager, observer) = manager_with_observer(
+            factory.clone(),
+            Arc::new(RecordingObserver::default()),
+            2,
+            Duration::from_millis(100),
+        );
 
         let first = tokio::spawn({
             let manager = manager.clone();
@@ -2034,7 +2430,7 @@ mod tests {
             "fresh"
         );
         assert_eq!(factory.start_count(), 2);
-        let telemetry = telemetry_snapshot(&manager);
+        let telemetry = observer_snapshot(&observer);
         assert_eq!(telemetry.restart_total, 1);
         assert_eq!(telemetry.drain_restart_total, 1);
         assert_eq!(telemetry.last_drained_jobs, 1);
@@ -2119,7 +2515,12 @@ mod tests {
                 stderr: String::new(),
             }]),
         ]);
-        let manager = manager(factory.clone(), 2, Duration::from_millis(100));
+        let (manager, observer) = manager_with_observer(
+            factory.clone(),
+            Arc::new(RecordingObserver::default()),
+            2,
+            Duration::from_millis(100),
+        );
 
         let first = tokio::spawn({
             let manager = manager.clone();
@@ -2153,7 +2554,7 @@ mod tests {
             "ok"
         );
         assert_eq!(factory.start_count(), 2);
-        let telemetry = telemetry_snapshot(&manager);
+        let telemetry = observer_snapshot(&observer);
         assert_eq!(telemetry.startup_failure_total, 1);
         assert_eq!(telemetry.restart_total, 0);
         assert_eq!(telemetry.drain_restart_total, 1);
@@ -2172,7 +2573,12 @@ mod tests {
                 stderr: String::new(),
             }]),
         ]);
-        let manager = manager(factory.clone(), 2, Duration::from_millis(100));
+        let (manager, observer) = manager_with_observer(
+            factory.clone(),
+            Arc::new(RecordingObserver::default()),
+            2,
+            Duration::from_millis(100),
+        );
 
         let first = tokio::spawn({
             let manager = manager.clone();
@@ -2205,7 +2611,7 @@ mod tests {
             "ok"
         );
         assert_eq!(factory.start_count(), 2);
-        let telemetry = telemetry_snapshot(&manager);
+        let telemetry = observer_snapshot(&observer);
         assert_eq!(telemetry.restart_total, 1);
         assert_eq!(telemetry.drain_restart_total, 1);
         assert_eq!(telemetry.last_drained_jobs, 1);
@@ -2225,7 +2631,12 @@ mod tests {
                 stderr: String::new(),
             },
         ])]);
-        let manager = manager(factory.clone(), 2, Duration::from_millis(200));
+        let (manager, observer) = manager_with_observer(
+            factory.clone(),
+            Arc::new(RecordingObserver::default()),
+            2,
+            Duration::from_millis(200),
+        );
 
         let running = tokio::spawn({
             let manager = manager.clone();
@@ -2247,7 +2658,7 @@ mod tests {
                 reason: EdtSessionDrainReason::Shutdown
             })
         );
-        let telemetry = telemetry_snapshot(&manager);
+        let telemetry = observer_snapshot(&observer);
         assert_eq!(telemetry.restart_total, 0);
         assert_eq!(telemetry.drain_shutdown_total, 1);
         assert_eq!(telemetry.last_drained_jobs, 1);

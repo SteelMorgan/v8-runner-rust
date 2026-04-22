@@ -264,7 +264,7 @@ v8-runner mcp serve http
 
 - Значение по умолчанию для `allExtensions` выводится из того, передан ли `extension`.
 - `checkUseSynchronousCalls` и `checkUseModality` отклоняются, когда `extendedModulesCheck=false`.
-- `check_syntax_edt` использует общую живую EDT-сессию только при `tools.edt_cli.interactive-mode=true`.
+- `check_syntax_edt` использует общую живую EDT-сессию при `tools.edt_cli.interactive-mode=true`; тот же shared EDT component используется CLI `init`, EDT export в `build` и CLI `syntax edt`.
 
 ### Особенности HTTP-транспорта
 

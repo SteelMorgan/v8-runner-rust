@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
@@ -9,6 +10,7 @@ use crate::platform::interactive::{
     InteractiveCommandExecution, InteractiveProcessError, InteractiveProcessExecutor,
     InteractiveProcessRequest,
 };
+use crate::platform::edt_session::{EdtSessionError, EdtSessionManager, EdtSessionRequest};
 use crate::platform::process::{
     ProcessError, ProcessExecutionPolicy, ProcessInterruptionReason, ProcessRequest, ProcessRunner,
 };
@@ -29,6 +31,9 @@ pub enum EdtError {
 
     #[error("failed to execute interactive edt process: {0}")]
     Interactive(InteractiveProcessError),
+
+    #[error("failed to execute shared edt session: {0}")]
+    SharedSession(EdtSessionError),
 }
 
 /// Low-level DSL for invoking `1cedtcli`.
@@ -55,6 +60,7 @@ impl<'a> EdtDsl<'a> {
     }
 
     /// Create a new interactive EDT DSL that keeps a long-lived `1cedtcli` process alive.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new_interactive(
         binary: PathBuf,
         workspace: PathBuf,
@@ -92,6 +98,33 @@ impl<'a> EdtDsl<'a> {
                 session: RefCell::new(session),
                 command_timeout,
                 shutdown_timeout: command_timeout.min(Duration::from_secs(5)),
+            },
+            timeout: None,
+            execution_policy: ProcessExecutionPolicy::default(),
+            budget_started_at: Instant::now(),
+        })
+    }
+
+    /// Create an EDT DSL over the shared interactive EDT actor.
+    pub fn new_shared_session(
+        binary: PathBuf,
+        workspace: PathBuf,
+        manager: Arc<EdtSessionManager>,
+        startup_timeout: Duration,
+        command_timeout: Duration,
+    ) -> Result<Self, EdtError> {
+        std::fs::create_dir_all(&workspace).map_err(|source| EdtError::PrepareWorkspace {
+            path: workspace.clone(),
+            source,
+        })?;
+
+        Ok(Self {
+            binary,
+            workspace,
+            backend: EdtBackend::SharedSession {
+                manager,
+                startup_timeout,
+                command_timeout,
             },
             timeout: None,
             execution_policy: ProcessExecutionPolicy::default(),
@@ -281,6 +314,82 @@ impl<'a> EdtDsl<'a> {
                     interruption,
                 }
             }
+            EdtBackend::SharedSession {
+                manager,
+                startup_timeout,
+                command_timeout,
+            } => {
+                if !manager.has_live_session() {
+                    manager
+                        .execute_blocking(
+                            EdtSessionRequest::new(
+                                render_interactive_change_dir_command(&self.workspace),
+                                Instant::now() + *startup_timeout,
+                            )
+                            .with_cancellation(self.execution_policy.cancellation.clone()),
+                        )
+                        .map_err(|error| {
+                            map_shared_session_error(
+                                &self.binary,
+                                &self.workspace,
+                                &render_interactive_change_dir_command(&self.workspace),
+                                error,
+                                *startup_timeout,
+                            )
+                        })?;
+                }
+                let effective_timeout = match (
+                    self.remaining_budget_cap(self.timeout),
+                    self.remaining_budget_cap(self.execution_policy.timeout),
+                ) {
+                    (Some(timeout), Some(cap)) => timeout.min(cap),
+                    (Some(timeout), None) => timeout,
+                    (None, Some(cap)) => (*command_timeout).min(cap),
+                    (None, None) => *command_timeout,
+                };
+                debug!(
+                    workspace = %self.workspace.display(),
+                    command = interactive_command,
+                    timeout_ms = effective_timeout.as_millis() as u64,
+                    "running shared edt command"
+                );
+                let output = manager
+                    .execute_blocking(
+                        EdtSessionRequest::new(
+                            interactive_command.to_owned(),
+                            Instant::now() + effective_timeout,
+                        )
+                        .with_cancellation(self.execution_policy.cancellation.clone()),
+                    )
+                    .map_err(|error| {
+                        map_shared_session_error(
+                            &self.binary,
+                            &self.workspace,
+                            interactive_command,
+                            error,
+                            effective_timeout,
+                        )
+                    })?;
+                debug!(
+                    workspace = %self.workspace.display(),
+                    command = interactive_command,
+                    stdout = render_interactive_output_for_log(&output.stdout),
+                    stderr = render_interactive_output_for_log(&output.stderr),
+                    "shared edt command finished"
+                );
+                let exit_code =
+                    if output_indicates_interactive_command_error(&output.stdout, &output.stderr) {
+                        1
+                    } else {
+                        0
+                    };
+                crate::platform::process::ProcessResult {
+                    exit_code,
+                    stdout: output.stdout,
+                    stderr: output.stderr,
+                    interruption: None,
+                }
+            }
         };
 
         let (platform_log_path, platform_log, platform_log_read_error) = if let Some(path) = out_log
@@ -335,6 +444,29 @@ fn map_interactive_command_error(
     }
 }
 
+fn map_shared_session_error(
+    binary: &Path,
+    workspace: &Path,
+    command: &str,
+    error: EdtSessionError,
+    timeout: Duration,
+) -> EdtError {
+    match error {
+        EdtSessionError::QueuedCancelled | EdtSessionError::RunningCancelled => {
+            EdtError::Spawn(ProcessError::Cancelled {
+                cmd: render_interactive_session_command(binary, workspace, command),
+            })
+        }
+        EdtSessionError::QueuedTimeout | EdtSessionError::RunningTimeout => {
+            EdtError::Spawn(ProcessError::TimedOut {
+                cmd: render_interactive_session_command(binary, workspace, command),
+                timeout_ms: timeout.as_millis() as u64,
+            })
+        }
+        other => EdtError::SharedSession(other),
+    }
+}
+
 fn process_error_from_interruption(
     binary: &Path,
     workspace: &Path,
@@ -355,18 +487,27 @@ fn process_error_from_interruption(
 
 impl Drop for EdtDsl<'_> {
     fn drop(&mut self) {
-        if let EdtBackend::Interactive {
-            session,
-            shutdown_timeout,
-            ..
-        } = &self.backend
-        {
-            debug!(
-                workspace = %self.workspace.display(),
-                timeout_ms = shutdown_timeout.as_millis() as u64,
-                "shutting down interactive edt session"
-            );
-            let _ = session.borrow_mut().shutdown(*shutdown_timeout);
+        match &self.backend {
+            EdtBackend::Interactive {
+                session,
+                shutdown_timeout,
+                ..
+            } => {
+                debug!(
+                    workspace = %self.workspace.display(),
+                    timeout_ms = shutdown_timeout.as_millis() as u64,
+                    "shutting down interactive edt session"
+                );
+                let _ = session.borrow_mut().shutdown(*shutdown_timeout);
+            }
+            EdtBackend::SharedSession { manager, .. } if Arc::strong_count(manager) == 1 => {
+                debug!(
+                    workspace = %self.workspace.display(),
+                    "shutting down shared edt session manager owned by edt dsl"
+                );
+                let _ = manager.shutdown();
+            }
+            _ => {}
         }
     }
 }
@@ -375,10 +516,16 @@ enum EdtBackend<'a> {
     OneShot {
         runner: &'a dyn ProcessRunner,
     },
+    #[cfg_attr(not(test), allow(dead_code))]
     Interactive {
         session: RefCell<InteractiveProcessExecutor>,
         command_timeout: Duration,
         shutdown_timeout: Duration,
+    },
+    SharedSession {
+        manager: Arc<EdtSessionManager>,
+        startup_timeout: Duration,
+        command_timeout: Duration,
     },
 }
 
@@ -515,6 +662,11 @@ mod tests {
         render_interactive_change_dir_command, render_interactive_probe_workdir_command,
         render_interactive_validate_command, EdtDsl, EdtError, INTERACTIVE_EDT_ERROR_MARKER,
     };
+    use crate::config::model::{
+        AppConfig, BuildConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
+        TestsConfig, ToolsConfig,
+    };
+    use crate::platform::edt_session::{EdtSessionHostOptions, EdtSessionManager};
     use crate::platform::process::{
         ProcessError, ProcessExecutionPolicy, ProcessExecutor, ProcessInterruptionAction,
         ProcessInterruptionReason, ProcessInterruptionSafety, ProcessRequest, ProcessResult,
@@ -544,6 +696,79 @@ mod tests {
         }
         fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write script");
         make_executable(path);
+    }
+
+    #[cfg(unix)]
+    fn write_shared_interactive_script(path: &Path, command_log: &Path) {
+        let body = format!(
+            "set -eu\n\
+             prompt() {{ printf '1C:EDT>'; }}\n\
+             current_dir=\"\"\n\
+             prev=\"\"\n\
+             for arg in \"$@\"; do\n\
+               if [ \"$prev\" = \"-data\" ]; then current_dir=\"$arg\"; fi\n\
+               prev=\"$arg\"\n\
+             done\n\
+             printf 'START\\n' >> '{}'\n\
+             trap 'printf \"EXIT\\\\n\" >> \"{}\"' EXIT\n\
+             prompt\n\
+             while IFS= read -r line; do\n\
+               printf '%s\\n' \"$line\" >> '{}'\n\
+               eval \"set -- $line\"\n\
+               cmd=\"${{1:-}}\"\n\
+               if [ \"$#\" -gt 0 ]; then shift; fi\n\
+               case \"$cmd\" in\n\
+                 cd)\n\
+                   if [ \"$#\" -eq 0 ]; then\n\
+                     printf '%s\\n' \"$current_dir\"\n\
+                   else\n\
+                     current_dir=\"$1\"\n\
+                   fi\n\
+                   prompt\n\
+                   ;;\n\
+                 export|import|validate)\n\
+                   prompt\n\
+                   ;;\n\
+                 *)\n\
+                   prompt\n\
+                   ;;\n\
+               esac\n\
+             done\n",
+            command_log.display(),
+            command_log.display(),
+            command_log.display()
+        );
+        write_script(path, &body);
+    }
+
+    fn sample_shared_config(base_path: &Path, work_path: &Path, edt_cli_path: &Path) -> AppConfig {
+        AppConfig {
+            base_path: base_path.to_path_buf(),
+            work_path: work_path.to_path_buf(),
+            execution_timeout: 300_000,
+            format: SourceFormat::Edt,
+            builder: BuilderBackend::Designer,
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
+            source_sets: vec![SourceSetConfig {
+                name: "main".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: PathBuf::from("main"),
+            }],
+            build: BuildConfig::default(),
+            tools: ToolsConfig {
+                platform: Default::default(),
+                enterprise: Default::default(),
+                edt_cli: crate::config::model::EdtCliConfig {
+                    path: Some(edt_cli_path.to_path_buf()),
+                    interactive_mode: true,
+                    startup_timeout_ms: 500,
+                    command_timeout_ms: 200,
+                    ..Default::default()
+                },
+            },
+            mcp: Default::default(),
+            tests: TestsConfig::default(),
+        }
     }
 
     #[cfg(unix)]
@@ -803,6 +1028,55 @@ mod tests {
         assert!(commands.contains("export --project-name project --configuration-files /tmp/out"));
         assert!(commands.contains("import --project /tmp/project"));
         assert!(!commands.contains("-command"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shared_session_drop_does_not_shutdown_other_manager_owner() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("1cedtcli");
+        let command_log = dir.path().join("commands.log");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        fs::create_dir_all(base.join("main")).expect("source dir");
+        write_shared_interactive_script(&script, &command_log);
+        let config = sample_shared_config(&base, &work, &script);
+        let manager = Arc::new(
+            EdtSessionManager::for_config(&config, EdtSessionHostOptions::for_cli_command(&config))
+                .expect("manager"),
+        );
+        let workspace = work.join("edt-workspace");
+
+        let first = EdtDsl::new_shared_session(
+            script.clone(),
+            workspace.clone(),
+            manager.clone(),
+            Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
+            Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
+        )
+        .expect("first dsl");
+        let second = EdtDsl::new_shared_session(
+            script,
+            workspace,
+            manager,
+            Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
+            Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
+        )
+        .expect("second dsl");
+
+        first
+            .import_project(Path::new("/tmp/first-project"))
+            .expect("first import");
+        drop(first);
+
+        second
+            .import_project(Path::new("/tmp/second-project"))
+            .expect("second import");
+
+        let commands = fs::read_to_string(command_log).expect("command log");
+        assert_eq!(commands.matches("START").count(), 1);
+        assert!(commands.contains("import --project /tmp/first-project"));
+        assert!(commands.contains("import --project /tmp/second-project"));
     }
 
     #[cfg(unix)]

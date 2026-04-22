@@ -19,7 +19,6 @@
 
 - `ADR-0012`: `SourceSetsService` уже создает два context-а для EDT (`edt-*` и `designer-*`), но `run_build_edt` принимает load-решение по EDT-анализу до export. Generated Designer context после успешного EDT export не анализируется, partial load для EDT flow не используется, а `designer-*` snapshot коммитится через EDT `StepCommit`.
 - `ADR-0014`: общего command-level `execution_timeout`/deadline/cancellation context нет. `ExecutionContext` несет только EDT subprocess timeout, а MCP `server.rs` имеет отдельную bounded-модель и ранний running cancel/timeout response.
-- `ADR-0007`: shared EDT actor живет в `src/mcp/edt_session.rs`; CLI/use-case path при `interactive_mode=true` напрямую создает `EdtDsl::new_interactive`, то есть сохраняет non-shared interactive path.
 - `ADR-0018`: `docs/architecture/invariants.md` уже описывает `infobase.*` как supported contract, но `AppConfig`, `config init`, примеры и тестовые YAML продолжают использовать top-level `connection`/`credentials`; `IbcmdConnection` по-прежнему отклоняет server connection.
 - `ADR-0016`: `ExecutionOutcome<T>` есть, но `ExecutionStatus::Cancelled` отсутствует, `StepResult` остается минимальным, а MCP/CLI mapping всё еще опирается на command-specific top-level поля.
 - Guardrails частичные: есть `tests/use_case_boundaries.rs`, но он проверяет только небольшой список use-case файлов и не ловит, например, production-зависимость `src/use_cases/result.rs` от `crate::output::exit_codes`.
@@ -68,11 +67,11 @@
 
    Объем: перенести shared EDT actor/manager из MCP-only boundary в `src/platform` или общий execution слой. MCP обращается к нему только через controller/DTO/presenter boundary и не содержит собственной execution-логики. Прямое создание non-shared interactive `1cedtcli` sessions в CLI use cases устраняется.
 
-   Затронутые области: `src/use_cases/init_project.rs`, `src/use_cases/build_project.rs`, `src/use_cases/check_syntax.rs`, `src/mcp/edt_session.rs`, `src/platform/edt.rs`, `src/platform/interactive.rs`.
+   Затронутые области: `src/use_cases/init_project.rs`, `src/use_cases/build_project.rs`, `src/use_cases/check_syntax.rs`, `src/platform/edt_session.rs`, `src/platform/edt.rs`, `src/platform/interactive.rs`, `src/mcp/edt_syntax.rs`, `src/mcp/server.rs`.
 
    Готово, когда: `tools.edt_cli.interactive_mode=false` использует one-shot execution; `true` маршрутизирует поддержанные EDT-сценарии через shared actor/manager; tests проверяют отсутствие третьего публичного execution path, baseline reset/probe, restart and drain semantics.
 
-   Сверка 2026-04-22: gap подтвержден: `src/mcp/edt_session.rs` прямо описан как actor reserved for MCP, а CLI/use-case файлы создают `EdtDsl::new_interactive` напрямую.
+   Сверка 2026-04-22: выполнено: shared EDT actor/manager вынесен в `src/platform/edt_session.rs`, MCP использует его через thin adapter/boundary, а CLI `init`, EDT export в `build` и CLI `syntax edt` больше не создают `EdtDsl::new_interactive` в production path. Добавлены проверки на one-shot при `interactive_mode=false`, lazy CLI semantics при `auto_start=true`, reuse shared session и сохранение MCP queued/running timeout-cancel contract.
 
 5. `ADR-TASK-011`: Согласовать `ADR-0010` с backlog и целевой CLI output policy.
 
@@ -213,7 +212,7 @@
 | `ADR-0004` | Locator реализован, но ADR требует сопровождать mask behavior regression tests. | `ADR-TASK-009` |
 | `ADR-0005` | MCP surface не должен меняться неявно. | `ADR-TASK-010` |
 | `ADR-0006` | Use case layer остается transport-neutral. | `ADR-TASK-007`, `ADR-TASK-010` |
-| `ADR-0007` | Non-shared interactive EDT in CLI is documented implementation gap. | `ADR-TASK-004` |
+| `ADR-0007` | Shared EDT actor/manager вынесен в общий execution слой; direct non-shared interactive CLI path закрыт `2026-04-22`. | Закрыто `ADR-TASK-004` |
 | `ADR-0008` | Граница platform DSL требует постоянных guardrails. | `ADR-TASK-010` |
 | `ADR-0009` | Business/runtime failure split реализован как contract и требует защиты при добавлении новых tools. | `ADR-TASK-010` |
 | `ADR-0010` | Для CLI output зафиксирована единая high-signal policy без отдельной audience-оси; открытой остаётся только реализация rendering rules. | `ADR-TASK-007` |
@@ -228,8 +227,8 @@
 
 ## Следующий рекомендуемый порядок
 
-1. `ADR-TASK-011` закрыт 2026-04-22: output backlog больше не противоречит accepted `ADR-0010`.
-2. Затем закрыть `ADR-TASK-002`, потому что это конкретное runtime-расхождение с accepted ADR по EDT flow.
-3. Сразу после этого брать `ADR-TASK-008`: это уже не просто migration gap, а активное расхождение кода и public docs с accepted `ADR-0018`.
-4. После этого планировать `ADR-TASK-003` как отдельный крупный этап: он затрагивает CLI, MCP, process execution и доменную модель результата.
-5. Затем брать `ADR-TASK-004`, чтобы убрать оставшийся non-shared interactive EDT path из CLI.
+1. Следующим брать `ADR-TASK-005`: это главный открытый follow-up по atomic publication после закрытия transport/execution и shared EDT задач.
+2. Затем `ADR-TASK-006`, чтобы довести `ExecutionOutcome<T>` и step contract до целевого canonical state.
+3. После этого `ADR-TASK-007`: применить agreed CLI output policy как единый high-signal contract для человека и AI-агента.
+4. Дальше `ADR-TASK-009`, чтобы усилить regression coverage platform locator и mask selection для `ibcmd`.
+5. Затем `ADR-TASK-010` и CI wiring из `spec/REAL_ENV_TEST_PLAN.md` как следующий слой архитектурных guardrails и delivery automation.

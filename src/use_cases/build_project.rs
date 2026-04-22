@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -14,6 +15,7 @@ use crate::domain::build::{BuildMode, BuildResult, BuildStep};
 use crate::domain::source_set::SourceSetContext;
 use crate::platform::designer::DesignerDsl;
 use crate::platform::edt::EdtDsl;
+use crate::platform::edt_session::{EdtSessionHostOptions, EdtSessionManager};
 use crate::platform::ibcmd::{DynamicUpdateMode, IbcmdConnection, IbcmdDsl, IbcmdError};
 use crate::platform::locator::UtilityType;
 use crate::platform::process::ProcessRunner;
@@ -991,18 +993,42 @@ fn run_build_edt(
             let export_result = if config.tools.edt_cli.interactive_mode {
                 if interactive_edt.is_none() {
                     interactive_edt = Some(
-                        match EdtDsl::new_interactive(
-                            edt.clone(),
-                            config.work_path.join("edt-workspace"),
-                            Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
-                            Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
+                        match EdtSessionManager::for_config(
+                            config,
+                            EdtSessionHostOptions::for_cli_command(config),
                         ) {
-                            Ok(dsl) => {
-                                dsl.with_execution_policy(context.process_policy(
-                                    InterruptionSafetyClass::GracefulThenKill,
-                                    None,
-                                ))
-                            }
+                            Ok(manager) => match EdtDsl::new_shared_session(
+                                edt.clone(),
+                                config.work_path.join("edt-workspace"),
+                                Arc::new(manager),
+                                Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
+                                Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
+                            ) {
+                                Ok(dsl) => {
+                                    dsl.with_execution_policy(context.process_policy(
+                                        InterruptionSafetyClass::GracefulThenKill,
+                                        None,
+                                    ))
+                                }
+                                Err(error) => {
+                                    let app_error = AppError::Platform(error.to_string());
+                                    let result = fail_with_remaining_steps(
+                                        started,
+                                        steps,
+                                        ordered_source_sets
+                                            .iter()
+                                            .skip(index)
+                                            .copied()
+                                            .collect::<Vec<_>>(),
+                                        source_set,
+                                        BuildMode::EdtExport,
+                                        app_error.to_string(),
+                                    );
+                                    return Err(BuildExecutionFailure::with_payload(
+                                        app_error, result,
+                                    ));
+                                }
+                            },
                             Err(error) => {
                                 let app_error = AppError::Platform(error.to_string());
                                 let result = fail_with_remaining_steps(
@@ -1184,16 +1210,42 @@ fn run_build_edt(
                 let export_result = if config.tools.edt_cli.interactive_mode {
                     if interactive_edt.is_none() {
                         interactive_edt = Some(
-                            match EdtDsl::new_interactive(
-                                edt.clone(),
-                                config.work_path.join("edt-workspace"),
-                                Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
-                                Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
+                            match EdtSessionManager::for_config(
+                                config,
+                                EdtSessionHostOptions::for_cli_command(config),
                             ) {
-                                Ok(dsl) => dsl.with_execution_policy(context.process_policy(
-                                    InterruptionSafetyClass::GracefulThenKill,
-                                    None,
-                                )),
+                                Ok(manager) => match EdtDsl::new_shared_session(
+                                    edt.clone(),
+                                    config.work_path.join("edt-workspace"),
+                                    Arc::new(manager),
+                                    Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
+                                    Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
+                                ) {
+                                    Ok(dsl) => dsl.with_execution_policy(
+                                        context.process_policy(
+                                            InterruptionSafetyClass::GracefulThenKill,
+                                            None,
+                                        ),
+                                    ),
+                                    Err(error) => {
+                                        let app_error = AppError::Platform(error.to_string());
+                                        let result = fail_with_remaining_steps(
+                                            started,
+                                            steps,
+                                            ordered_source_sets
+                                                .iter()
+                                                .skip(index)
+                                                .copied()
+                                                .collect::<Vec<_>>(),
+                                            source_set,
+                                            BuildMode::EdtExport,
+                                            app_error.to_string(),
+                                        );
+                                        return Err(BuildExecutionFailure::with_payload(
+                                            app_error, result,
+                                        ));
+                                    }
+                                },
                                 Err(error) => {
                                     let app_error = AppError::Platform(error.to_string());
                                     let result = fail_with_remaining_steps(
@@ -2185,6 +2237,12 @@ mod tests {
         let body = format!(
             "set -eu\n\
              prompt() {{ printf '1C:EDT>'; }}\n\
+             current_dir=\"\"\n\
+             prev=\"\"\n\
+             for arg in \"$@\"; do\n\
+               if [ \"$prev\" = \"-data\" ]; then current_dir=\"$arg\"; fi\n\
+               prev=\"$arg\"\n\
+             done\n\
              printf 'START\\n' >> '{}'\n\
              trap 'printf \"EXIT\\\\n\" >> \"{}\"' EXIT\n\
              prompt\n\
@@ -2195,6 +2253,11 @@ mod tests {
                if [ \"$#\" -gt 0 ]; then shift; fi\n\
                case \"$cmd\" in\n\
                  cd)\n\
+                   if [ \"$#\" -eq 0 ]; then\n\
+                     printf '%s\\n' \"$current_dir\"\n\
+                   else\n\
+                     current_dir=\"$1\"\n\
+                   fi\n\
                    prompt\n\
                    ;;\n\
                  export)\n\
