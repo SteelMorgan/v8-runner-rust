@@ -288,6 +288,65 @@ fn setup_edt_ibcmd_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     (dir, config_path, ibcmd_calls_log, edt_calls_log)
 }
 
+fn setup_edt_extension_project() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let dir = tempdir().expect("tempdir");
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    let config_path = dir.path().join("v8project.yaml");
+    let platform_path = dir.path().join("platform").join("bin").join("1cv8");
+    let edt_cli_path = dir.path().join("edt").join("1cedtcli");
+    let edt_calls_log = dir.path().join("edt-calls.log");
+
+    fs::create_dir_all(base_path.join("configuration").join("Catalogs.Items")).expect("base");
+    fs::create_dir_all(base_path.join("exts").join("client-mcp")).expect("ext");
+    fs::create_dir_all(&work_path).expect("work");
+    fs::write(
+        base_path.join("configuration").join(".project"),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>configuration</name>\n</projectDescription>\n",
+    )
+    .expect("configuration project");
+    fs::write(
+        base_path
+            .join("configuration")
+            .join("Catalogs.Items")
+            .join("ObjectModule.bsl"),
+        "procedure Test() endprocedure",
+    )
+    .expect("configuration bsl");
+    fs::write(
+        base_path
+            .join("configuration")
+            .join("Catalogs.Items")
+            .join("ObjectModule.xml"),
+        "<MetaDataObject />",
+    )
+    .expect("configuration xml");
+    fs::write(
+        base_path.join("exts").join("client-mcp").join(".project"),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>client_mcp</name>\n</projectDescription>\n",
+    )
+    .expect("extension project");
+    fs::write(
+        base_path.join("exts").join("client-mcp").join("Module.bsl"),
+        "procedure Test() endprocedure",
+    )
+    .expect("extension bsl");
+
+    write_build_script(&platform_path, None);
+    write_edt_script(&edt_cli_path, &edt_calls_log);
+
+    let config = format!(
+        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: configuration\n    type: CONFIGURATION\n    path: configuration\n  - name: client_mcp\n    type: EXTENSION\n    path: exts/client-mcp\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n",
+        base_path.display(),
+        work_path.display(),
+        platform_path.display(),
+        edt_cli_path.display(),
+    );
+    fs::write(&config_path, config).expect("config");
+
+    (dir, config_path, work_path)
+}
+
 #[test]
 fn build_json_failure_returns_step_payload() {
     let (_dir, config_path, binary_path, _work_path) = setup_project();
@@ -577,6 +636,62 @@ fn build_json_writes_action_log_file_without_polluting_stdout() {
     assert!(contents.contains("Изменения: найдено"));
     assert!(contents.contains("[Конфигуратор] Загрузка изменений в базу"));
     assert!(contents.contains("✓ partial load"));
+}
+
+#[test]
+fn build_json_edt_extension_uses_full_load_and_writes_platform_log() {
+    let (_dir, config_path, work_path) = setup_edt_extension_project();
+
+    let first = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "build",
+        ])
+        .output()
+        .expect("prime build");
+    assert!(first.status.success());
+
+    fs::write(
+        config_path
+            .parent()
+            .expect("config dir")
+            .join("project")
+            .join("exts")
+            .join("client-mcp")
+            .join("Module.bsl"),
+        "procedure Test()\n  // changed after snapshot\nendprocedure",
+    )
+    .expect("modify extension");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "build",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["data"]["ok"], true);
+
+    let platform_log = work_path
+        .join("logs")
+        .join("platform")
+        .join("build-01-client_mcp-load.log");
+    let contents = fs::read_to_string(platform_log).expect("platform log");
+    assert!(contents.contains("/LoadConfigFromFiles"));
+    assert!(contents.contains("-Extension client_mcp"));
+    assert!(!contents.contains("-partial"));
 }
 
 #[test]

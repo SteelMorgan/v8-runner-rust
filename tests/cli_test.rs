@@ -70,6 +70,14 @@ fn write_build_script(path: &Path, calls_log: &Path, fail: bool) {
     write_script(path, &body);
 }
 
+fn write_edt_script(path: &Path, calls_log: &Path) {
+    let body = format!(
+        "args=\"$*\"\ntarget=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--configuration-files\" ]; then target=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$target\" ]; then mkdir -p \"$target\"; printf '<Configuration />\\n' > \"$target/Configuration.xml\"; fi\nprintf '%s\\n' \"$args\" >> \"{}\"\nexit 0",
+        calls_log.display()
+    );
+    write_script(path, &body);
+}
+
 fn write_va_test_script(
     path: &Path,
     calls_log: &Path,
@@ -661,6 +669,122 @@ fn test_module_build_failure_prevents_enterprise_launch() {
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
     assert_eq!(payload["ok"], false);
     assert_eq!(payload["data"]["error_kind"], "build_failed");
+}
+
+#[test]
+fn test_module_edt_extension_build_uses_full_load_before_enterprise_launch() {
+    let dir = tempdir().expect("tempdir");
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    let install_dir = dir.path().join("platform");
+    let edt_cli_path = dir.path().join("edt").join("1cedtcli");
+    let config_path = dir.path().join("v8project.yaml");
+    let build_calls = dir.path().join("build.calls.log");
+    let test_calls = dir.path().join("test.calls.log");
+    let edt_calls = dir.path().join("edt.calls.log");
+    let captured_config = dir.path().join("captured-config.json");
+
+    fs::create_dir_all(base_path.join("configuration").join("Catalogs.Items"))
+        .expect("configuration");
+    fs::create_dir_all(base_path.join("exts").join("client-mcp")).expect("extension");
+    fs::create_dir_all(&work_path).expect("work");
+    fs::write(
+        base_path.join("configuration").join(".project"),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>configuration</name>\n</projectDescription>\n",
+    )
+    .expect("configuration project");
+    fs::write(
+        base_path
+            .join("configuration")
+            .join("Catalogs.Items")
+            .join("ObjectModule.bsl"),
+        "procedure Test() endprocedure",
+    )
+    .expect("configuration bsl");
+    fs::write(
+        base_path
+            .join("configuration")
+            .join("Catalogs.Items")
+            .join("ObjectModule.xml"),
+        "<MetaDataObject />",
+    )
+    .expect("configuration xml");
+    fs::write(
+        base_path.join("exts").join("client-mcp").join(".project"),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>client_mcp</name>\n</projectDescription>\n",
+    )
+    .expect("extension project");
+    fs::write(
+        base_path.join("exts").join("client-mcp").join("Module.bsl"),
+        "procedure Test() endprocedure",
+    )
+    .expect("extension bsl");
+
+    write_build_script(
+        &install_dir.join("bin").join("1cv8"),
+        &build_calls,
+        false,
+    );
+    write_test_script(
+        &install_dir.join("bin").join("1cv8c"),
+        &test_calls,
+        &captured_config,
+        JUNIT_SMOKE_REPORT_FIXTURE,
+        YAXUNIT_LOG_FIXTURE,
+        0,
+        None,
+    );
+    write_edt_script(&edt_cli_path, &edt_calls);
+
+    let config = format!(
+        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\ntests:\n  execution_timeout_seconds: 5\nsource-set:\n  - name: configuration\n    type: CONFIGURATION\n    path: configuration\n  - name: client_mcp\n    type: EXTENSION\n    path: exts/client-mcp\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n",
+        base_path.display(),
+        work_path.display(),
+        install_dir.display(),
+        edt_cli_path.display(),
+    );
+    fs::write(&config_path, config).expect("config");
+
+    let first = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args(["--config", &config_path.display().to_string(), "build"])
+        .output()
+        .expect("prime build");
+    assert!(first.status.success());
+
+    fs::write(
+        base_path.join("exts").join("client-mcp").join("Module.bsl"),
+        "procedure Test()\n  // changed after snapshot\nendprocedure",
+    )
+    .expect("modify extension");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "test",
+            "yaxunit",
+            "module",
+            "ClientMcpSmoke",
+        ])
+        .output()
+        .expect("run");
+
+    assert!(output.status.success());
+    let build_calls_text = fs::read_to_string(&build_calls).expect("build calls");
+    let edt_calls_text = fs::read_to_string(&edt_calls).expect("edt calls");
+    let test_calls_text = fs::read_to_string(&test_calls).expect("test calls");
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+
+    assert!(build_calls_text.contains("-Extension client_mcp"));
+    assert!(!build_calls_text.contains("-partial"));
+    assert!(edt_calls_text.contains("export --project-name client_mcp"));
+    assert!(test_calls_text.contains("RunUnitTests="));
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["data"]["target"]["module"]["name"], "ClientMcpSmoke");
 }
 
 #[test]

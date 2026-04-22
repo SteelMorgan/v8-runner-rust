@@ -1410,11 +1410,21 @@ fn run_build_edt(
                 }
                 Ok(AnalysisOutcome::Changes { changes, prepared }) => {
                     log_change_analysis(source_set.name.as_str(), &changes);
-                    match partial_load::decide(
-                        &changes,
-                        designer_context.path(),
-                        config.build.partial_load_threshold,
-                    ) {
+                    let generated_load_decision =
+                        if source_set.purpose == SourceSetPurpose::Extension {
+                            debug!(
+                                source_set = source_set.name.as_str(),
+                                "generated designer change analysis decision: forcing full load for EDT extension source-set"
+                            );
+                            LoadDecision::Full
+                        } else {
+                            partial_load::decide(
+                                &changes,
+                                designer_context.path(),
+                                config.build.partial_load_threshold,
+                            )
+                        };
+                    match generated_load_decision {
                         LoadDecision::Partial(paths) => {
                             debug!(
                                 source_set = source_set.name.as_str(),
@@ -1439,7 +1449,11 @@ fn run_build_edt(
                             );
                             StepPlan::Execute {
                                 mode: BuildMode::Full,
-                                message: "full load selected by partial-load rules".to_owned(),
+                                message: if source_set.purpose == SourceSetPurpose::Extension {
+                                    "full load required for EDT extension source-set".to_owned()
+                                } else {
+                                    "full load selected by partial-load rules".to_owned()
+                                },
                                 partial_paths: None,
                                 commit: StepCommit::Prepared(prepared),
                             }
@@ -2884,6 +2898,233 @@ mod tests {
 
         assert!(result.ok);
         assert!(edt_calls_text.contains("export --project-name client_mcp"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edt_extension_build_forces_full_load_after_incremental_export() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let platform_script = dir.path().join("platform").join("bin").join("1cv8");
+        let edt_script = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer-calls.log");
+        let edt_calls = dir.path().join("edt-calls.log");
+        fs::create_dir_all(base.join("exts").join("client-mcp")).expect("ext dir");
+        fs::write(
+            base.join("exts").join("client-mcp").join(".project"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>client_mcp</name>\n</projectDescription>\n",
+        )
+        .expect("write .project");
+        fs::write(
+            base.join("exts").join("client-mcp").join("Module.bsl"),
+            "procedure Test()\n  // changed ext\nendprocedure",
+        )
+        .expect("write ext");
+        write_designer_script(&platform_script, &designer_calls, None);
+        write_edt_script(&edt_script, &edt_calls, None);
+
+        let mut config =
+            build_edt_config(&base, &work, &dir.path().join("platform"), &edt_script);
+        config.source_sets = vec![SourceSetConfig {
+            name: "client_mcp".to_owned(),
+            purpose: SourceSetPurpose::Extension,
+            path: PathBuf::from("exts/client-mcp"),
+        }];
+        prime_edt_snapshots(&config);
+        fs::write(
+            base.join("exts").join("client-mcp").join("Module.bsl"),
+            "procedure Test()\n  // changed after snapshot\nendprocedure",
+        )
+        .expect("modify ext");
+
+        let result = run_build(
+            &config,
+            &BuildArgs {
+                full_rebuild: false,
+            },
+        )
+        .expect("build");
+        let edt_calls_text = fs::read_to_string(&edt_calls).expect("edt calls");
+        let designer_calls_text = fs::read_to_string(&designer_calls).expect("designer calls");
+
+        assert!(result.ok);
+        assert!(result.steps.iter().any(|step| {
+            step.source_set == "client_mcp" && matches!(step.mode, BuildMode::EdtExport) && step.ok
+        }));
+        assert!(result.steps.iter().any(|step| {
+            step.source_set == "client_mcp" && matches!(step.mode, BuildMode::Full) && step.ok
+        }));
+        assert!(!result.steps.iter().any(|step| {
+            step.source_set == "client_mcp" && matches!(step.mode, BuildMode::Partial { .. })
+        }));
+        assert!(edt_calls_text.contains("export --project-name client_mcp"));
+        assert!(designer_calls_text.contains("/LoadConfigFromFiles"));
+        assert!(designer_calls_text.contains("-Extension client_mcp"));
+        assert!(!designer_calls_text.contains("-partial"));
+        assert_eq!(edt_storage_generation(&config, "client_mcp"), 2);
+        assert_eq!(storage_generation(&config, "client_mcp"), 1);
+
+        let rerun = run_build(
+            &config,
+            &BuildArgs {
+                full_rebuild: false,
+            },
+        )
+        .expect("rerun");
+        let rerun_designer_calls =
+            fs::read_to_string(&designer_calls).expect("designer calls after rerun");
+
+        assert!(rerun
+            .steps
+            .iter()
+            .filter(|step| step.source_set == "client_mcp")
+            .all(|step| matches!(step.mode, BuildMode::Skipped) && step.ok));
+        assert_eq!(
+            rerun_designer_calls.matches("/LoadConfigFromFiles").count(),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edt_extension_build_with_ibcmd_forces_full_import_after_incremental_export() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let ibcmd_script = dir.path().join("ibcmd");
+        let edt_script = dir.path().join("edt").join("1cedtcli");
+        let ibcmd_calls = dir.path().join("ibcmd-calls.log");
+        let edt_calls = dir.path().join("edt-calls.log");
+        fs::create_dir_all(base.join("exts").join("client-mcp")).expect("ext dir");
+        fs::write(
+            base.join("exts").join("client-mcp").join(".project"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>client_mcp</name>\n</projectDescription>\n",
+        )
+        .expect("write .project");
+        fs::write(
+            base.join("exts").join("client-mcp").join("Module.bsl"),
+            "procedure Test()\n  // changed ext\nendprocedure",
+        )
+        .expect("write ext");
+        write_ibcmd_script(&ibcmd_script, &ibcmd_calls, None);
+        write_edt_script(&edt_script, &edt_calls, None);
+
+        let mut config = build_edt_config(&base, &work, &ibcmd_script, &edt_script);
+        config.builder = BuilderBackend::Ibcmd;
+        config.source_sets = vec![SourceSetConfig {
+            name: "client_mcp".to_owned(),
+            purpose: SourceSetPurpose::Extension,
+            path: PathBuf::from("exts/client-mcp"),
+        }];
+        prime_edt_snapshots(&config);
+        fs::write(
+            base.join("exts").join("client-mcp").join("Module.bsl"),
+            "procedure Test()\n  // changed after snapshot\nendprocedure",
+        )
+        .expect("modify ext");
+
+        let result = run_build(
+            &config,
+            &BuildArgs {
+                full_rebuild: false,
+            },
+        )
+        .expect("build");
+        let edt_calls_text = fs::read_to_string(&edt_calls).expect("edt calls");
+        let ibcmd_calls_text = fs::read_to_string(&ibcmd_calls).expect("ibcmd calls");
+
+        assert!(result.ok);
+        assert!(result.steps.iter().any(|step| {
+            step.source_set == "client_mcp" && matches!(step.mode, BuildMode::EdtExport) && step.ok
+        }));
+        assert!(result.steps.iter().any(|step| {
+            step.source_set == "client_mcp" && matches!(step.mode, BuildMode::Full) && step.ok
+        }));
+        assert!(!result.steps.iter().any(|step| {
+            step.source_set == "client_mcp" && matches!(step.mode, BuildMode::Partial { .. })
+        }));
+        assert!(edt_calls_text.contains("export --project-name client_mcp"));
+        assert!(ibcmd_calls_text.contains("config import"));
+        assert!(ibcmd_calls_text.contains("--extension client_mcp"));
+        assert!(!ibcmd_calls_text.contains("config import files"));
+        assert!(!ibcmd_calls_text.contains("--partial"));
+        assert_eq!(edt_storage_generation(&config, "client_mcp"), 2);
+        assert_eq!(storage_generation(&config, "client_mcp"), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edt_extension_load_failure_does_not_commit_generated_designer_snapshot() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let platform_script = dir.path().join("platform").join("bin").join("1cv8");
+        let edt_script = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer-calls.log");
+        let edt_calls = dir.path().join("edt-calls.log");
+        fs::create_dir_all(base.join("exts").join("client-mcp")).expect("ext dir");
+        fs::write(
+            base.join("exts").join("client-mcp").join(".project"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>client_mcp</name>\n</projectDescription>\n",
+        )
+        .expect("write .project");
+        fs::write(
+            base.join("exts").join("client-mcp").join("Module.bsl"),
+            "procedure Test()\n  // changed ext\nendprocedure",
+        )
+        .expect("write ext");
+        write_designer_script(
+            &platform_script,
+            &designer_calls,
+            Some("/UpdateDBCfg -Extension client_mcp"),
+        );
+        write_edt_script(&edt_script, &edt_calls, None);
+
+        let mut config =
+            build_edt_config(&base, &work, &dir.path().join("platform"), &edt_script);
+        config.source_sets = vec![SourceSetConfig {
+            name: "client_mcp".to_owned(),
+            purpose: SourceSetPurpose::Extension,
+            path: PathBuf::from("exts/client-mcp"),
+        }];
+        prime_edt_snapshots(&config);
+        fs::write(
+            base.join("exts").join("client-mcp").join("Module.bsl"),
+            "procedure Test()\n  // changed after snapshot\nendprocedure",
+        )
+        .expect("modify ext");
+
+        let failure = run_build(
+            &config,
+            &BuildArgs {
+                full_rebuild: false,
+            },
+        )
+        .expect_err("expected failure");
+        let result = failure
+            .payload
+            .expect("build failures should preserve a structured payload");
+        let designer_storage_path = SourceSetsService::new(&config)
+            .designer_contexts()
+            .into_iter()
+            .find(|context| context.name() == "client_mcp")
+            .expect("designer context")
+            .storage_path(&config.work_path);
+        let designer_calls_text = fs::read_to_string(&designer_calls).expect("designer calls");
+
+        assert!(!result.ok);
+        assert!(matches!(result.steps[0].mode, BuildMode::EdtExport));
+        assert!(result.steps[0].ok);
+        assert!(result.steps.iter().any(|step| {
+            step.source_set == "client_mcp" && matches!(step.mode, BuildMode::Full) && !step.ok
+        }));
+        assert!(!result.steps.iter().any(|step| {
+            step.source_set == "client_mcp" && matches!(step.mode, BuildMode::Partial { .. })
+        }));
+        assert!(designer_calls_text.contains("/UpdateDBCfg -Extension client_mcp"));
+        assert_eq!(edt_storage_generation(&config, "client_mcp"), 2);
+        assert!(!designer_storage_path.exists());
     }
 
     #[cfg(unix)]
