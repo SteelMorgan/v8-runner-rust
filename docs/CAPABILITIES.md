@@ -35,8 +35,8 @@
 
 | Опция | Значение |
 | --- | --- |
-| `--config <CONFIG>` | Путь к YAML-конфигу; по умолчанию `./v8project.yaml`, также доступен через `V8TR_CONFIG` |
-| `--output <OUTPUT>` | `text` или `json` |
+| `--config <CONFIG>` | Путь к существующему YAML-конфигу; по умолчанию `./v8project.yaml`, также доступен через `V8TR_CONFIG` |
+| `--json-message` | Печатать structured JSON envelopes вместо text output |
 | `--log-level <LOG_LEVEL>` | `error`, `warn`, `info`, `debug`, `trace` |
 | `--clean-before-execution` | Очистить лог-файлы перед запуском команды |
 | `--no-color` | Отключить ANSI-цвета |
@@ -44,20 +44,21 @@
 
 Принципы вывода:
 
-- `text` держит clean success path кратким и не печатает подробный успешный timeline без необходимости.
-- Warnings, degraded behavior, созданные артефакты и пути к диагностике должны быть видимы и в `text`, и в `json`.
-- `json` остаётся машинным контрактом; text-режим не скрывает факты, но не дублирует сырой platform stdout как основной output.
+- Без `--json-message` CLI держит clean success path кратким и не печатает подробный успешный timeline без необходимости.
+- Warnings, degraded behavior, созданные артефакты и пути к диагностике должны быть видимы и в text output, и в JSON envelopes.
+- `--json-message` включает машинный контракт; text-режим не скрывает факты, но не дублирует сырой platform stdout как основной output.
 
 ## Команда `config init`
 
 ```bash
-v8-runner config init [--force] [--file <FILE>] [--connection <CONNECTION>] [--format <auto|designer|edt>] [--builder <DESIGNER|IBCMD>]
+v8-runner config init [--force] [--output <FILE>] [--connection <CONNECTION>] [--format <auto|designer|edt>] [--builder <DESIGNER|IBCMD>]
 ```
 
 Поведение:
 
 - Не требует существующего `v8project.yaml`.
-- По умолчанию создаёт конфиг в текущем каталоге; путь можно переопределить через `--file` или глобальный `--config`.
+- По умолчанию создаёт конфиг в текущем каталоге; путь можно переопределить через `--output`.
+- Глобальный `--config` не используется как shortcut output path для `config init`; при попытке передать его команда завершается validation error с подсказкой использовать `config init --output`.
 - Не перезаписывает существующий файл без `--force`.
 - Ищет Designer-исходники по `Configuration.xml`, EDT-проекты по `.project`, а внешние обработки и отчёты autodetect-ит только как aggregate-root source-set.
 - Для ordinary EDT type `CONFIGURATION`/`EXTENSION` выводится из `.project` natures (`V8ConfigurationNature` / `V8ExtensionNature`), runtime version берётся из `DT-INF/PROJECT.PMF`, `EXTENSION` дополнительно требует `Base-Project`, а valid native layout подтверждается `src/Configuration/Configuration.mdo`.
@@ -265,6 +266,7 @@ v8-runner launch <designer|thin|thick|ordinary>
 - `thin` запускается через `1cv8c`.
 - старый вариант `v8-runner launch --mode <...>` сохранён для совместимости.
 - `thick` запускается через `1cv8`.
+- `--output <PATH>` передаёт пользовательский `/Out` path для прямого запуска.
 - Успешный результат включает статус запуска и сведения о процессе, например PID и определённый путь к бинарю.
 
 ## MCP

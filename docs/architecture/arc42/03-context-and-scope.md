@@ -15,14 +15,14 @@ flowchart LR
     Core --> Utilities["Утилиты 1С\n1cv8 / 1cv8c / ibcmd / 1cedtcli"]
     Utilities --> Infobase["Файловая или серверная ИБ 1С"]
     Core --> Targets["Публикуемые targets\ndump, cf/cfe, epf/erf"]
-    Core --> Reports["Структурированные результаты\nCLI text/json, MCP DTO"]
+    Core --> Reports["Структурированные результаты\nCLI text / --json-message, MCP DTO"]
 ```
 
 ### 3.2 Технический контекст
 
 Внешние интерфейсы:
 
-- аргументы CLI и вывод в text/JSON;
+- аргументы CLI, text output и structured JSON envelopes через `--json-message`;
 - вызовы MCP tool по stdio и streamable HTTP;
 - YAML-конфигурация;
 - доступ к файловой системе для исходников проекта и `workPath`;

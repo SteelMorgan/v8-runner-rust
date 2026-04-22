@@ -385,8 +385,8 @@ run_cli_json_to_file() {
     local json_path="$1"
     shift
     echo
-    echo "==> --output json $*"
-    "$BIN_PATH" --config "$DESIGNER_CONFIG_PATH" --output json "$@" | tee "$json_path"
+    echo "==> --json-message $*"
+    "$BIN_PATH" --config "$DESIGNER_CONFIG_PATH" --json-message "$@" | tee "$json_path"
 }
 
 run_test_stage() {
@@ -425,7 +425,7 @@ run_launch_smoke() {
     fi
 
     local launch_json="$OUTPUT_ROOT/json/launch-designer.json"
-    run_cli_json_to_file "$launch_json" launch --mode designer --out "$OUTPUT_ROOT/launch/designer.log"
+    run_cli_json_to_file "$launch_json" launch --mode designer --output "$OUTPUT_ROOT/launch/designer.log"
     assert_json_command_ok "$launch_json" "launch"
 }
 

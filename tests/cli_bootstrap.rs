@@ -26,8 +26,7 @@ fn missing_config_in_json_mode_keeps_error_envelope_shape() {
         .args([
             "--config",
             "/definitely/missing/v8project.yaml",
-            "--output",
-            "json",
+            "--json-message",
             "build",
         ])
         .output()
@@ -67,7 +66,7 @@ fn default_config_path_uses_v8project_yaml_from_current_dir() {
     let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .current_dir(dir.path())
-        .args(["--output", "json", "build"])
+        .args(["--json-message", "build"])
         .output()
         .expect("run command");
 
@@ -138,8 +137,7 @@ fn legacy_top_level_connection_is_rejected_in_json_mode() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "build",
         ])
         .output()
@@ -177,8 +175,7 @@ fn legacy_top_level_credentials_is_rejected_in_json_mode() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "build",
         ])
         .output()

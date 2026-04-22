@@ -403,8 +403,7 @@ fn build_json_failure_returns_step_payload() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "build",
             "--full-rebuild",
         ])
@@ -438,8 +437,7 @@ fn build_ibcmd_json_failure_reports_operation_target_and_exit_code() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "build",
             "--full-rebuild",
         ])
@@ -666,8 +664,7 @@ fn build_json_writes_action_log_file_without_polluting_stdout() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "build",
         ])
         .output()
@@ -693,8 +690,7 @@ fn build_json_edt_extension_uses_full_load_and_writes_platform_log() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "build",
         ])
         .output()
@@ -718,8 +714,7 @@ fn build_json_edt_extension_uses_full_load_and_writes_platform_log() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "build",
         ])
         .output()

@@ -34,10 +34,11 @@ v8-runner config init
 
 ```bash
 v8-runner config init --connection "File=/path/to/ib"
-v8-runner --config custom.yaml config init
-v8-runner config init --file custom.yaml --force
+v8-runner config init --output custom.yaml --force
 v8-runner config init --format edt
 ```
+
+`config init` не использует глобальный `--config` как shortcut output path: если нужно выбрать путь для сгенерированного файла, используйте `config init --output <FILE>`.
 
 ## Полный пример
 

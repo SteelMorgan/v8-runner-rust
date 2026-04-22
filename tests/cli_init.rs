@@ -255,8 +255,7 @@ fn init_designer_non_zero_create_exit_stays_fatal_even_when_marker_appears() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "init",
         ])
         .output()
@@ -312,8 +311,7 @@ fn init_ibcmd_file_already_exists_without_marker_is_fatal() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "init",
         ])
         .output()
@@ -400,8 +398,7 @@ fn init_non_file_connection_keeps_running_workspace_step_and_returns_payload() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "init",
         ])
         .output()
@@ -435,8 +432,7 @@ fn init_skips_existing_workspace() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "init",
         ])
         .output()
@@ -466,8 +462,7 @@ fn init_retries_edt_import_when_previous_run_left_incomplete_workspace() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "init",
         ])
         .output()
@@ -501,8 +496,7 @@ fn init_retries_edt_import_when_previous_run_left_incomplete_workspace() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "init",
         ])
         .output()
@@ -533,8 +527,7 @@ fn init_rejects_workspace_path_that_is_not_a_directory() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "init",
         ])
         .output()
@@ -558,8 +551,7 @@ fn init_ibcmd_server_provisions_infobase_without_precheck() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "init",
         ])
         .output()
@@ -586,8 +578,7 @@ fn init_ibcmd_server_already_exists_is_non_fatal() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "init",
         ])
         .output()
@@ -612,8 +603,7 @@ fn init_ibcmd_server_auth_failure_stays_fatal() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "init",
         ])
         .output()

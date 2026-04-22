@@ -841,10 +841,10 @@ fn map_test_launch_options(args: &LaunchOptionsArgs) -> Result<LaunchOptions, Us
             "--execute is not supported for test; it is reserved for the internal runner payload",
         ));
     }
-    if args.out.is_some() {
+    if args.output.is_some() {
         return Err(UseCaseError::new(
             UseCaseErrorKind::Validation,
-            "--out is not supported for test; the platform log path is managed internally",
+            "--output is not supported for test; the platform log path is managed internally",
         ));
     }
     Ok(LaunchOptions {
@@ -858,7 +858,7 @@ fn map_test_launch_options(args: &LaunchOptionsArgs) -> Result<LaunchOptions, Us
 }
 
 fn validate_test_launch_options(args: &LaunchOptionsArgs) -> Result<(), UseCaseError> {
-    if args.c.is_some() || args.execute.is_some() || args.out.is_some() {
+    if args.c.is_some() || args.execute.is_some() || args.output.is_some() {
         return Err(UseCaseError::new(
             UseCaseErrorKind::Validation,
             "test accepts only --use-privileged-mode and raw launch keys; /C, /Execute, and /Out are managed by the runner",
@@ -1067,7 +1067,7 @@ fn map_direct_launch_options(args: &LaunchOptionsArgs) -> LaunchOptions {
         c: args.c.clone(),
         execute: args.execute.clone(),
         use_privileged_mode: args.use_privileged_mode,
-        out: args.out.clone(),
+        out: args.output.clone(),
         internal_out: None,
         raw_args: args.raw_keys.clone(),
     }
@@ -2033,7 +2033,7 @@ mod tests {
                     c: Some("Command".to_owned()),
                     execute: Some("tool.epf".to_owned()),
                     use_privileged_mode: true,
-                    out: Some("launch.log".to_owned()),
+                    output: Some("launch.log".to_owned()),
                     raw_keys: vec!["/WA-".to_owned(), "/DisplayAllFunctions".to_owned()],
                 },
             })

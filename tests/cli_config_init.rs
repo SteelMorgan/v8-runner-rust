@@ -93,7 +93,7 @@ fn config_init_creates_yaml_with_detected_designer_sources() {
 }
 
 #[test]
-fn config_init_uses_json_envelope_and_config_path_override() {
+fn config_init_uses_json_envelope_and_output_override() {
     let dir = tempdir().expect("tempdir");
     fs::write(dir.path().join("Configuration.xml"), "<Configuration/>").expect("xml");
     let config_path = dir.path().join("custom.yaml");
@@ -102,12 +102,11 @@ fn config_init_uses_json_envelope_and_config_path_override() {
         .expect("binary")
         .current_dir(dir.path())
         .args([
-            "--config",
-            &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "config",
             "init",
+            "--output",
+            &config_path.display().to_string(),
             "--connection",
             "File=/tmp/test-ib",
         ])
@@ -124,6 +123,73 @@ fn config_init_uses_json_envelope_and_config_path_override() {
     let config = fs::read_to_string(config_path).expect("config");
     assert!(config.contains("infobase:"));
     assert!(config.contains("  connection: 'File=/tmp/test-ib'"));
+}
+
+#[test]
+fn config_init_rejects_global_config_shortcut_in_text_mode() {
+    let dir = tempdir().expect("tempdir");
+    fs::write(dir.path().join("Configuration.xml"), "<Configuration/>").expect("xml");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .current_dir(dir.path())
+        .args(["--config", "custom.yaml", "config", "init"])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains(
+        "global --config flag is not supported for `config init`; use `config init --output <FILE>`"
+    ));
+}
+
+#[test]
+fn config_init_rejects_global_config_shortcut_in_json_mode() {
+    let dir = tempdir().expect("tempdir");
+    fs::write(dir.path().join("Configuration.xml"), "<Configuration/>").expect("xml");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .current_dir(dir.path())
+        .args([
+            "--config",
+            "custom.yaml",
+            "--json-message",
+            "config",
+            "init",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["command"], "error");
+    assert!(payload["data"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("use `config init --output <FILE>`"));
+}
+
+#[test]
+fn config_init_ignores_v8tr_config_env_for_output_path_selection() {
+    let dir = tempdir().expect("tempdir");
+    fs::write(dir.path().join("Configuration.xml"), "<Configuration/>").expect("xml");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .current_dir(dir.path())
+        .env("V8TR_CONFIG", dir.path().join("existing.yaml"))
+        .args(["config", "init"])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    assert!(dir.path().join("v8project.yaml").exists());
+    assert!(!dir.path().join("existing.yaml").exists());
 }
 
 #[test]

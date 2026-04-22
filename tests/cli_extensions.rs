@@ -244,8 +244,7 @@ fn extensions_command_json_failure_reports_operation_target_and_exit_code() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "extensions",
         ])
         .output()

@@ -20,13 +20,13 @@ Detailed ADR task decomposition remains in [ADR_DERIVED_BACKLOG.md](ADR_DERIVED_
 
 ## P1
 
-- [ ] `ADR-TASK-019`: Rework the public CLI help and output-path naming contract, then sync ADR
-  and docs. Split global vs command-specific help sections, add meaningful command descriptions,
-  replace the global `--output text|json` with `--json-message`, unify user-facing output-path
-  flags under `--output`, and make `config init` reject global `--config` as an output-path
-  shortcut. Update the relevant ADR first, then sync `docs/architecture/invariants.md`, arc42,
-  `README.md`, `docs/CAPABILITIES.md`, `docs/CONFIGURATION.md`, `spec/IMPLEMENTATION_TODO.md`
-  and `spec/ADR_DERIVED_BACKLOG.md`. Add help, parse, and JSON-mode regression tests.
+- [x] `ADR-TASK-019`: Rework the public CLI help and output-path naming contract, then sync ADR
+  and docs. Completed `2026-04-23`: global structured-output selection now uses
+  `--json-message`, user-facing output-path flags are unified under `--output` for
+  `config init`, `launch`, and `make/artifacts`, `config init` rejects global `--config` as an
+  output-path shortcut with a hint, ADR/docs/arc42/live script consumers are synced, and help,
+  parse, and JSON-mode regressions were added. Final completeness subagent review returned
+  `APPROVED`.
 
 - [ ] `ADR-TASK-020`: Split oversized orchestration use-case modules into scenario coordinators
   and reusable policy/helper components. The target refactor covers `build`, `dump`, `test`, and

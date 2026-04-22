@@ -1,31 +1,35 @@
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser, Debug)]
-#[command(name = "v8-runner", about = "1C:Enterprise test runner CLI")]
+#[command(
+    name = "v8-runner",
+    about = "Run 1C:Enterprise build, test, dump, convert, and launch workflows"
+)]
 pub struct Cli {
-    /// Path to YAML config file. Defaults to ./v8project.yaml
-    #[arg(long, global = true, env = "V8TR_CONFIG")]
+    /// Path to an existing YAML config file. Defaults to ./v8project.yaml
+    #[arg(long, global = true, env = "V8TR_CONFIG", help_heading = "Global options")]
     pub config: Option<String>,
 
-    /// Output format
-    #[arg(long, global = true, default_value = "text", value_parser = ["text", "json"])]
-    pub output: String,
+    /// Print structured JSON envelopes instead of text output
+    #[arg(long, global = true, help_heading = "Global options")]
+    pub json_message: bool,
 
     /// Log level
     #[arg(long, global = true, default_value = "info",
-          value_parser = ["error", "warn", "info", "debug", "trace"])]
+          value_parser = ["error", "warn", "info", "debug", "trace"],
+          help_heading = "Global options")]
     pub log_level: Option<String>,
 
     /// Clear log files before execution
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Global options")]
     pub clean_before_execution: bool,
 
     /// Disable ANSI colors
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Global options")]
     pub no_color: bool,
 
     /// Override working directory
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Global options")]
     pub workdir: Option<String>,
 
     #[command(subcommand)]
@@ -34,30 +38,30 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Create or update v8project.yaml from detected sources
+    /// Generate project configuration and autodetect source-sets
     Config(ConfigArgs),
-    /// Initialize infobase and EDT workspace
+    /// Initialize the infobase and EDT workspace
     Init,
-    /// Update extension properties in infobase
+    /// Update configured extension properties inside the infobase
     Extensions(ExtensionsArgs),
-    /// Load sources into infobase
+    /// Build configured source-sets into the infobase
     Build(BuildArgs),
-    /// Load release artifacts into infobase
+    /// Apply built release artifacts to the infobase
     Load(LoadArgs),
-    /// Run YaXUnit tests
+    /// Build first, then run YaXUnit or Vanessa Automation tests
     Test(TestArgs),
-    /// Dump configuration from infobase to files
+    /// Dump infobase state back to project files
     Dump(DumpArgs),
-    /// Convert sources between EDT and Designer file formats
+    /// Convert configured source-sets between EDT and Designer file formats
     Convert(ConvertArgs),
-    /// Export configuration artifacts via Designer batch commands
+    /// Export release artifacts via Designer batch commands
     #[command(name = "make", visible_alias = "artifacts")]
     Artifacts(ArtifactsArgs),
-    /// Run syntax checks
+    /// Run Designer or EDT syntax validation
     Syntax(SyntaxArgs),
     /// Launch 1C application
     Launch(LaunchArgs),
-    /// Run Model Context Protocol transports
+    /// Serve Model Context Protocol transports
     Mcp(McpArgs),
 }
 
@@ -69,19 +73,20 @@ pub struct ConfigArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum ConfigCommand {
-    /// Create a config file in the current directory and add detected sources
+    /// Create a new config file and add detected sources
     Init(ConfigInitArgs),
 }
 
 #[derive(Args, Debug)]
+#[command(next_help_heading = "Command options")]
 pub struct ConfigInitArgs {
     /// Overwrite an existing config file
     #[arg(long)]
     pub force: bool,
 
-    /// Output file path. Defaults to --config or ./v8project.yaml
+    /// Path to the generated YAML config file. Defaults to ./v8project.yaml
     #[arg(long)]
-    pub file: Option<String>,
+    pub output: Option<String>,
 
     /// Infobase connection string written to config
     #[arg(long)]
@@ -97,6 +102,7 @@ pub struct ConfigInitArgs {
 }
 
 #[derive(Args, Debug)]
+#[command(next_help_heading = "Command options")]
 pub struct BuildArgs {
     /// Clear change cache and rebuild everything
     #[arg(long)]
@@ -104,6 +110,7 @@ pub struct BuildArgs {
 }
 
 #[derive(Args, Debug)]
+#[command(next_help_heading = "Command options")]
 pub struct LoadArgs {
     /// Path to a built artifact (.cf/.cfe)
     #[arg(long)]
@@ -123,6 +130,7 @@ pub struct LoadArgs {
 }
 
 #[derive(Args, Debug)]
+#[command(next_help_heading = "Command options")]
 pub struct ExtensionsArgs {
     /// Extension source-set name to update. Repeat to target multiple extensions.
     #[arg(long = "name")]
@@ -130,6 +138,7 @@ pub struct ExtensionsArgs {
 }
 
 #[derive(Args, Debug)]
+#[command(next_help_heading = "Command options")]
 pub struct TestArgs {
     #[arg(long, global = true)]
     pub full: bool,
@@ -154,6 +163,7 @@ pub enum TestRunner {
 }
 
 #[derive(Args, Debug)]
+#[command(next_help_heading = "Command options")]
 pub struct TestYaxunitArgs {
     #[command(subcommand)]
     pub scope: TestScope,
@@ -171,6 +181,7 @@ pub enum TestScope {
 }
 
 #[derive(Args, Debug)]
+#[command(next_help_heading = "Command options")]
 pub struct DumpArgs {
     /// Dump mode
     #[arg(long, value_parser = ["full", "incremental", "partial"])]
@@ -190,6 +201,7 @@ pub struct DumpArgs {
 }
 
 #[derive(Args, Debug)]
+#[command(next_help_heading = "Command options")]
 pub struct ConvertArgs {
     /// Limit conversion to one source-set from v8project.yaml
     #[arg(long)]
@@ -197,6 +209,7 @@ pub struct ConvertArgs {
 }
 
 #[derive(Args, Debug)]
+#[command(next_help_heading = "Command options")]
 pub struct ArtifactsArgs {
     /// Final output path (.cf/.cfe file or publish directory for external artifacts)
     #[arg(long)]
@@ -232,6 +245,7 @@ pub enum SyntaxTarget {
 }
 
 #[derive(Args, Debug)]
+#[command(next_help_heading = "Command options")]
 pub struct LaunchArgs {
     /// Launch mode
     #[arg(value_name = "MODE", value_parser = ["designer", "thin", "thick", "ordinary"], conflicts_with = "mode", required_unless_present = "mode")]
@@ -246,6 +260,7 @@ pub struct LaunchArgs {
 }
 
 #[derive(Args, Debug, Clone, Default, PartialEq, Eq)]
+#[command(next_help_heading = "Command options")]
 pub struct LaunchOptionsArgs {
     /// Value for `/C`
     #[arg(long = "c")]
@@ -258,7 +273,7 @@ pub struct LaunchOptionsArgs {
     pub use_privileged_mode: bool,
     /// User-provided `/Out` path allowed only for direct launch
     #[arg(long)]
-    pub out: Option<String>,
+    pub output: Option<String>,
     /// Additional raw launch arguments appended after typed launch keys
     #[arg(long = "raw-key")]
     pub raw_keys: Vec<String>,
@@ -291,6 +306,7 @@ pub enum McpServeTransport {
 }
 
 #[derive(Args, Debug, Clone)]
+#[command(next_help_heading = "Command options")]
 pub struct DesignerConfigSyntaxArgs {
     #[arg(long)]
     pub config_log_integrity: bool,
@@ -345,6 +361,7 @@ pub struct DesignerConfigSyntaxArgs {
 }
 
 #[derive(Args, Debug, Clone)]
+#[command(next_help_heading = "Command options")]
 pub struct DesignerModulesSyntaxArgs {
     #[arg(long)]
     pub thin_client: bool,
@@ -541,7 +558,7 @@ mod tests {
                         c: Some("RunUnitTests=config.json".to_owned()),
                         execute: None,
                         use_privileged_mode: true,
-                        out: None,
+                        output: None,
                         raw_keys: vec!["/WA-".to_owned()],
                     }
                 );
@@ -562,7 +579,7 @@ mod tests {
             "--execute",
             "tool.epf",
             "--use-privileged-mode",
-            "--out",
+            "--output",
             "launch.log",
             "--raw-key",
             "/WA-",
@@ -582,9 +599,36 @@ mod tests {
                 assert_eq!(launch.c.as_deref(), Some("DoWork"));
                 assert_eq!(launch.execute.as_deref(), Some("tool.epf"));
                 assert!(launch.use_privileged_mode);
-                assert_eq!(launch.out.as_deref(), Some("launch.log"));
+                assert_eq!(launch.output.as_deref(), Some("launch.log"));
                 assert_eq!(launch.raw_keys, vec!["/WA-", "/DisplayAllFunctions"]);
             }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parses_global_json_message_flag() {
+        let cli = Cli::try_parse_from(["v8-runner", "--json-message", "build"]).expect("parse");
+        assert!(cli.json_message);
+    }
+
+    #[test]
+    fn parses_config_init_output_override() {
+        let cli = Cli::try_parse_from([
+            "v8-runner",
+            "config",
+            "init",
+            "--output",
+            "custom.yaml",
+        ])
+        .expect("parse config init");
+
+        match cli.command {
+            Command::Config(config) => match config.command {
+                super::ConfigCommand::Init(args) => {
+                    assert_eq!(args.output.as_deref(), Some("custom.yaml"));
+                }
+            },
             _ => panic!("unexpected command"),
         }
     }

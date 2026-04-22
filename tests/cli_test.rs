@@ -370,8 +370,7 @@ fn test_all_full_json_runs_build_first_and_returns_report() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "test",
             "--full",
             "yaxunit",
@@ -423,8 +422,7 @@ fn test_run_appends_enterprise_additional_launch_keys() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "test",
             "yaxunit",
             "all",
@@ -577,8 +575,7 @@ fn test_accepts_explicit_client_mode_for_vanessa_and_yaxunit() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "test",
             "--client-mode",
             "ordinary",
@@ -635,8 +632,7 @@ fn test_va_builds_vanessa_command_and_overlay() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "test",
             "va",
         ])
@@ -695,8 +691,7 @@ fn test_module_build_failure_prevents_enterprise_launch() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "test",
             "yaxunit",
             "module",
@@ -804,8 +799,7 @@ fn test_module_edt_extension_build_uses_full_load_before_enterprise_launch() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "test",
             "yaxunit",
             "module",
@@ -852,8 +846,7 @@ stack trace line 2</failure>
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "test",
             "yaxunit",
             "module",
@@ -892,8 +885,7 @@ stack trace line 2</failure>
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "test",
             "--full",
             "yaxunit",
@@ -930,8 +922,7 @@ fn test_timeout_retains_artifacts() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "test",
             "yaxunit",
             "all",

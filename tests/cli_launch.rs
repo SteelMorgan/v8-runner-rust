@@ -108,8 +108,7 @@ fn launch_json_returns_pid_and_selected_binary() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "launch",
             "--mode",
             "thin",
@@ -175,8 +174,7 @@ fn launch_designer_accepts_positional_mode() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "launch",
             "designer",
         ])
@@ -200,8 +198,7 @@ fn launch_thick_uses_v8_binary() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "launch",
             "--mode",
             "thick",
@@ -225,8 +222,7 @@ fn launch_uses_versioned_root_hint() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "launch",
             "--mode",
             "thin",
@@ -282,8 +278,7 @@ fn launch_json_failure_keeps_stdout_empty_and_exit_code() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "launch",
             "--mode",
             "thin",
@@ -308,8 +303,7 @@ fn launch_ordinary_supports_typed_keys_and_filters_reserved_raw_duplicates() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "launch",
             "--mode",
             "ordinary",
@@ -318,7 +312,7 @@ fn launch_ordinary_supports_typed_keys_and_filters_reserved_raw_duplicates() {
             "--execute",
             "/tmp/tool.epf",
             "--use-privileged-mode",
-            "--out",
+            "--output",
             "/tmp/user.out.log",
             "--raw-key",
             "/RunModeOrdinaryApplication",

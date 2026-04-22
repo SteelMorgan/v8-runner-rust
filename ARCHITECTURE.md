@@ -138,7 +138,7 @@ Use cases now return transport-neutral payloads or structured failures.
 
 - `cli::execute` converts successful command payloads into `Envelope<T>` for JSON mode.
 - `cli::execute` preserves command-specific text formatting for build, test, dump, convert, syntax, and launch.
-- Failure payload emission is also decided at the adapter boundary, which keeps `launch --output json` failure semantics unchanged while allowing other commands to keep structured JSON failures.
+- Failure payload emission is also decided at the adapter boundary, which keeps `launch --json-message` failure semantics unchanged while allowing other commands to keep structured JSON failures.
 - `mcp::service` returns MCP-specific DTOs and never reuses CLI `Envelope` or presenter logic.
 - Runner-like command payloads use `ExecutionOutcome<T>` as their domain source of truth for status, diagnostics, structured errors, metrics, artifacts, and typed parsed payload; top-level command structs may keep compatibility fields while adapters migrate.
 

@@ -413,8 +413,7 @@ fn convert_without_source_set_processes_all_source_sets_into_work_path_out() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "convert",
         ])
         .output()
@@ -559,8 +558,7 @@ fn convert_single_extension_source_set_infers_base_project_name_from_configurati
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "convert",
             "--source-set",
             "ext-sales",
@@ -615,8 +613,7 @@ fn convert_unknown_source_set_json_keeps_convert_command_identity_before_workspa
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "convert",
             "--source-set",
             "missing",
@@ -698,8 +695,7 @@ fn convert_external_edt_source_set_preserves_all_exported_descriptors() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "convert",
             "--source-set",
             "processors",
@@ -753,8 +749,7 @@ fn convert_external_designer_source_set_does_not_require_configuration_source_se
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "convert",
         ])
         .output()

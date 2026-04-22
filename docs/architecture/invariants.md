@@ -158,9 +158,11 @@
 ## CLI Output
 
 1. CLI output проектируется как единый high-signal contract для человека и AI-агента.
-2. Единственная публичная ось CLI output — формат вывода (`text`/`json`); отдельный audience/profile-переключатель не вводится.
-3. Clean success должен оставаться кратким, а ошибки, предупреждения, degraded behavior, created artifacts, пути к диагностике и следующий actionable hint не должны теряться.
-4. `json` остаётся стабильным structured contract для автоматизации; его schema не меняется только из-за различения ролей потребления.
-5. Use case слой не знает presentation rules и не различает роли потребителя output.
+2. Единственный публичный selector structured CLI output — глобальный флаг `--json-message`; отдельный audience/profile-переключатель не вводится.
+3. При отсутствии `--json-message` CLI печатает text output.
+4. User-facing path флаг должен называться `--output`, если команда публикует один основной output path; не вводить параллельные public имена `--file`, `--out` или `--output-dir` для того же смысла без нового ADR.
+5. Clean success должен оставаться кратким, а ошибки, предупреждения, degraded behavior, created artifacts, пути к диагностике и следующий actionable hint не должны теряться.
+6. JSON остаётся стабильным structured contract для автоматизации; его schema не меняется только из-за различения ролей потребления.
+7. Use case слой не знает presentation rules и не различает роли потребителя output.
 
 См. [ADR-0010](../decisions/0010-razdelit-cli-output-dlya-cheloveka-i-ai-agenta.md).

@@ -117,8 +117,7 @@ fn load_cf_json_success_runs_probe_load_and_update() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "load",
             "--path",
             "release.cf",
@@ -184,8 +183,7 @@ fn merge_cfe_json_success_requires_extension_and_settings() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "load",
             "--path",
             "release.cfe",
@@ -223,8 +221,7 @@ fn load_update_mode_returns_validation_payload() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "load",
             "--path",
             "release.cf",
@@ -294,8 +291,7 @@ fn load_rejects_edt_format_even_with_designer_builder() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "load",
             "--path",
             "release.cf",
@@ -322,8 +318,7 @@ fn load_rejects_unknown_artifact_type_with_unknown_payload_metadata() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "load",
             "--path",
             "release.zip",
@@ -352,8 +347,7 @@ fn load_rejects_external_artifact_type_with_unknown_target_kind_payload_metadata
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "load",
             "--path",
             "tool.epf",

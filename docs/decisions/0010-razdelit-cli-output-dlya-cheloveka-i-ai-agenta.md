@@ -10,25 +10,33 @@ CLI `v8-runner` будет потребляться двумя разными р
 1. Человек-разработчик запускает команды вручную и должен быстро увидеть значимые места: что изменилось, что пропущено, что требует внимания, где ошибка и какой следующий шаг.
 2. AI-агент запускает CLI как инструмент и тоже нуждается в кратком, предсказуемом, high-signal выводе без лишнего шума.
 
-В предыдущей формулировке решения возникла двусмысленность: нужно ли вводить отдельную public ось `audience/profile`, или достаточно существующей оси `--output text|json` и явных требований к содержанию output.
+В предыдущей формулировке решения возникла двусмысленность в двух местах:
+
+1. нужно ли вводить отдельную public ось `audience/profile`, или достаточно одной общей output policy;
+2. может ли имя `--output` одновременно означать и формат CLI output, и пользовательский путь результата команды.
+
 Проекту нужен единый формат поведения CLI для обеих ролей, а не две разные presentation-модели.
 `json` уже является structured contract для автоматизации и не должен меняться только ради различения "человек vs агент".
+Одновременно user-facing path flags должны иметь предсказуемое имя, чтобы `config init`, `launch`, `make/artifacts` и будущий explicit-output `convert` не расходились по `--file` / `--out` / `--output-dir`.
 
 ## Решение
 
 Зафиксировать единый high-signal CLI output contract для человека и AI-агента.
 
-1. Единственная публичная ось CLI output — `--output text|json`.
-2. Отдельный public параметр `--audience`, `--profile` или эквивалентный role switch для CLI output не вводится.
-3. Оба формата следуют одной и той же информационной политике:
+1. CLI использует единый high-signal output contract для человека и AI-агента.
+2. Единственный публичный selector structured CLI output — булевый флаг `--json-message`.
+3. При отсутствии `--json-message` CLI печатает human-readable `text` output.
+4. User-facing флаг пути результата должен называться `--output`, если команда публикует один основной output path; отдельные имена `--file`, `--out` и будущий `--output-dir` для того же смысла не вводятся без нового решения.
+5. Отдельный public параметр `--audience`, `--profile` или эквивалентный role switch для CLI output не вводится.
+6. Оба output mode следуют одной и той же информационной политике:
 - clean success остаётся кратким и не печатает подробный успешный журнал без необходимости;
 - ошибки, warnings, degraded/skipped behavior, артефакты и diagnostic paths должны быть видимы;
 - output должен давать минимальный достаточный сигнал для следующего действия;
 - нельзя прятать значимые факты в одном формате и терять их в другом.
-4. `--output json` остаётся текущим structured format и не меняет свою роль из-за этого ADR.
-5. `--output text` остаётся human-readable format, но его текст не должен становиться единственным источником важной машинно значимой информации.
-6. Use case слой не знает о presentation rules; правила рендеринга остаются в CLI/output adapter.
-7. Любой новый CLI output должен проверяться на три вопроса:
+7. `--json-message` включает текущий structured format и не меняет его роль из-за этого ADR.
+8. Text output остаётся human-readable mode, но его текст не должен становиться единственным источником важной машинно значимой информации.
+9. Use case слой не знает о presentation rules; правила рендеринга остаются в CLI/output adapter.
+10. Любой новый CLI output или новый public path flag должен проверяться на три вопроса:
 - помогает ли он следующему действию;
 - не добавляет ли шум в clean success path;
 - сохраняет ли он ошибки, warnings, degraded behavior, artifacts и diagnostics видимыми в `text` и `json`.
@@ -44,33 +52,42 @@ CLI `v8-runner` будет потребляться двумя разными р
 ## Последствия
 
 1. ADR, backlog и пользовательская документация не должны больше описывать CLI output как две public оси.
-2. `--output` остаётся единственным публичным переключателем формата CLI output.
-3. Clean success path должен оставаться кратким в обоих форматах.
-4. JSON остаётся стабильным structured contract для автоматизации и не меняется только из-за различения ролей.
-5. Rendering tests должны проверять единый high-signal contract для `text` и `json`.
+2. `--json-message` становится единственным публичным selector-ом structured CLI output.
+3. `--output` резервируется для user-facing output path flags.
+4. Clean success path должен оставаться кратким в обоих output mode.
+5. JSON остаётся стабильным structured contract для автоматизации и не меняется только из-за различения ролей.
+6. Rendering и help/parse tests должны проверять единый high-signal contract и naming policy.
 
 ## План реализации
 
 1. Зафиксировать этот ADR в `docs/decisions`.
 2. Добавить invariant в `docs/architecture/invariants.md`.
-3. Синхронизировать `ADR-0010`, `docs/architecture/invariants.md`, arc42 и backlog с единой моделью output policy.
+3. Синхронизировать `ADR-0010`, `docs/architecture/invariants.md`, arc42 и backlog с единой моделью output policy и naming policy для output paths.
 4. При реализации unified output policy обновить:
 - `src/output/presenter.rs`
 - `src/output/text.rs`
 - `src/cli/execute.rs`, если меняется wiring/selection rendering rules
+- `src/cli/args.rs`
+- `src/app.rs`
 - `docs/CAPABILITIES.md`
 - `README.md`
+ - `docs/CONFIGURATION.md`
 5. `src/output/json.rs` не менять без отдельной необходимости и отдельного решения о JSON contract.
 6. Ввести и поддерживать rendering tests для единого output contract:
 - clean success не шумит;
 - ошибки/warnings/degraded/artifacts/actionable diagnostics видимы;
 - `text` и `json` не противоречат друг другу по ключевым фактам.
-7. При добавлении новой CLI команды или нового result field обновлять rendering tests before exposing the behavior.
+7. Ввести и поддерживать help/parse regressions для public contract:
+- `--json-message` выбирает structured output без изменения JSON schema;
+- `config init --output`, `launch --output`, `make/artifacts --output` и будущий `convert --output` используют одно и то же user-facing имя;
+- `config init` не использует глобальный `--config` как shortcut output path.
+8. При добавлении новой CLI команды, нового result field или нового output path flag обновлять rendering/help/parse tests before exposing the behavior.
 
 ## Верификация
 
 - [x] ADR фиксирует единый CLI output contract для человека и AI-агента.
-- [x] ADR фиксирует, что единственная public ось output — `--output text|json`.
+- [x] ADR фиксирует, что единственный public selector structured output — `--json-message`.
 - [x] ADR явно отвергает отдельный audience/profile-переключатель для CLI output.
 - [x] ADR сохраняет текущую роль JSON как structured contract.
+- [x] ADR резервирует `--output` для user-facing output path flags.
 - [x] ADR сохраняет транспортно-нейтральный use case слой согласно ADR-0006.

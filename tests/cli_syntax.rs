@@ -140,8 +140,7 @@ fn syntax_designer_config_json_returns_clean_envelope() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "syntax",
             "designer-config",
         ])
@@ -218,8 +217,7 @@ fn syntax_designer_modules_json_returns_structured_validation_failure() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "syntax",
             "designer-modules",
             "--server",
@@ -282,8 +280,7 @@ fn syntax_edt_json_returns_structured_edt_issues() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "syntax",
             "edt",
         ])

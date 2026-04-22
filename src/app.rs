@@ -13,6 +13,7 @@ use crate::use_cases::config_init::{ConfigBuilderRequest, ConfigFormatRequest, C
 
 pub fn run() -> i32 {
     let cli = Cli::parse();
+    let output_format = cli_output_format(cli.json_message);
 
     if let Command::Mcp(args) = &cli.command {
         return run_mcp_command(&cli, args);
@@ -23,10 +24,10 @@ pub fn run() -> i32 {
     } else {
         crate::output::presenter::ColorMode::Enabled
     };
-    let presenter = Presenter::new(cli.output.clone(), color_mode);
+    let presenter = Presenter::new(output_format.to_owned(), color_mode);
 
     if let Command::Config(args) = &cli.command {
-        return run_config_command(&cli, args, &presenter);
+        return run_config_command(args, &presenter);
     }
 
     let config = match load_config(cli.config.as_deref(), cli.workdir.as_deref()) {
@@ -40,7 +41,7 @@ pub fn run() -> i32 {
     let level = cli.log_level.as_deref().unwrap_or("info");
     let action_log_path = match crate::support::logging::init_action_logging(
         level,
-        &cli.output,
+        output_format,
         !cli.no_color,
         &config.work_path,
     ) {
@@ -53,7 +54,7 @@ pub fn run() -> i32 {
 
     debug!(
         command = command_name(&cli.command),
-        output = cli.output.as_str(),
+        output = output_format,
         work_path = %config.work_path.display(),
         "starting command"
     );
@@ -107,17 +108,20 @@ fn command_name(command: &Command) -> &'static str {
     }
 }
 
-fn run_config_command(
-    cli: &Cli,
-    args: &crate::cli::args::ConfigArgs,
-    presenter: &Presenter,
-) -> i32 {
+fn run_config_command(args: &crate::cli::args::ConfigArgs, presenter: &Presenter) -> i32 {
     match &args.command {
-        ConfigCommand::Init(init_args) => run_config_init(cli, init_args, presenter),
+        ConfigCommand::Init(init_args) => run_config_init(init_args, presenter),
     }
 }
 
-fn run_config_init(cli: &Cli, args: &ConfigInitArgs, presenter: &Presenter) -> i32 {
+fn run_config_init(args: &ConfigInitArgs, presenter: &Presenter) -> i32 {
+    if config_flag_was_explicitly_set() {
+        presenter.print_error(
+            "global --config flag is not supported for `config init`; use `config init --output <FILE>` to choose where the generated config is written",
+        );
+        return crate::output::exit_codes::VALIDATION_ERROR;
+    }
+
     let project_dir = match std::env::current_dir() {
         Ok(path) => path,
         Err(error) => {
@@ -125,11 +129,7 @@ fn run_config_init(cli: &Cli, args: &ConfigInitArgs, presenter: &Presenter) -> i
             return crate::output::exit_codes::RUNTIME_ERROR;
         }
     };
-    let output_path = args
-        .file
-        .as_deref()
-        .or(cli.config.as_deref())
-        .unwrap_or("v8project.yaml");
+    let output_path = args.output.as_deref().unwrap_or("v8project.yaml");
 
     let request = ConfigInitRequest {
         project_dir,
@@ -283,4 +283,19 @@ fn install_mcp_panic_hook() {
     std::panic::set_hook(Box::new(|panic_info| {
         eprintln!("{panic_info}");
     }));
+}
+
+fn cli_output_format(json_message: bool) -> &'static str {
+    if json_message {
+        "json"
+    } else {
+        "text"
+    }
+}
+
+fn config_flag_was_explicitly_set() -> bool {
+    std::env::args_os().skip(1).any(|arg| {
+        let value = arg.to_string_lossy();
+        value == "--config" || value.starts_with("--config=")
+    })
 }

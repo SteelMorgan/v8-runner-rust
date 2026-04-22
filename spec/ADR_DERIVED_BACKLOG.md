@@ -81,7 +81,7 @@
 
    Источники: `ADR-0010`, `docs/architecture/invariants.md`, `ADR-TASK-007`.
 
-   Решение: зафиксировать одну public ось CLI output — `--output text|json`; не вводить отдельный audience/profile-переключатель; различия "человек vs агент" не оформлять как отдельную presentation-модель; JSON contract не менять без отдельного решения.
+   Решение: зафиксировать единый high-signal CLI output contract без audience/profile-оси; structured output выбирается булевым `--json-message`, а `--output` резервируется для user-facing output path flags; JSON contract не менять без отдельного решения.
 
    Готово, когда: `ADR-0010`, `docs/architecture/invariants.md`, `spec/ADR_DERIVED_BACKLOG.md`, `spec/IMPLEMENTATION_TODO.md` и CLI docs описывают одну модель output policy; tests для rendering cases привязаны к этой модели.
 
@@ -243,7 +243,7 @@
 
 ## Критерии корректного CLI output
 
-Эти критерии уточняют `ADR-TASK-007`: корректный CLI output дает минимальный достаточный сигнал для следующего действия. Они зафиксированы для единственной public оси `--output text|json`; отдельная audience/profile-ось не вводится, а JSON contract не меняется без отдельного решения.
+Эти критерии уточняют `ADR-TASK-007`: корректный CLI output дает минимальный достаточный сигнал для следующего действия. Structured output включается через `--json-message`, user-facing output path flags используют имя `--output`, отдельная audience/profile-ось не вводится, а JSON contract не меняется без отдельного решения.
 
 1. Статус однозначен.
 
@@ -309,7 +309,7 @@
 | `ADR-0007` | Shared EDT actor/manager вынесен в общий execution слой; direct non-shared interactive CLI path закрыт `2026-04-22`. | Закрыто `ADR-TASK-004` |
 | `ADR-0008` | Граница platform DSL требует постоянных guardrails. | `ADR-TASK-010`, `ADR-TASK-020` |
 | `ADR-0009` | Business/runtime failure split реализован как contract и требует защиты при добавлении новых tools. | `ADR-TASK-010`, `ADR-TASK-022`, `ADR-TASK-024` |
-| `ADR-0010` | Для CLI output зафиксирована единая high-signal policy без отдельной audience-оси; открытой остаётся только реализация rendering rules. | `ADR-TASK-007` |
+| `ADR-0010` | Для CLI output зафиксирована единая high-signal policy без отдельной audience-оси; naming policy `--json-message` / user-facing `--output` синхронизирована, открытой остаётся дальнейшая эволюция rendering rules. | `ADR-TASK-007` |
 | `ADR-0011` | Workspace lock реализован; будущим public commands нужен lock guardrail. | `ADR-TASK-010` |
 | `ADR-0012` | EDT generated Designer partial-load decision remains key gap. | `ADR-TASK-002` |
 | `ADR-0013` | MCP admission/session capacity уже есть; cancellation/deadline должны идти через общую policy. | `ADR-TASK-003` |
@@ -322,7 +322,7 @@
 
 ## Следующий рекомендуемый порядок
 
-1. Следующим брать `ADR-TASK-019` как ближайший открытый public-contract пункт по help/output-path naming.
-2. Затем `ADR-TASK-020`, `ADR-TASK-021` и `ADR-TASK-022`, чтобы снять основные архитектурные hotspots в orchestration, source-set classification и adapter boundary.
+1. Следующим брать `ADR-TASK-020` как ближайший открытый архитектурный hotspot в orchestration use-case layers.
+2. Затем `ADR-TASK-021` и `ADR-TASK-022`, чтобы снять основные дублирования в source-set classification и adapter boundary.
 3. После этого идти в `ADR-TASK-023`, `ADR-TASK-024` и `ADR-TASK-025` как в следующий слой типобезопасности request/error/result contract.
 4. Затем возвращаться к `ADR-TASK-018`, `ADR-TASK-016` и `ADR-TASK-026` как к product-contract и test-maintenance follow-up задачам.

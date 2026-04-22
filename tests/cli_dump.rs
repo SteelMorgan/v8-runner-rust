@@ -249,8 +249,7 @@ fn dump_ibcmd_full_json_success() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "dump",
             "--mode",
             "full",
@@ -286,8 +285,7 @@ fn dump_edt_full_json_success_updates_designer_mirror_and_edt_target() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "dump",
             "--mode",
             "full",
@@ -368,8 +366,7 @@ fn dump_ibcmd_incremental_json_success() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "dump",
             "--mode",
             "incremental",
@@ -396,8 +393,7 @@ fn dump_ibcmd_partial_json_success_uses_degraded_fallback() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "dump",
             "--mode",
             "partial",
@@ -459,8 +455,7 @@ fn dump_ibcmd_partial_failure_keeps_partial_mode_and_warning() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "dump",
             "--mode",
             "partial",
@@ -531,8 +526,7 @@ fn dump_ibcmd_full_server_connection_passes_dbms_and_infobase_credentials() {
         .args([
             "--config",
             &config_path.display().to_string(),
-            "--output",
-            "json",
+            "--json-message",
             "dump",
             "--mode",
             "full",

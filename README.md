@@ -105,9 +105,9 @@ tests:
 
 ## CLI output contract
 
-- `--output text` показывает краткий clean success path без подробного успешного журнала на каждом шаге.
-- `--output text` и `--output json` одинаково сохраняют видимыми предупреждения, degraded behavior, созданные артефакты и пути к диагностике.
-- `--output json` остаётся стабильным structured contract для автоматизации; text-режим не должен быть единственным источником важного факта.
+- Без `--json-message` CLI показывает краткий clean success path без подробного успешного журнала на каждом шаге.
+- Text output и JSON envelopes одинаково сохраняют видимыми предупреждения, degraded behavior, созданные артефакты и пути к диагностике.
+- `--json-message` остаётся стабильным structured contract для автоматизации; text-режим не должен быть единственным источником важного факта.
 
 ## Матрица поддержки
 
@@ -124,7 +124,7 @@ tests:
 | `convert` | CLI-only repo-aware конвертация текущих `source-set` через EDT CLI; direction выводится из `format`, output публикуется под `workPath/convert/out`, не требует `builder` или подключения к ИБ |
 | `make` / `artifacts` | Экспорт `.cf` и `.cfe` через Designer; публикация `.epf`/`.erf` для внешних `source-set`; требуется `builder=DESIGNER` |
 | `syntax` | Проверки через Designer для `DESIGNER`-исходников и валидация EDT для `EDT` |
-| `launch` | Designer, тонкий клиент, толстый клиент, обычное приложение; поддерживает `--c`, `--execute`, `--use-privileged-mode`, `--out`, `--raw-key` |
+| `launch` | Designer, тонкий клиент, толстый клиент, обычное приложение; поддерживает `--c`, `--execute`, `--use-privileged-mode`, `--output`, `--raw-key` |
 | MCP | stdio и HTTP-транспорты с 8 опубликованными инструментами |
 
 ## Новые CLI-сценарии
@@ -166,7 +166,7 @@ v8-runner launch ordinary --execute tool.epf --c DoWork --use-privileged-mode
 v8-runner launch thin --raw-key /WA- --raw-key /DisplayAllFunctions
 ```
 
-`launch` также принимает старый вариант `--mode <designer|thin|thick|ordinary>`. `launch` и `test` используют общий набор дополнительных параметров запуска: `--c`, `--execute`, `--use-privileged-mode`, `--out` и повторяемый `--raw-key`. Для команды `test` значения `--c` и `--execute` зарезервированы под внутренний runner payload и будут отклонены.
+`launch` также принимает старый вариант `--mode <designer|thin|thick|ordinary>`. `launch` и `test` используют общий набор дополнительных параметров запуска: `--c`, `--execute`, `--use-privileged-mode`, `--output` и повторяемый `--raw-key`. Для `launch` флаг `--output` задаёт пользовательский `/Out` path; для команды `test` значения `--c`, `--execute` и `--output` зарезервированы под внутренний runner payload и будут отклонены.
 
 ## Опубликованные MCP-инструменты
 
