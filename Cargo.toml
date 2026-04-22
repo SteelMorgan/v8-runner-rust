@@ -36,7 +36,9 @@ tokio-util = "0.7"
 assert_cmd = "2"
 predicates = "3"
 insta = "1"
+quote = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+syn = { version = "2", features = ["full"] }
 
 [profile.release]
 opt-level = "z"

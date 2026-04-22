@@ -4,7 +4,9 @@ use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use guardrail_support::{collect_rust_files, extract_function_block, production_rust_contents};
+use guardrail_support::{
+    collect_rust_files, free_function_tokens, production_tokens, trait_impl_method_tokens,
+};
 
 const EXPECTED_MCP_TOOLS: &[&str] = &[
     "run_all_tests",
@@ -20,14 +22,14 @@ const EXPECTED_MCP_TOOLS: &[&str] = &[
 const FORBIDDEN_PROCESS_PATTERNS: &[&str] = &[
     "std::process::Command",
     "tokio::process::Command",
-    "use std::process::Command",
-    "use std::process::{Command",
-    "use std::process::Stdio",
-    "use std::process::{Stdio",
-    "use std::process::Child",
-    "use std::process::{Child",
-    "use std::process::ExitStatus",
-    "use std::process::{ExitStatus",
+    "usestd::process::Command",
+    "usestd::process::{Command",
+    "usestd::process::Stdio",
+    "usestd::process::{Stdio",
+    "usestd::process::Child",
+    "usestd::process::{Child",
+    "usestd::process::ExitStatus",
+    "usestd::process::{ExitStatus",
     "Command::new(",
     "Stdio::",
 ];
@@ -73,7 +75,7 @@ fn raw_process_spawn_apis_stay_inside_platform_layer() {
             continue;
         }
 
-        let production = production_rust_contents(&file);
+        let production = production_tokens(&file);
         for forbidden in FORBIDDEN_PROCESS_PATTERNS {
             assert!(
                 !production.contains(forbidden),
@@ -87,7 +89,7 @@ fn raw_process_spawn_apis_stay_inside_platform_layer() {
 
 #[test]
 fn mcp_surface_snapshot_stays_explicit_and_documented() {
-    let source = production_rust_contents(repo_path("src/mcp/server.rs").as_path());
+    let source = read("src/mcp/server.rs");
     let source_section = extract_between(
         &source,
         "const fn as_str(self) -> &'static str {",
@@ -127,7 +129,6 @@ fn mcp_surface_snapshot_stays_explicit_and_documented() {
 
 #[test]
 fn public_command_adapters_keep_workspace_lock_boundary() {
-    let cli = production_rust_contents(repo_path("src/cli/execute.rs").as_path());
     for function in [
         "execute_extensions",
         "execute_init",
@@ -139,19 +140,13 @@ fn public_command_adapters_keep_workspace_lock_boundary() {
         "execute_syntax",
         "execute_launch",
     ] {
-        let window = extract_function_block(&cli, function);
+        let window = free_function_tokens(repo_path("src/cli/execute.rs").as_path(), function);
         assert!(
             window.contains("with_cli_workspace_lock("),
             "{function} must keep the CLI workspace-lock boundary"
         );
     }
 
-    let mcp = production_rust_contents(repo_path("src/mcp/port.rs").as_path());
-    let impl_block = extract_between(
-        &mcp,
-        "impl McpUseCasePort for DefaultMcpUseCasePort {",
-        "fn with_workspace_lock<T>(",
-    );
     for function in [
         "build_project",
         "run_tests",
@@ -159,7 +154,12 @@ fn public_command_adapters_keep_workspace_lock_boundary() {
         "launch_app",
         "check_syntax",
     ] {
-        let window = extract_function_block(impl_block, function);
+        let window = trait_impl_method_tokens(
+            repo_path("src/mcp/port.rs").as_path(),
+            "McpUseCasePort",
+            "DefaultMcpUseCasePort",
+            function,
+        );
         assert!(
             window.contains("with_workspace_lock("),
             "{function} must keep the MCP workspace-lock boundary"
