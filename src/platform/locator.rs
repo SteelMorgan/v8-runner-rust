@@ -729,6 +729,22 @@ mod tests {
         make_executable(path);
     }
 
+    #[cfg(unix)]
+    fn touch_versioned_platform_executable(
+        root: &Path,
+        version: &str,
+        utility: UtilityType,
+        use_bin_layout: bool,
+    ) -> PathBuf {
+        let path = if use_bin_layout {
+            root.join(version).join("bin").join(utility.executable_name())
+        } else {
+            root.join(version).join(utility.executable_name())
+        };
+        touch_executable(&path);
+        path
+    }
+
     #[test]
     fn parse_strict_platform_version_requires_four_parts() {
         assert!(PlatformVersion::parse_strict("8.3.25").is_none());
@@ -806,6 +822,21 @@ mod tests {
             Locator::with_roots(Some(root), Some(version), None, None, vec![], vec![]);
 
         assert_eq!(locator.locate(UtilityType::V8C).expect("locate").path, thin);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_root_hint_searches_versioned_children_for_ibcmd() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path().join("platform-root");
+        let version = PlatformVersionRequirement::parse("8.3.27.1789").expect("version");
+        let ibcmd = root.join("8.3.27.1789").join("bin").join("ibcmd");
+        touch_executable(&ibcmd);
+
+        let mut locator =
+            Locator::with_roots(Some(root), Some(version), None, None, vec![], vec![]);
+
+        assert_eq!(locator.locate(UtilityType::Ibcmd).expect("locate").path, ibcmd);
     }
 
     #[cfg(unix)]
@@ -896,6 +927,85 @@ mod tests {
             Some(UtilityVersion::Platform(
                 PlatformVersion::parse_strict("8.3.27.1789").expect("version")
             ))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn platform_version_matrix_applies_to_all_platform_utilities() {
+        for utility in [UtilityType::V8, UtilityType::V8C, UtilityType::Ibcmd] {
+            let dir = tempdir().expect("tempdir");
+            let root = dir.path().join(format!("platform-{}", utility.executable_name()));
+
+            let exact = touch_versioned_platform_executable(
+                &root,
+                "8.3.27.1789",
+                utility,
+                true,
+            );
+            let _older_build = touch_versioned_platform_executable(
+                &root,
+                "8.3.27.1000",
+                utility,
+                false,
+            );
+            let patch_best = touch_versioned_platform_executable(
+                &root,
+                "8.3.20.9999",
+                utility,
+                false,
+            );
+            let _patch_older = touch_versioned_platform_executable(
+                &root,
+                "8.3.20.1000",
+                utility,
+                true,
+            );
+            let _other_minor =
+                touch_versioned_platform_executable(&root, "8.4.1.1", utility, false);
+
+            let mut exact_locator = Locator::with_roots(
+                None,
+                Some(PlatformVersionRequirement::parse("8.3.27.1789").expect("version")),
+                None,
+                None,
+                vec![root.clone()],
+                vec![],
+            );
+            assert_eq!(exact_locator.locate(utility).expect("exact").path, exact);
+
+            let mut patch_locator = Locator::with_roots(
+                None,
+                Some(PlatformVersionRequirement::parse("8.3.20").expect("version")),
+                None,
+                None,
+                vec![root.clone()],
+                vec![],
+            );
+            assert_eq!(patch_locator.locate(utility).expect("patch").path, patch_best);
+
+            let mut minor_locator = Locator::with_roots(
+                None,
+                Some(PlatformVersionRequirement::parse("8.3").expect("version")),
+                None,
+                None,
+                vec![root],
+                vec![],
+            );
+            assert_eq!(minor_locator.locate(utility).expect("minor").path, exact);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn default_platform_roots_match_linux_install_contract() {
+        assert_eq!(
+            super::default_platform_roots(),
+            vec![
+                PathBuf::from("/opt/1cv8/x86_64"),
+                PathBuf::from("/opt/1cv8/i386"),
+                PathBuf::from("/usr/local/1cv8"),
+            ]
         );
     }
 

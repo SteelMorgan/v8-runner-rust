@@ -84,9 +84,13 @@ impl PlatformUtilities {
 #[cfg(test)]
 mod tests {
     use super::PlatformUtilities;
+    use crate::config::model::{
+        AppConfig, BuilderBackend, BuildConfig, InfobaseConfig, McpConfig, PlatformToolConfig,
+        SourceFormat, TestsConfig, ToolsConfig,
+    };
     use crate::platform::locator::{EdtVersion, Locator, LocatorError, UtilityType};
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use tempfile::tempdir;
 
     #[cfg(unix)]
@@ -96,6 +100,38 @@ mod tests {
         let mut perms = fs::metadata(path).expect("metadata").permissions();
         perms.set_mode(0o755);
         fs::set_permissions(path, perms).expect("chmod");
+    }
+
+    #[cfg(unix)]
+    fn touch_executable(path: &Path) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create dirs");
+        }
+        fs::write(path, "#!/bin/sh\nexit 0\n").expect("write");
+        make_executable(path);
+    }
+
+    #[cfg(unix)]
+    fn sample_config(platform_path: Option<PathBuf>, platform_version: Option<&str>) -> AppConfig {
+        AppConfig {
+            base_path: PathBuf::from("/tmp/project"),
+            work_path: PathBuf::from("/tmp/project/.work"),
+            execution_timeout: 300_000,
+            format: SourceFormat::Designer,
+            builder: BuilderBackend::Designer,
+            infobase: InfobaseConfig::file("File=/tmp/ib"),
+            source_sets: Vec::new(),
+            build: BuildConfig::default(),
+            tools: ToolsConfig {
+                platform: PlatformToolConfig {
+                    path: platform_path,
+                    version: platform_version.map(str::to_owned),
+                },
+                ..ToolsConfig::default()
+            },
+            mcp: McpConfig::default(),
+            tests: TestsConfig::default(),
+        }
     }
 
     #[cfg(unix)]
@@ -159,5 +195,31 @@ mod tests {
         let location = utilities.locate(UtilityType::EdtCli).expect("locate edt");
 
         assert_eq!(location.path, wanted);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_config_locates_all_platform_utilities_via_shared_platform_contract() {
+        for utility in [UtilityType::V8, UtilityType::V8C, UtilityType::Ibcmd] {
+            let dir = tempdir().expect("tempdir");
+            let root = dir.path().join(format!("platform-{}", utility.executable_name()));
+            let wanted = root
+                .join("8.3.27.1789")
+                .join("bin")
+                .join(utility.executable_name());
+            let older = root
+                .join("8.3.20.9999")
+                .join("bin")
+                .join(utility.executable_name());
+            touch_executable(&wanted);
+            touch_executable(&older);
+
+            let config = sample_config(Some(root), Some("8.3"));
+            let mut utilities = PlatformUtilities::from_config(&config);
+
+            let location = utilities.locate(utility).expect("locate platform utility");
+
+            assert_eq!(location.path, wanted);
+        }
     }
 }

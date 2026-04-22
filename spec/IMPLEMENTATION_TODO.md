@@ -29,7 +29,7 @@
 
 ## P2
 
-- [ ] `ADR-TASK-009`: Усилить regression coverage platform locator по `ADR-0004`: exact/mask selection `8.3`, `8.3.20`, `8.3.27.1789` для всех platform utilities, особенно `ibcmd`; отдельно зафиксировать `tools.platform.path` как root/hint и не терять уже существующее покрытие для `1cv8` и `1cv8c`.
+- [x] `ADR-TASK-009`: Усилить regression coverage platform locator по `ADR-0004`: exact/mask selection `8.3`, `8.3.20`, `8.3.27.1789` для всех platform utilities, особенно `ibcmd`; отдельно зафиксировать `tools.platform.path` как root/hint и не терять уже существующее покрытие для `1cv8` и `1cv8c`. Выполнено `2026-04-22`: в `src/platform/locator.rs` добавлена regression matrix для `1cv8`, `1cv8c`, `ibcmd` по exact/patch/minor version requirements, отдельный `ibcmd` test для `tools.platform.path` как versioned root/hint и контракт Linux default platform roots; в `src/platform/utilities.rs` добавлен facade-level regression test для `PlatformUtilities::from_config`, а `spec/KEY_COMPONENTS.md` синхронизирован с version-mask policy из `ADR-0004`. Финальная проверка полноты субагентом вернула `APPROVED`.
 - [ ] Добавить CI workflow wiring из `spec/REAL_ENV_TEST_PLAN.md`: установка 1С на GitHub-hosted runner'ах, bootstrap файловой ИБ через `ibsrv`, trusted/fork gating и upload deploy-ready артефактов.
 
 ## P3

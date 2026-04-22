@@ -133,7 +133,7 @@
 
    Готово, когда: tests фиксируют выбор максимальной версии под маску и единый locator/facade для всех platform utilities; docs обновляются при изменении поддержанных форм version requirement.
 
-   Сверка 2026-04-22: `src/platform/locator.rs` уже покрывает exact/prefix selection для `1cv8` и explicit hint cases для `1cv8c`; gap остается в явной regression matrix для `ibcmd` и в выравнивании version-mask coverage по всем platform utilities, а не только по `1cv8`.
+   Выполнено 2026-04-22: в `src/platform/locator.rs` добавлена явная regression matrix для `1cv8`, `1cv8c` и `ibcmd` на exact/patch/minor requirements `8.3.27.1789`, `8.3.20`, `8.3`; отдельно зафиксированы `ibcmd` root-hint case для `tools.platform.path` и Linux default platform roots contract. В `src/platform/utilities.rs` добавлен facade-level regression test для `PlatformUtilities::from_config`, а `spec/KEY_COMPONENTS.md` синхронизирован с поддержанными формами version requirement.
 
 ### P3
 
