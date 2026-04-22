@@ -1,3 +1,7 @@
+> Archived on `2026-04-23` during doc cleanup. Keep this file only as historical maintainer
+> context. Current project truth lives in `README.md`, `docs/CAPABILITIES.md`,
+> `docs/CONFIGURATION.md`, `docs/DEEP_DIVE.md`, `ARCHITECTURE.md`, and `spec/README.md`.
+
 # Функциональные возможности проекта
 
 > Примечание: это внутренний инвентаризационный документ по текущему поведению системы. Публичная пользовательская документация теперь находится в `README.md`, `docs/CAPABILITIES.md` и `docs/DEEP_DIVE.md`. Внутри могут встречаться исторические или переходные пояснения, полезные для maintainers, но не предназначенные как внешний продуктовый reference.

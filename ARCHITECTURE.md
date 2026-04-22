@@ -33,7 +33,7 @@ The platform layer is intentionally split so responsibilities do not bleed into 
 - `mcp::edt_syntax` теперь остаётся только MCP-specific boundary над общим actor: он рендерит interactive `validate`, читает `--file` logs, сохраняет `issues_found`, когда parseable issues приходят вместе с interactive `stdout`, и маппит ошибки actor назад в существующий syntax-result/use-case boundary.
 - `mcp::telemetry` now owns MCP runtime telemetry state and stable tracing contracts for semaphore admission wait, shared EDT queue depth, EDT startup failures, strict session restarts, and restart/shutdown drain stats.
 
-This boundary is designed so Wave 2 can add an EDT-specific interactive runner without replacing the locator API or the standard execution path.
+This boundary keeps interactive EDT execution isolated from the locator API and the standard execution path without reopening a separate execution model.
 
 ## Command Boundary
 
@@ -104,7 +104,7 @@ Important staging note:
 
 - Shared EDT actor теперь живёт в `platform` и используется всеми поддержанными interactive EDT сценариями: CLI `init`, EDT export в `build`, CLI `syntax edt` и live MCP `check_syntax_edt`.
 - `tools.edt_cli.auto_start=true` остаётся eager prewarm только для long-lived host process вроде MCP server; short-lived CLI commands всегда стартуют shared EDT lazy и держат session только в рамках current command lifetime.
-- `spec/MCP_IMPLEMENTATION_PLAN.md` remains the canonical staged MCP rollout history/reference for the closed Stage 1-5 MCP rollout; it is not the active backlog for follow-up EDT work.
+- `spec/archive/MCP_IMPLEMENTATION_PLAN_2026-03-21.md` remains the canonical staged MCP rollout history/reference for the closed Stage 1-5 MCP rollout; it is not the active backlog for follow-up EDT work.
 
 ## Backend Dispatch
 

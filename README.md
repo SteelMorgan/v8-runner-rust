@@ -185,11 +185,14 @@ v8-runner launch thin --raw-key /WA- --raw-key /DisplayAllFunctions
 
 ## Карта документации
 
+- [docs/README.md](docs/README.md): карта документации и порядок доверия между code/docs/spec/archive/reference слоями.
 - [docs/CAPABILITIES.md](docs/CAPABILITIES.md): основной пользовательский справочник по командам, MCP-инструментам, матрицам поддержки и ограничениям.
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md): полный справочник по `v8project.yaml` и всем поддержанным ключам конфигурации.
 - [docs/DEEP_DIVE.md](docs/DEEP_DIVE.md): объяснение внутренних эксплуатационных потоков без дублирования полного справочника команд.
 - [examples/v8project.yaml](examples/v8project.yaml): полный пример конфига с опциональными секциями и значениями по умолчанию.
 - [ARCHITECTURE.md](ARCHITECTURE.md): карта модулей и внутренних границ для контрибьюторов.
+- [spec/README.md](spec/README.md): активный внутренний planning layer без архивного шума.
+- [references/1c/README.md](references/1c/README.md): вынесенный raw reference corpus по утилитам 1С, который не является проектным source of truth.
 - [docs/decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md](docs/decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md): текущая граница поддержки `IBCMD` и целевой принцип взаимозаменяемости builder backend.
 - [docs/decisions/0003-podderzhivat-servernye-ib-dlya-vseh-instrumentov.md](docs/decisions/0003-podderzhivat-servernye-ib-dlya-vseh-instrumentov.md): целевой контракт поддержки серверных ИБ для всех инструментов.
 - [docs/decisions/0004-avtoobnaruzhivat-komponenty-platformy-1s-po-versii-maske.md](docs/decisions/0004-avtoobnaruzhivat-komponenty-platformy-1s-po-versii-maske.md): автопоиск компонентов платформы 1С по точной версии или версии-маске.
@@ -213,6 +216,6 @@ v8-runner launch thin --raw-key /WA- --raw-key /DisplayAllFunctions
 - `dump format=EDT` использует internal Designer snapshot под `workPath/designer/<source-set>`, затем импортирует его в EDT-проект и публикует результат атомарной заменой target-каталога; для repo-aware файловой конвертации текущих исходников по-прежнему используйте `convert`.
 - `syntax designer-modules` требует как минимум один флаг режима.
 - Интерактивный EDT теперь включается явно через `tools.edt_cli.interactive-mode`; без него EDT работает в one-shot режиме.
-- Внутренние документы в `spec/*` по-прежнему полезны как источник фактов, но публичный справочник теперь живёт в `README.md`, `docs/CAPABILITIES.md` и `docs/DEEP_DIVE.md`.
+- Активные внутренние планы теперь живут в `spec/README.md`, архивная история — в `spec/archive/`, а raw reference corpus по 1С вынесен в `references/1c/`.
 
 </details>

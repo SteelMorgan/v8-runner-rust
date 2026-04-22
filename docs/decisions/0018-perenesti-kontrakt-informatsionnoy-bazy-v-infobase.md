@@ -9,7 +9,7 @@
 Текущий config contract хранит строку подключения на верхнем уровне как `connection`, а пользователя информационной базы в отдельной секции `credentials`.
 Это было достаточно для Designer/Enterprise utilities, которым нужна обычная строка подключения 1С и параметры `/N`/`/P`.
 
-Для `IBCMD` server connection этого недостаточно. По `spec/ibcmd-commands-full.md` режимы `config` и `infobase` получают доступ к серверной базе через DBMS-level параметры:
+Для `IBCMD` server connection этого недостаточно. По `references/1c/ibcmd-commands-full.md` режимы `config` и `infobase` получают доступ к серверной базе через DBMS-level параметры:
 
 - `--dbms`
 - `--database-server`

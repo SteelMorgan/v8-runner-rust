@@ -1,9 +1,13 @@
+> Archived on `2026-04-23` during doc cleanup. This is a pre-ADR-era Rust CLI backlog snapshot
+> and is kept only for delivery history. Active planning now lives in `../IMPLEMENTATION_TODO.md`
+> and `../ADR_DERIVED_BACKLOG.md`.
+
 # Backlog реализации Rust CLI
 
 Документ опирается на:
 
-- `spec/FUNCTIONAL_CAPABILITIES.md`
-- `spec/KEY_COMPONENTS.md`
+- `spec/archive/FUNCTIONAL_CAPABILITIES_legacy.md`
+- `spec/archive/KEY_COMPONENTS_legacy.md`
 
 Текущий scope: реализуем CLI-решение на Rust. MCP-слой в этот этап не входит.
 

@@ -1,3 +1,7 @@
+> Archived on `2026-04-23` during doc cleanup. This file preserves a legacy JVM/Spring-oriented
+> component map and must not be used as the current architecture source of truth. Use
+> `ARCHITECTURE.md`, `docs/architecture/*`, and `spec/README.md` instead.
+
 # Ключевые компоненты и их функциональность
 
 Документ фиксирует высокоуровневую карту системы, границы ответственности компонентов и критичные технические детали, которые важны для переписывания на другой стек. Часть названий сохранена в legacy-нотации раннего JVM/Spring прототипа для сопоставления со старыми ADR/spec, поэтому для точного соответствия текущему Rust-коду canonical references остаются `ARCHITECTURE.md` и реальные module paths.

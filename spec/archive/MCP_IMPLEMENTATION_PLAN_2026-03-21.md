@@ -1,3 +1,6 @@
+> Archived on `2026-04-23` during doc cleanup. This file is a closed rollout record, not an
+> active backlog. Current planning lives in `../IMPLEMENTATION_TODO.md`.
+
 # Поэтапный план реализации MCP
 
 ## Summary
@@ -122,7 +125,7 @@
 - [x] 2026-03-20: Зафиксировать, что этот staged MCP plan был полностью закрыт к началу следующего task workflow.
   - Следующая работа продолжена из общего backlog в `spec/IMPLEMENTATION_TODO.md`, без переоткрытия закрытых Stage 1-5 задач.
 - [x] 2026-03-21: Сохранить этот документ как canonical staged MCP rollout history/reference.
-  - `spec/MCP_IMPLEMENTATION_PLAN.md` остаётся основным staged record для закрытого MCP rollout Stage 1-5, а новая реализационная работа продолжается из общего backlog в `spec/IMPLEMENTATION_TODO.md`.
+  - `spec/archive/MCP_IMPLEMENTATION_PLAN_2026-03-21.md` остаётся основным staged record для закрытого MCP rollout Stage 1-5, а новая реализационная работа продолжается из общего backlog в `spec/IMPLEMENTATION_TODO.md`.
 
 ## Public Changes
 

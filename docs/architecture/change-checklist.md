@@ -12,7 +12,6 @@
    - `ARCHITECTURE.md`
    - `README.md`
    - `docs/CAPABILITIES.md`
-   - `spec/FUNCTIONAL_CAPABILITIES.md`
    - `src/mcp/server.rs`
    - `src/mcp/request.rs`
    - `src/mcp/response.rs`

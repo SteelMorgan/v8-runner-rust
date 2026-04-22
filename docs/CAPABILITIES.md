@@ -4,7 +4,7 @@
 
 Последняя факт-проверка: `2026-04-22` по свежей локальной сборке `cargo test`, актуальному CLI `--help`, `src/config/model.rs` и реальной MCP-поверхности запросов в `src/mcp/request.rs` / `src/mcp/service.rs`.
 
-Если этот документ расходится со старыми внутренними заметками в `spec/*`, доверяйте текущему коду и CLI-интерфейсу.
+Если этот документ расходится с архивом в `spec/archive/*` или raw reference-материалами в `references/1c/*`, доверяйте текущему коду и CLI-интерфейсу.
 
 Граница поддержки `IBCMD` зафиксирована в [ADR-0001](decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md): сейчас это ограниченный backend для `init`, `build`, `dump`, `extensions`, но file/server contract уже унифицирован через `infobase` и `infobase.dbms`. Целевой принцип builder-слоя: реализованные builder-сценарии должны быть взаимозаменяемы между `DESIGNER`, `IBCMD` и будущим Designer agent mode либо иметь явно описанный gap.
 
