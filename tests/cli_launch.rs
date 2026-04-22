@@ -142,6 +142,7 @@ fn launch_text_includes_binary_pid_and_cleans_platform_logs() {
         .args([
             "--config",
             &config_path.display().to_string(),
+            "--no-color",
             "--clean-before-execution",
             "launch",
             "--mode",
@@ -152,8 +153,9 @@ fn launch_text_includes_binary_pid_and_cleans_platform_logs() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("[Запуск]"));
-    assert!(stdout.contains("Launched конфигуратор via"));
+    assert!(stdout.contains("Launch completed successfully"));
+    assert!(stdout.contains("mode: конфигуратор"));
+    assert!(stdout.contains("[status] Launched конфигуратор via"));
     assert!(stdout.contains(
         install_dir
             .join("bin")

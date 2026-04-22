@@ -423,17 +423,14 @@ fn test_text_output_splits_pipeline_into_timeline_stages() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    assert!(stdout.contains("● tests:"));
-    assert!(stdout.contains("│   target: all"));
-    assert!(stdout.contains("│   ✓ build prerequisite: build completed"));
-    assert!(stdout.contains("│   ✓ prepare artifacts: created "));
-    assert!(stdout.contains("│   ✓ prepare runner: YaXUnit config written"));
-    assert!(stdout.contains("│   ✓ enterprise run: enterprise exit code 0"));
-    assert!(stdout.contains("│   ✓ parse JUnit report: parsed 1 test cases"));
-    assert!(stdout.contains("│   ✓ parse runner log:"));
     assert!(stdout.contains("● Tests completed successfully"));
-    assert!(stdout.contains("│   total=1, passed=1, failed=0, skipped=0, errors=0"));
-    assert!(!stdout.contains("● Tests: target"));
+    assert!(stdout.contains("│   target: all"));
+    assert!(stdout.contains("│   summary: total=1, passed=1, failed=0, skipped=0, errors=0"));
+    assert!(!stdout.contains("build prerequisite"));
+    assert!(!stdout.contains("prepare artifacts"));
+    assert!(!stdout.contains("enterprise run"));
+    assert!(!stdout.contains("parse JUnit report"));
+    assert!(!stdout.contains("parse runner log"));
     assert!(!stdout.contains(" INFO "));
     assert!(!stdout.contains("Test target: all"));
     assert!(!stdout.contains("Summary: total="));
@@ -441,6 +438,67 @@ fn test_text_output_splits_pipeline_into_timeline_stages() {
     assert!(!stdout.contains("preparing test run artifacts"));
     assert!(!stdout.contains("launching enterprise test run"));
     assert!(!stdout.contains("parsing JUnit report"));
+}
+
+#[test]
+fn test_text_output_surfaces_failure_code_and_retained_artifacts() {
+    let (_dir, config_path, _build_calls, _test_calls, _captured_config) =
+        setup_project("work", JUNIT_SMOKE_REPORT_FIXTURE, "", 0, false, 1, Some(2));
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--no-color",
+            "test",
+            "yaxunit",
+            "all",
+        ])
+        .output()
+        .expect("run");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("● Tests failed"));
+    assert!(stdout.contains("✗ enterprise run: runtime error: enterprise test run timed out"));
+    assert!(stdout.contains("[warning] enterprise test run timed out"));
+    assert!(stdout.contains("[artifact] run_dir -> "));
+    assert!(stdout.contains("[diagnostic] platform_log -> "));
+}
+
+#[test]
+fn test_text_output_surfaces_success_log_findings_without_full_step_noise() {
+    let (_dir, config_path, _build_calls, _test_calls, _captured_config) = setup_project(
+        "work",
+        JUNIT_SMOKE_REPORT_FIXTURE,
+        YAXUNIT_LOG_FIXTURE,
+        0,
+        false,
+        5,
+        None,
+    );
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--no-color",
+            "test",
+            "yaxunit",
+            "all",
+        ])
+        .output()
+        .expect("run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("● Tests completed with warnings"));
+    assert!(stdout.contains("[error:test_report]"));
+    assert!(!stdout.contains("prepare artifacts"));
 }
 
 #[test]
@@ -717,7 +775,7 @@ fn test_timeout_retains_artifacts() {
     assert_eq!(output.status.code(), Some(3));
 
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
-    assert_eq!(payload["data"]["error_kind"], "enterprise_timed_out");
+    assert_eq!(payload["data"]["execution"]["status"], "timed_out");
     let platform_log = payload["data"]["retained_paths"]["platform_log"]
         .as_str()
         .expect("platform log");

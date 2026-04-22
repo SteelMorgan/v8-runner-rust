@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Instant;
 
 use serde_json::json;
@@ -10,10 +11,16 @@ use crate::cli::args::{
 };
 use crate::cli::signal::CliSignalGuard;
 use crate::config::model::{AppConfig, SourceSetPurpose};
+use crate::domain::artifact::{
+    ArtifactRef, ARTIFACT_ROLE_PACKAGE_FILE, ARTIFACT_ROLE_PLATFORM_LOG,
+};
 use crate::domain::artifacts::{ArtifactBuildMode, ArtifactsResult};
 use crate::domain::build::{BuildMode, BuildResult};
 use crate::domain::dump::{DumpMode, DumpResult};
-use crate::domain::execution::ExecutionTimeouts;
+use crate::domain::execution::{
+    ExecutionError, ExecutionInterruptionDetails, ExecutionStepStatus, ExecutionTimeouts,
+    StepResult,
+};
 use crate::domain::init::{InitResult, InitStep, InitStepStatus};
 use crate::domain::issue::{Issue, IssueSeverity};
 use crate::domain::launch::{LaunchMode, LaunchResult};
@@ -1036,20 +1043,231 @@ fn timeline_item_with_details(
     }
 }
 
-fn status_detail(ok: bool, message: impl AsRef<str>) -> String {
-    if ok {
-        format!("✓ {}", message.as_ref())
-    } else {
-        format!("✗ {}", message.as_ref())
-    }
-}
-
 fn step_status_detail(status: &InitStepStatus, message: impl AsRef<str>) -> String {
     match status {
         InitStepStatus::Ok => format!("✓ {}", message.as_ref()),
         InitStepStatus::Skipped => format!("○ {}", message.as_ref()),
         InitStepStatus::Failed => format!("✗ {}", message.as_ref()),
     }
+}
+
+fn bracketed_detail(kind: &str, message: impl AsRef<str>) -> String {
+    format!("[{kind}] {}", message.as_ref())
+}
+
+fn single_timeline(
+    presenter: &Presenter,
+    status: TimelineStatus,
+    label: impl Into<String>,
+    details: Vec<String>,
+) {
+    presenter.print_timeline(&[timeline_item_with_details(status, label, details)]);
+}
+
+fn append_if_present(details: &mut Vec<String>, line: Option<String>) {
+    if let Some(line) = line.filter(|value| !value.is_empty()) {
+        push_unique_detail(details, line);
+    }
+}
+
+fn push_unique_detail(details: &mut Vec<String>, line: impl Into<String>) {
+    let line = line.into();
+    if !details.contains(&line) {
+        details.push(line);
+    }
+}
+
+fn append_error_details(details: &mut Vec<String>, errors: &[ExecutionError]) {
+    for error in errors {
+        push_unique_detail(
+            details,
+            bracketed_detail(&format!("error:{}", error.code), &error.message),
+        );
+        for detail in &error.details {
+            push_unique_detail(details, bracketed_detail("detail", detail));
+        }
+        if let Some(artifact) = error.artifact.as_ref() {
+            push_unique_detail(details, render_artifact_ref("diagnostic", artifact));
+        }
+    }
+}
+
+fn append_diagnostics(details: &mut Vec<String>, diagnostics: &[String]) {
+    for diagnostic in diagnostics {
+        push_unique_detail(details, bracketed_detail("diagnostic", diagnostic));
+    }
+}
+
+fn append_interruptions(details: &mut Vec<String>, interruptions: &[ExecutionInterruptionDetails]) {
+    for interruption in interruptions {
+        if let Some(message) = interruption.message.as_deref() {
+            push_unique_detail(details, bracketed_detail("warning", message));
+            continue;
+        }
+
+        let kind = match interruption.kind {
+            crate::domain::execution::ExecutionInterruptionKind::Cancelled => "cancelled",
+            crate::domain::execution::ExecutionInterruptionKind::TimedOut => "timed_out",
+        };
+        let phase = interruption.phase.as_deref().unwrap_or("unknown_phase");
+        let detail = if interruption.deferred {
+            format!("deferred {kind} interruption during {phase}")
+        } else {
+            format!("{kind} interruption during {phase}")
+        };
+        push_unique_detail(details, bracketed_detail("warning", detail));
+    }
+}
+
+fn render_artifact_ref(kind: &str, artifact: &ArtifactRef) -> String {
+    let role = artifact.role.as_deref().unwrap_or(kind);
+    format!("[{kind}] {role} -> {}", artifact.path.display())
+}
+
+fn render_output_artifact(path: &Path) -> String {
+    format!("[artifact] {}", path.display())
+}
+
+fn render_step_signal(step: &StepResult) -> String {
+    let label = render_test_step_label(&step.name);
+    let message = step
+        .message
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("completed");
+    match step.status {
+        ExecutionStepStatus::Failed => format!("✗ {label}: {message}"),
+        ExecutionStepStatus::Skipped => format!("○ {label}: {message}"),
+        ExecutionStepStatus::Degraded => {
+            bracketed_detail("step:degraded", format!("{label}: {message}"))
+        }
+        ExecutionStepStatus::Succeeded => format!("✓ {label}: {message}"),
+    }
+}
+
+fn append_step_signals(details: &mut Vec<String>, steps: &[StepResult]) {
+    for step in steps {
+        let is_interesting = !matches!(step.status, ExecutionStepStatus::Succeeded)
+            || !step.diagnostics.is_empty()
+            || !step.errors.is_empty()
+            || step.artifacts.is_some();
+        if !is_interesting {
+            continue;
+        }
+
+        push_unique_detail(details, render_step_signal(step));
+        if let Some(target) = step.target.as_deref() {
+            push_unique_detail(details, bracketed_detail("target", target));
+        }
+        append_diagnostics(details, &step.diagnostics);
+        append_error_details(details, &step.errors);
+        if let Some(artifacts) = step.artifacts.as_ref() {
+            for artifact in &artifacts.items {
+                push_unique_detail(details, render_artifact_ref("artifact", artifact));
+            }
+        }
+    }
+}
+
+fn append_report_failures(details: &mut Vec<String>, result: &TestRunResult) {
+    let Some(report) = result.report.as_ref() else {
+        return;
+    };
+
+    for extracted in &report.extracted_errors {
+        push_unique_detail(details, bracketed_detail("error:test_report", extracted));
+    }
+
+    for suite in &report.suites {
+        for case in &suite.cases {
+            if matches!(case.status, TestStatus::Passed) {
+                continue;
+            }
+
+            push_unique_detail(
+                details,
+                bracketed_detail(
+                    "case",
+                    format!(
+                        "{} :: {} {}",
+                        suite.name,
+                        status_label(&case.status),
+                        case.name
+                    ),
+                ),
+            );
+            if let Some(message) = case.failure_message.as_deref() {
+                push_unique_detail(details, bracketed_detail("detail", message));
+            }
+            if let Some(trace) = case.stack_trace.as_deref() {
+                push_unique_detail(details, bracketed_detail("detail", trace));
+            }
+        }
+    }
+}
+
+fn append_retained_test_artifacts(details: &mut Vec<String>, result: &TestRunResult) {
+    let Some(paths) = result.retained_paths.as_ref() else {
+        return;
+    };
+
+    push_unique_detail(
+        details,
+        format!("[artifact] run_dir -> {}", paths.run_dir.display()),
+    );
+    push_unique_detail(
+        details,
+        format!("[artifact] report -> {}", paths.junit_xml.display()),
+    );
+    push_unique_detail(
+        details,
+        format!("[artifact] runner_log -> {}", paths.yaxunit_log.display()),
+    );
+    push_unique_detail(
+        details,
+        format!(
+            "[diagnostic] platform_log -> {}",
+            paths.platform_log.display()
+        ),
+    );
+}
+
+fn should_hide_success_test_diagnostic(diagnostic: &str) -> bool {
+    diagnostic.trim_start().starts_with("platform ")
+}
+
+fn visible_test_diagnostics(result: &TestRunResult) -> Vec<String> {
+    if !result.ok {
+        return result.diagnostics.clone();
+    }
+
+    result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| !should_hide_success_test_diagnostic(diagnostic))
+        .cloned()
+        .collect()
+}
+
+fn test_has_actionable_success_signal(result: &TestRunResult) -> bool {
+    result.report
+        .as_ref()
+        .is_some_and(|report| !report.extracted_errors.is_empty())
+        || !visible_test_diagnostics(result).is_empty()
+}
+
+fn dump_has_warning(result: &DumpResult) -> bool {
+    result
+        .message
+        .as_deref()
+        .is_some_and(|message| message != "dump completed successfully")
+}
+
+fn execution_has_warning(
+    diagnostics: &[String],
+    interruptions: &[ExecutionInterruptionDetails],
+) -> bool {
+    !diagnostics.is_empty() || !interruptions.is_empty()
 }
 
 fn render_artifact_mode(mode: ArtifactBuildMode) -> &'static str {
@@ -1076,31 +1294,47 @@ fn render_load_text(result: &LoadResult, presenter: &Presenter, succeeded: bool)
         ),
         crate::domain::load::LoadTargetKind::Unknown => "unknown".to_owned(),
     };
-    let mut details = vec![format!(
-        "[Конфигуратор] {mode} {} <- {}",
-        render_artifact_mode(result.artifact_type),
-        result.artifact_path.display()
-    )];
-    if let Some(message) = result.message.as_deref() {
-        details.push(status_detail(succeeded, message));
-    }
-    if let Some(path) = result.platform_log_path.as_deref() {
-        details.push(format!("platform log: {}", path.display()));
-    }
-    let mut timeline = vec![timeline_item_with_details(
-        timeline_status(succeeded),
-        format!("{target}:"),
-        details,
-    )];
-    timeline.push(if succeeded {
-        TimelineItem::new(
-            TimelineStatus::Succeeded,
-            "Artifact load completed successfully",
-        )
+    let warning = succeeded
+        && execution_has_warning(
+            &result.execution.diagnostics,
+            &result.execution.interruptions,
+        );
+    let label = if !succeeded {
+        "Artifact load failed"
+    } else if warning {
+        "Artifact load completed with warnings"
     } else {
-        TimelineItem::new(TimelineStatus::Failed, "Artifact load failed")
-    });
-    presenter.print_timeline(&timeline);
+        "Artifact load completed successfully"
+    };
+    let mut details = vec![
+        format!("target: {target}"),
+        format!(
+            "action: {mode} {}",
+            render_artifact_mode(result.artifact_type)
+        ),
+        format!("artifact: {}", result.artifact_path.display()),
+    ];
+    if !succeeded || warning {
+        let prefix = if succeeded { "warning" } else { "error" };
+        append_if_present(
+            &mut details,
+            result
+                .message
+                .as_deref()
+                .map(|message| bracketed_detail(prefix, message)),
+        );
+        append_error_details(&mut details, &result.execution.errors);
+        append_diagnostics(&mut details, &result.execution.diagnostics);
+        append_interruptions(&mut details, &result.execution.interruptions);
+        append_if_present(
+            &mut details,
+            result
+                .platform_log_path
+                .as_deref()
+                .map(|path| format!("[diagnostic] platform log -> {}", path.display())),
+        );
+    }
+    single_timeline(presenter, timeline_status(succeeded), label, details);
 }
 
 fn render_init_text(result: &InitResult, presenter: &Presenter) {
@@ -1153,125 +1387,165 @@ fn render_dump_text(result: &DumpResult, presenter: &Presenter, succeeded: bool)
         DumpMode::Partial => "partial",
     };
     let source_set = result.source_set.as_deref().unwrap_or("<unresolved>");
-    let mut details = vec![format!(
-        "[Конфигуратор] Выгрузка {mode} -> {}",
-        result.target_path.display()
-    )];
+    let warning = succeeded && dump_has_warning(result);
+    let label = if !succeeded {
+        "Dump failed"
+    } else if warning {
+        "Dump completed with warnings"
+    } else {
+        "Dump completed successfully"
+    };
+    let mut details = vec![
+        format!("source-set: {source_set}"),
+        format!("mode: {mode}"),
+        format!("output: {}", result.target_path.display()),
+    ];
     if let Some(extension) = result.extension.as_deref() {
         details.push(format!("extension: {extension}"));
     }
-    if let Some(message) = result.message.as_deref() {
-        details.push(status_detail(succeeded, message));
+    if !succeeded || warning {
+        let prefix = if succeeded { "warning" } else { "error" };
+        append_if_present(
+            &mut details,
+            result
+                .message
+                .as_deref()
+                .map(|message| bracketed_detail(prefix, message)),
+        );
+        append_if_present(
+            &mut details,
+            result
+                .platform_log_path
+                .as_deref()
+                .map(|path| format!("[diagnostic] platform log -> {}", path.display())),
+        );
     }
-    if let Some(path) = result.platform_log_path.as_deref() {
-        details.push(format!("platform log: {}", path.display()));
-    }
-    let mut timeline = vec![timeline_item_with_details(
-        timeline_status(succeeded),
-        format!("{source_set}:"),
-        details,
-    )];
-
-    timeline.push(if succeeded {
-        TimelineItem::new(TimelineStatus::Succeeded, "Dump completed successfully")
-    } else {
-        TimelineItem::new(TimelineStatus::Failed, "Dump failed")
-    });
-    presenter.print_timeline(&timeline);
+    single_timeline(presenter, timeline_status(succeeded), label, details);
 }
 
 fn render_artifacts_text(result: &ArtifactsResult, presenter: &Presenter, succeeded: bool) {
     let source_set = result.source_set.as_deref().unwrap_or("<unresolved>");
-    let mut details = vec![format!(
-        "[Конфигуратор] Сборка {} -> {}",
-        render_artifact_mode(result.mode),
-        result.output_path.display()
-    )];
+    let warning = succeeded
+        && (result.message.is_some()
+            || execution_has_warning(
+                &result.execution.diagnostics,
+                &result.execution.interruptions,
+            ));
+    let label = if !succeeded {
+        "Artifacts export failed"
+    } else if warning {
+        "Artifacts export completed with warnings"
+    } else {
+        "Artifacts export completed successfully"
+    };
+    let mut details = vec![
+        format!("source-set: {source_set}"),
+        format!("mode: {}", render_artifact_mode(result.mode)),
+        format!("output: {}", result.output_path.display()),
+    ];
     if let Some(extension) = result.extension.as_deref() {
         details.push(format!("extension: {extension}"));
     }
-    let published_count = result
+    let package_artifacts = result
         .artifacts
         .items
         .iter()
-        .filter(|artifact| artifact.role.as_deref() == Some("package_file"))
-        .count();
-    if published_count > 1 {
-        details.push(format!("published files: {published_count}"));
-    }
-    if let Some(message) = result.message.as_deref() {
-        details.push(status_detail(succeeded, message));
-    }
-    if let Some(path) = result.platform_log_path.as_deref() {
-        details.push(format!("platform log: {}", path.display()));
-    }
-    let mut timeline = vec![timeline_item_with_details(
-        timeline_status(succeeded),
-        format!("{source_set}:"),
-        details,
-    )];
-    timeline.push(if succeeded {
-        TimelineItem::new(
-            TimelineStatus::Succeeded,
-            "Artifacts export completed successfully",
-        )
+        .filter(|artifact| artifact.role.as_deref() == Some(ARTIFACT_ROLE_PACKAGE_FILE))
+        .collect::<Vec<_>>();
+    if package_artifacts.is_empty() {
+        details.push(render_output_artifact(&result.output_path));
     } else {
-        TimelineItem::new(TimelineStatus::Failed, "Artifacts export failed")
-    });
-    presenter.print_timeline(&timeline);
+        for artifact in package_artifacts {
+            details.push(render_artifact_ref("artifact", artifact));
+        }
+    }
+    if !succeeded || warning {
+        let prefix = if succeeded { "warning" } else { "error" };
+        append_if_present(
+            &mut details,
+            result
+                .message
+                .as_deref()
+                .map(|message| bracketed_detail(prefix, message)),
+        );
+        append_error_details(&mut details, &result.execution.errors);
+        append_diagnostics(&mut details, &result.execution.diagnostics);
+        append_interruptions(&mut details, &result.execution.interruptions);
+        append_if_present(
+            &mut details,
+            result
+                .platform_log_path
+                .as_deref()
+                .map(|path| format!("[diagnostic] platform log -> {}", path.display())),
+        );
+        for artifact in result
+            .artifacts
+            .items
+            .iter()
+            .filter(|artifact| artifact.role.as_deref() == Some(ARTIFACT_ROLE_PLATFORM_LOG))
+        {
+            details.push(render_artifact_ref("diagnostic", artifact));
+        }
+    }
+    single_timeline(presenter, timeline_status(succeeded), label, details);
 }
 
 fn render_syntax_text(result: &SyntaxCheckResult, presenter: &Presenter) {
     let succeeded = matches!(result.status, SyntaxCheckStatus::Clean);
-    let mut details = vec![
-        format!("[Синтаксис] Проверка: {}", result.check_name),
-        status_detail(
-            succeeded,
-            format!(
-                "{} (exit {}, errors {}, warnings {}, info {}, duration {} ms)",
-                render_syntax_status(result.status),
-                result.exit_code,
-                result.summary.errors,
-                result.summary.warnings,
-                result.summary.info,
-                result.duration_ms
-            ),
-        ),
-    ];
-    if let Some(path) = result.platform_log_path.as_deref() {
-        details.push(format!("platform log: {}", path.display()));
-    }
-    for issue in &result.issues {
-        details.push(render_issue(issue));
-    }
+    let label = match result.status {
+        SyntaxCheckStatus::Clean => {
+            format!("Syntax check {} completed successfully", result.check_name)
+        }
+        SyntaxCheckStatus::IssuesFound => {
+            format!("Syntax check {} found issues", result.check_name)
+        }
+        SyntaxCheckStatus::ToolFailed => format!("Syntax check {} failed", result.check_name),
+    };
+    let mut details = vec![format!(
+        "status: {} (exit {}, errors {}, warnings {}, info {}, duration {} ms)",
+        render_syntax_status(result.status),
+        result.exit_code,
+        result.summary.errors,
+        result.summary.warnings,
+        result.summary.info,
+        result.duration_ms
+    )];
 
-    if let Some(log_read_warning) = &result.log_read_warning {
-        details.push(format!("Warning: log {log_read_warning}"));
-    }
-
-    if matches!(result.status, SyntaxCheckStatus::ToolFailed) {
-        if let Some(stderr) = &result.stderr {
-            details.push(format!("stderr: {}", stderr.trim()));
+    if !succeeded {
+        for issue in &result.issues {
+            details.push(bracketed_detail("issue", render_issue(issue)));
         }
     }
 
-    let mut timeline = vec![timeline_item_with_details(
-        timeline_status(succeeded),
-        "syntax:",
-        details,
-    )];
-    timeline.push(if succeeded {
-        TimelineItem::new(
-            TimelineStatus::Succeeded,
-            format!("Syntax check {} completed successfully", result.check_name),
-        )
-    } else {
-        TimelineItem::new(
-            TimelineStatus::Failed,
-            format!("Syntax check {} failed", result.check_name),
-        )
-    });
-    presenter.print_timeline(&timeline);
+    append_if_present(
+        &mut details,
+        result
+            .log_read_warning
+            .as_deref()
+            .map(|warning| bracketed_detail("warning", format!("log {warning}"))),
+    );
+
+    if !succeeded || result.log_read_warning.is_some() {
+        append_if_present(
+            &mut details,
+            result
+                .platform_log_path
+                .as_deref()
+                .map(|path| format!("[diagnostic] platform log -> {}", path.display())),
+        );
+    }
+
+    if matches!(result.status, SyntaxCheckStatus::ToolFailed) {
+        append_if_present(
+            &mut details,
+            result
+                .stderr
+                .as_deref()
+                .map(|stderr| bracketed_detail("diagnostic", format!("stderr: {}", stderr.trim()))),
+        );
+    }
+
+    single_timeline(presenter, timeline_status(succeeded), label, details);
 }
 
 fn render_syntax_status(status: SyntaxCheckStatus) -> &'static str {
@@ -1283,24 +1557,26 @@ fn render_syntax_status(status: SyntaxCheckStatus) -> &'static str {
 }
 
 fn render_launch_text(result: &LaunchResult, presenter: &Presenter) {
-    let message = result
-        .message
-        .as_deref()
-        .unwrap_or("Launched application successfully");
     let mut details = vec![
-        format!("[Запуск] Приложение: {}", render_launch_mode(&result.mode)),
-        status_detail(true, message),
+        format!("mode: {}", render_launch_mode(&result.mode)),
         format!("binary: {}", result.binary.display()),
     ];
+    append_if_present(
+        &mut details,
+        result
+            .message
+            .as_deref()
+            .map(|message| bracketed_detail("status", message)),
+    );
     if let Some(pid) = result.pid {
         details.push(format!("pid: {pid}"));
     }
-
-    let timeline = vec![
-        timeline_item_with_details(TimelineStatus::Succeeded, "launch:", details),
-        TimelineItem::new(TimelineStatus::Succeeded, "Launch completed successfully"),
-    ];
-    presenter.print_timeline(&timeline);
+    single_timeline(
+        presenter,
+        TimelineStatus::Succeeded,
+        "Launch completed successfully",
+        details,
+    );
 }
 
 fn render_launch_mode(mode: &LaunchMode) -> &'static str {
@@ -1313,62 +1589,49 @@ fn render_launch_mode(mode: &LaunchMode) -> &'static str {
 }
 
 fn render_test_text(result: &TestRunResult, presenter: &Presenter) {
+    let diagnostics = visible_test_diagnostics(result);
+    let has_warning = result.ok
+        && (!result.warnings.is_empty()
+            || test_has_actionable_success_signal(result)
+            || !result.execution.interruptions.is_empty()
+            || result
+                .steps
+                .iter()
+                .any(|step| !matches!(step.status, ExecutionStepStatus::Succeeded)));
+    let label = if result.ok {
+        if has_warning {
+            "Tests completed with warnings"
+        } else {
+            "Tests completed successfully"
+        }
+    } else {
+        "Tests failed"
+    };
     let mut details = vec![format!("target: {}", render_test_target(&result.target))];
-    for step in &result.steps {
-        let message = step
-            .message
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .unwrap_or("ok");
-        details.push(status_detail(
-            step.ok,
-            format!("{}: {message}", render_test_step_label(&step.name)),
-        ));
-    }
-
-    let status = timeline_status(result.ok);
-    let mut timeline = vec![timeline_item_with_details(status, "tests:", details)];
-
-    let mut summary_details = Vec::new();
     if let Some(report) = &result.report {
-        summary_details.push(format!(
-            "total={}, passed={}, failed={}, skipped={}, errors={}",
+        details.push(format!(
+            "summary: total={}, passed={}, failed={}, skipped={}, errors={}",
             report.summary.total,
             report.summary.passed,
             report.summary.failed,
             report.summary.skipped,
             report.summary.errors
         ));
-        for suite in &report.suites {
-            summary_details.push(format!("Suite: {}", suite.name));
-            for case in &suite.cases {
-                summary_details.push(format!("  {} {}", status_label(&case.status), case.name));
-                if let Some(message) = &case.failure_message {
-                    summary_details.push(format!("    {message}"));
-                }
-                if let Some(trace) = &case.stack_trace {
-                    summary_details.push(format!("    {trace}"));
-                }
-            }
-        }
-    }
-    for diagnostic in &result.diagnostics {
-        summary_details.push(format!("Diagnostic: {diagnostic}"));
-    }
-    for warning in &result.warnings {
-        summary_details.push(format!("Warning: {warning}"));
     }
 
-    timeline.push(timeline_item_with_details(
-        status,
-        if result.ok {
-            "Tests completed successfully"
-        } else {
-            "Tests failed"
-        },
-        summary_details,
-    ));
-    presenter.print_timeline(&timeline);
+    if !result.ok || has_warning {
+        append_step_signals(&mut details, &result.steps);
+        append_report_failures(&mut details, result);
+        append_error_details(&mut details, &result.execution.errors);
+        append_diagnostics(&mut details, &diagnostics);
+        append_interruptions(&mut details, &result.execution.interruptions);
+        for warning in &result.warnings {
+            push_unique_detail(&mut details, bracketed_detail("warning", warning));
+        }
+        append_retained_test_artifacts(&mut details, result);
+    }
+
+    single_timeline(presenter, timeline_status(result.ok), label, details);
 }
 
 fn render_test_target(target: &TestTarget) -> String {

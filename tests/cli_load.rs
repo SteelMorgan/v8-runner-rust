@@ -108,6 +108,34 @@ fn load_cf_json_success_runs_probe_load_and_update() {
 }
 
 #[test]
+fn load_text_success_is_compact_and_keeps_target_visible() {
+    let (_dir, config_path, _binary_path, base_path, _calls_log) = setup_project();
+    let artifact_path = base_path.join("release.cf");
+    fs::write(&artifact_path, "cf").expect("artifact");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--no-color",
+            "load",
+            "--path",
+            "release.cf",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("● Artifact load completed successfully"));
+    assert!(stdout.contains("│   target: configuration"));
+    assert!(stdout.contains("│   action: load cf"));
+    assert!(stdout.contains(artifact_path.display().to_string().as_str()));
+    assert!(!stdout.contains("platform log"));
+}
+
+#[test]
 fn merge_cfe_json_success_requires_extension_and_settings() {
     let (_dir, config_path, _binary_path, base_path, calls_log) = setup_project();
     fs::write(base_path.join("release.cfe"), "cfe").expect("artifact");
@@ -179,6 +207,35 @@ fn load_update_mode_returns_validation_payload() {
         .as_str()
         .expect("message")
         .contains("not supported"));
+}
+
+#[test]
+fn load_text_failure_surfaces_structured_error() {
+    let (_dir, config_path, _binary_path, base_path, _calls_log) = setup_project();
+    fs::write(base_path.join("release.cf"), "cf").expect("artifact");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--no-color",
+            "load",
+            "--path",
+            "release.cf",
+            "--mode",
+            "update",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("● Artifact load failed"));
+    assert!(stdout.contains("[error:artifact_load_failed]"));
+    assert!(stdout.contains("not supported"));
 }
 
 #[test]

@@ -119,6 +119,56 @@ fn syntax_designer_config_json_returns_clean_envelope() {
 }
 
 #[test]
+fn syntax_text_clean_success_stays_compact() {
+    let (_dir, config_path) = setup_project(
+        "out=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf '' > \"$out\"; fi\nexit 0",
+    );
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--no-color",
+            "syntax",
+            "designer-config",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("● Syntax check designer-config completed successfully"));
+    assert!(stdout.contains("│   status: clean (exit 0, errors 0, warnings 0, info 0"));
+    assert!(!stdout.contains("platform log"));
+}
+
+#[test]
+fn syntax_text_success_warning_includes_diagnostic_path() {
+    let (_dir, config_path) = setup_project(
+        "args=\"$*\"\nprintf 'RAW_STDOUT\\n'\nif printf '%s' \"$args\" | grep -F -q -- '/Out'; then\n  exit 0\nfi\nexit 0",
+    );
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--no-color",
+            "syntax",
+            "designer-config",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("● Syntax check designer-config completed successfully"));
+    assert!(stdout.contains("[warning] log"));
+    assert!(stdout.contains("[diagnostic] platform log -> "));
+}
+
+#[test]
 fn syntax_designer_modules_json_returns_structured_validation_failure() {
     let (_dir, config_path) = setup_project(
         "args=\"$*\"\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif printf '%s' \"$args\" | grep -F -q -- '/CheckModules'; then\n  cat <<'LOG' > \"$out\"\n{CommonModules.TestModule(4,2)}: Ошибка компиляции\n{1}: context\nLOG\n  exit 101\nfi\nexit 0",
@@ -164,6 +214,7 @@ fn syntax_text_output_hides_raw_stdout_and_prints_structured_issue() {
         .args([
             "--config",
             &config_path.display().to_string(),
+            "--no-color",
             "syntax",
             "designer-modules",
             "--server",
@@ -175,8 +226,9 @@ fn syntax_text_output_hides_raw_stdout_and_prints_structured_issue() {
     assert_eq!(output.status.code(), Some(3));
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("designer-modules"));
-    assert!(stdout.contains("WARNING CommonModules.TestModule"));
+    assert!(stdout.contains("Syntax check designer-modules found issues"));
+    assert!(stdout.contains("CommonModules.TestModule"));
+    assert!(stdout.contains("[issue] WARNING"));
     assert!(!stdout.contains("RAW_STDOUT"));
 }
 

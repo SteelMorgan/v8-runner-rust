@@ -128,6 +128,34 @@ fn dump_ibcmd_full_json_success() {
 }
 
 #[test]
+fn dump_text_success_is_compact_and_keeps_output_visible() {
+    let (_dir, config_path, _binary_path, _work_path, base_path, _calls_log) = setup_project();
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--no-color",
+            "dump",
+            "--mode",
+            "full",
+            "--source-set",
+            "main",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("● Dump completed successfully"));
+    assert!(stdout.contains("│   source-set: main"));
+    assert!(stdout.contains("│   mode: full"));
+    assert!(stdout.contains(base_path.join("main").display().to_string().as_str()));
+    assert!(!stdout.contains("platform log"));
+}
+
+#[test]
 fn dump_ibcmd_incremental_json_success() {
     let (_dir, config_path, _binary_path, _work_path, base_path, calls_log) = setup_project();
     fs::remove_dir_all(base_path.join("main")).expect("remove target");
@@ -192,6 +220,33 @@ fn dump_ibcmd_partial_json_success_uses_degraded_fallback() {
 }
 
 #[test]
+fn dump_text_warning_shows_degraded_fallback_reason() {
+    let (_dir, config_path, _binary_path, _work_path, _base_path, _calls_log) = setup_project();
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--no-color",
+            "dump",
+            "--mode",
+            "partial",
+            "--source-set",
+            "main",
+            "--object",
+            "Catalog.Items",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("● Dump completed with warnings"));
+    assert!(stdout.contains("[warning] IBCMD does not support object-scoped partial dump"));
+}
+
+#[test]
 fn dump_ibcmd_partial_failure_keeps_partial_mode_and_warning() {
     let (_dir, config_path, binary_path, _work_path, _base_path, calls_log) = setup_project();
     write_ibcmd_script(&binary_path, &calls_log, Some("--sync"));
@@ -228,6 +283,33 @@ fn dump_ibcmd_partial_failure_keeps_partial_mode_and_warning() {
         .as_str()
         .expect("message")
         .contains("dump failed for source-set 'main' with exit code 17"));
+}
+
+#[test]
+fn dump_text_failure_shows_error_message() {
+    let (_dir, config_path, binary_path, _work_path, _base_path, calls_log) = setup_project();
+    write_ibcmd_script(&binary_path, &calls_log, Some("--force"));
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--no-color",
+            "dump",
+            "--mode",
+            "full",
+            "--source-set",
+            "main",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("● Dump failed"));
+    assert!(stdout.contains("[error]"));
+    assert!(stdout.contains("exit code 17"));
 }
 
 #[test]
