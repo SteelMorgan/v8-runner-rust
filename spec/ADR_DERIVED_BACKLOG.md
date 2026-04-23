@@ -209,13 +209,15 @@
 
 17. `ADR-TASK-025`: Завершить migration на canonical `ExecutionOutcome<T>` и убрать legacy duplicated result fields.
 
+   Статус: выполнено 2026-04-23.
+
    Источники: `ADR-0016`.
 
    Объем: для runner-like/result-heavy команд сделать `execution` единственным source of truth, а legacy top-level projections либо удалить, либо вычислять только на adapter boundary; не допускать расхождения между canonical outcome и дублирующими top-level полями.
 
    Готово, когда: domain result не допускает расхождения между `ok/status/diagnostics/report` и `execution`, а tests не фиксируют intentionally inconsistent state; адаптеры строят presentation-friendly projections поверх canonical outcome, а не наоборот.
 
-   Сверка 2026-04-23: review показал, что часть domain result model одновременно хранит `ExecutionOutcome<T>` и legacy projections, что создает недопустимое пространство состояний и лишнее копирование данных.
+   Выполнено 2026-04-23: `TestRunResult`, `ArtifactsResult` и `LoadResult` больше не хранят legacy top-level projections для статуса, diagnostics, artifacts/retained paths, parsed report, platform log и message, если эти данные уже представлены в `ExecutionOutcome<T>`; CLI/MCP строят compatibility projections на adapter boundary, а regression coverage фиксирует canonical serde shape и `load` success diagnostics message.
 
 ### P2
 

@@ -43,25 +43,50 @@ pub struct ArtifactBuildMetadata {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactsResult {
-    pub ok: bool,
     pub mode: ArtifactBuildMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_set: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extension: Option<String>,
-    pub output_path: PathBuf,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub platform_log_path: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "ArtifactSet::is_empty")]
-    pub artifacts: ArtifactSet,
     pub duration_ms: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
     pub execution: ExecutionOutcome<ArtifactBuildMetadata>,
 }
 
 impl ArtifactSet {
     pub fn is_empty(&self) -> bool {
         self.root_dir.is_none() && self.items.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ArtifactBuildMetadata, ArtifactBuildMode, ArtifactsResult};
+    use crate::domain::execution::{ExecutionOutcome, ExecutionStatus};
+    use std::path::PathBuf;
+
+    #[test]
+    fn artifacts_result_serializes_canonical_execution_without_legacy_fields() {
+        let result = ArtifactsResult {
+            mode: ArtifactBuildMode::ConfigurationCf,
+            source_set: Some("main".to_owned()),
+            extension: None,
+            duration_ms: 10,
+            execution: ExecutionOutcome::new(ExecutionStatus::Succeeded).with_payload(
+                ArtifactBuildMetadata {
+                    artifact_type: ArtifactBuildMode::ConfigurationCf,
+                    output_path: PathBuf::from("/tmp/out.cf"),
+                    file_names: vec!["out.cf".to_owned()],
+                    published: true,
+                },
+            ),
+        };
+
+        let value = serde_json::to_value(result).expect("json");
+        assert!(value.get("ok").is_none());
+        assert!(value.get("output_path").is_none());
+        assert!(value.get("platform_log_path").is_none());
+        assert!(value.get("artifacts").is_none());
+        assert!(value.get("message").is_none());
+        assert!(value.get("execution").is_some());
     }
 }

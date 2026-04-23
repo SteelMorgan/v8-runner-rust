@@ -4,6 +4,7 @@ use std::time::Instant;
 use tracing::debug;
 
 use crate::config::model::{AppConfig, BuilderBackend, SourceFormat};
+use crate::domain::artifact::{ArtifactKind, ArtifactRef, ArtifactSet, ARTIFACT_ROLE_PLATFORM_LOG};
 use crate::domain::artifacts::ArtifactBuildMode;
 use crate::domain::execution::{
     ExecutionError, ExecutionInterruptionDetails, ExecutionInterruptionKind, ExecutionOutcome,
@@ -417,7 +418,6 @@ fn run_load(
     .into_iter()
     .flatten()
     .collect::<Vec<_>>();
-    let message = success_message(&resolved, compatibility_state, &deferred_warnings);
     let mut execution =
         ExecutionOutcome::new(ExecutionStatus::Succeeded).with_payload(LoadExecutionMetadata {
             applied: true,
@@ -432,20 +432,18 @@ fn run_load(
         execution = execution.with_interruptions(deferred_interruptions);
     }
     Ok(LoadResult {
-        ok: true,
         mode: resolved.mode,
         artifact_path: resolved.artifact_path,
         artifact_type: resolved.artifact_type,
-        target_kind: resolved.target_kind,
-        compatibility_state,
         extension: resolved.extension,
-        platform_log_path: update_result
-            .platform_log_path
-            .or(apply_result.platform_log_path)
-            .or(probe_log_path),
         duration_ms: started.elapsed().as_millis() as u64,
-        message: Some(message),
-        execution,
+        execution: with_platform_log_artifact(
+            execution,
+            update_result
+                .platform_log_path
+                .or(apply_result.platform_log_path)
+                .or(probe_log_path),
+        ),
     })
 }
 
@@ -807,28 +805,6 @@ fn target_label(resolved: &ResolvedLoadRequest) -> String {
     }
 }
 
-fn success_message(
-    resolved: &ResolvedLoadRequest,
-    compatibility_state: CompatibilityState,
-    deferred_warnings: &[String],
-) -> String {
-    let mut message = format!(
-        "{} {} applied successfully after {:?} compatibility probe",
-        match resolved.mode {
-            LoadMode::Load => "load",
-            LoadMode::Merge => "merge",
-            LoadMode::Update => "update",
-        },
-        resolved.artifact_path.display(),
-        compatibility_state
-    );
-    if !deferred_warnings.is_empty() {
-        message.push_str("; ");
-        message.push_str(&deferred_warnings.join("; "));
-    }
-    message
-}
-
 fn interrupted_result_from_resolved(
     resolved: &ResolvedLoadRequest,
     compatibility_state: CompatibilityState,
@@ -838,33 +814,31 @@ fn interrupted_result_from_resolved(
     platform_log_path: Option<PathBuf>,
 ) -> LoadResult {
     LoadResult {
-        ok: false,
         mode: resolved.mode,
         artifact_path: resolved.artifact_path.clone(),
         artifact_type: resolved.artifact_type,
-        target_kind: resolved.target_kind,
-        compatibility_state,
         extension: resolved.extension.clone(),
-        platform_log_path,
         duration_ms: started.elapsed().as_millis() as u64,
-        message: Some(message.clone()),
-        execution: ExecutionOutcome::new(command_interruption_status(interruption))
-            .with_diagnostics(vec![message.clone()])
-            .with_errors(vec![ExecutionError::new(
-                "artifact_load_interrupted",
-                message.clone(),
-            )])
-            .with_interruptions(vec![command_interruption_details(
-                interruption,
-                "update_db_cfg_safe_point",
-                message,
-            )])
-            .with_payload(LoadExecutionMetadata {
-                applied: true,
-                target_kind: resolved.target_kind,
-                compatibility_state,
-                update_db_cfg_ran: false,
-            }),
+        execution: with_platform_log_artifact(
+            ExecutionOutcome::new(command_interruption_status(interruption))
+                .with_diagnostics(vec![message.clone()])
+                .with_errors(vec![ExecutionError::new(
+                    "artifact_load_interrupted",
+                    message.clone(),
+                )])
+                .with_interruptions(vec![command_interruption_details(
+                    interruption,
+                    "update_db_cfg_safe_point",
+                    message,
+                )])
+                .with_payload(LoadExecutionMetadata {
+                    applied: true,
+                    target_kind: resolved.target_kind,
+                    compatibility_state,
+                    update_db_cfg_ran: false,
+                }),
+            platform_log_path,
+        ),
     }
 }
 
@@ -910,28 +884,41 @@ fn empty_result(
         .clone()
         .unwrap_or_else(|| "artifact load failed".to_owned());
     LoadResult {
-        ok: false,
         mode,
         artifact_path,
         artifact_type,
-        target_kind,
-        compatibility_state,
         extension,
-        platform_log_path,
         duration_ms: started.elapsed().as_millis() as u64,
-        message,
-        execution: ExecutionOutcome::new(ExecutionStatus::Failed)
-            .with_errors(vec![ExecutionError::new(
-                "artifact_load_failed",
-                error_message,
-            )])
-            .with_payload(LoadExecutionMetadata {
-                applied: false,
-                target_kind,
-                compatibility_state,
-                update_db_cfg_ran,
-            }),
+        execution: with_platform_log_artifact(
+            ExecutionOutcome::new(ExecutionStatus::Failed)
+                .with_errors(vec![ExecutionError::new(
+                    "artifact_load_failed",
+                    error_message,
+                )])
+                .with_payload(LoadExecutionMetadata {
+                    applied: false,
+                    target_kind,
+                    compatibility_state,
+                    update_db_cfg_ran,
+                }),
+            platform_log_path,
+        ),
     }
+}
+
+fn with_platform_log_artifact(
+    execution: ExecutionOutcome<LoadExecutionMetadata>,
+    platform_log_path: Option<PathBuf>,
+) -> ExecutionOutcome<LoadExecutionMetadata> {
+    let Some(platform_log_path) = platform_log_path else {
+        return execution;
+    };
+    let mut artifacts = ArtifactSet::default();
+    artifacts.push(
+        ArtifactRef::new(ArtifactKind::PlatformLog, platform_log_path)
+            .with_role(ARTIFACT_ROLE_PLATFORM_LOG),
+    );
+    execution.with_artifacts(artifacts)
 }
 
 #[cfg(test)]
@@ -943,7 +930,9 @@ mod tests {
     };
     use crate::domain::artifacts::ArtifactBuildMode;
     use crate::domain::execution::ExecutionStatus;
-    use crate::domain::load::{CompatibilityState, LoadMode};
+    use crate::domain::load::{
+        CompatibilityState, LoadExecutionMetadata, LoadMode, LoadResult, LoadTargetKind,
+    };
     use crate::use_cases::context::{CommandName, ExecutionContext};
     use crate::use_cases::request::LoadRequest;
     use crate::use_cases::result::UseCaseErrorKind;
@@ -951,6 +940,20 @@ mod tests {
     use std::path::Path;
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
+
+    fn load_payload(result: &LoadResult) -> &LoadExecutionMetadata {
+        result.execution.payload.as_ref().expect("payload")
+    }
+
+    fn load_message(result: &LoadResult) -> &str {
+        result
+            .execution
+            .errors
+            .first()
+            .map(|error| error.message.as_str())
+            .or_else(|| result.execution.diagnostics.first().map(String::as_str))
+            .expect("message")
+    }
 
     #[cfg(unix)]
     fn make_executable(path: &Path) {
@@ -1061,13 +1064,13 @@ mod tests {
         let result = execute(&ExecutionContext::cli(CommandName::Load), &config, &request)
             .expect("load result");
 
-        assert!(result.ok);
+        assert!(result.execution.is_ok());
         assert_eq!(result.artifact_type, ArtifactBuildMode::ConfigurationCf);
-        assert_eq!(result.compatibility_state, CompatibilityState::NotSupported);
         assert_eq!(
-            result.execution.payload.expect("payload").update_db_cfg_ran,
-            true
+            load_payload(&result).compatibility_state,
+            CompatibilityState::NotSupported
         );
+        assert_eq!(load_payload(&result).update_db_cfg_ran, true);
         let calls_text = fs::read_to_string(calls).expect("calls");
         assert!(calls_text.contains("/CompareCfg"));
         assert!(calls_text.contains("/LoadCfg"));
@@ -1095,18 +1098,14 @@ mod tests {
 
         assert_eq!(failure.error.kind(), UseCaseErrorKind::Validation);
         let payload = failure.payload.expect("payload");
-        assert!(!payload.ok);
+        assert!(!payload.execution.is_ok());
         assert_eq!(payload.artifact_type, ArtifactBuildMode::ExtensionCfe);
         assert_eq!(
-            payload.target_kind,
-            crate::domain::load::LoadTargetKind::Extension
+            load_payload(&payload).target_kind,
+            LoadTargetKind::Extension
         );
         assert_eq!(payload.extension.as_deref(), Some("ExistingExt"));
-        assert!(payload
-            .message
-            .as_deref()
-            .expect("message")
-            .contains("builder=DESIGNER and format=DESIGNER"));
+        assert!(load_message(&payload).contains("builder=DESIGNER and format=DESIGNER"));
     }
 
     #[cfg(unix)]
@@ -1162,8 +1161,11 @@ mod tests {
         let result = execute(&ExecutionContext::cli(CommandName::Load), &config, &request)
             .expect("merge result");
 
-        assert!(result.ok);
-        assert_eq!(result.compatibility_state, CompatibilityState::Supported);
+        assert!(result.execution.is_ok());
+        assert_eq!(
+            load_payload(&result).compatibility_state,
+            CompatibilityState::Supported
+        );
         let calls_text = fs::read_to_string(calls).expect("calls");
         assert!(calls_text.contains("ExtensionConfiguration"));
         assert!(calls_text.contains("/MergeCfg"));
@@ -1193,8 +1195,11 @@ mod tests {
         let result = execute(&ExecutionContext::cli(CommandName::Load), &config, &request)
             .expect("load result");
 
-        assert!(result.ok);
-        assert_eq!(result.compatibility_state, CompatibilityState::NotSupported);
+        assert!(result.execution.is_ok());
+        assert_eq!(
+            load_payload(&result).compatibility_state,
+            CompatibilityState::NotSupported
+        );
         let calls_text = fs::read_to_string(calls).expect("calls");
         assert!(calls_text.contains("/CompareCfg"));
         assert!(calls_text.contains("/LoadCfg"));
@@ -1226,14 +1231,10 @@ mod tests {
         assert_eq!(failure.error.kind(), UseCaseErrorKind::Validation);
         let payload = failure.payload.expect("payload");
         assert_eq!(
-            payload.compatibility_state,
+            load_payload(&payload).compatibility_state,
             CompatibilityState::NotSupported
         );
-        assert!(payload
-            .message
-            .as_deref()
-            .expect("message")
-            .contains("use --mode load instead"));
+        assert!(load_message(&payload).contains("use --mode load instead"));
     }
 
     #[cfg(unix)]
@@ -1269,13 +1270,12 @@ mod tests {
 
         assert_eq!(failure.error.kind(), UseCaseErrorKind::Platform);
         let payload = failure.payload.expect("payload");
-        assert!(!payload.ok);
-        assert_eq!(payload.compatibility_state, CompatibilityState::Supported);
-        assert!(payload
-            .message
-            .as_deref()
-            .expect("message")
-            .contains("merge failed for extension"));
+        assert!(!payload.execution.is_ok());
+        assert_eq!(
+            load_payload(&payload).compatibility_state,
+            CompatibilityState::Supported
+        );
+        assert!(load_message(&payload).contains("merge failed for extension"));
     }
 
     #[cfg(unix)]
@@ -1300,8 +1300,8 @@ mod tests {
         let payload = failure.payload.expect("payload");
         assert_eq!(payload.artifact_type, ArtifactBuildMode::ConfigurationCf);
         assert_eq!(
-            payload.target_kind,
-            crate::domain::load::LoadTargetKind::Configuration
+            load_payload(&payload).target_kind,
+            LoadTargetKind::Configuration
         );
         assert_eq!(payload.extension.as_deref(), Some("Ignored"));
     }
@@ -1329,8 +1329,8 @@ mod tests {
         let payload = failure.payload.expect("payload");
         assert_eq!(payload.artifact_type, ArtifactBuildMode::ExtensionCfe);
         assert_eq!(
-            payload.target_kind,
-            crate::domain::load::LoadTargetKind::Extension
+            load_payload(&payload).target_kind,
+            LoadTargetKind::Extension
         );
         assert_eq!(payload.extension.as_deref(), None);
     }
@@ -1356,16 +1356,9 @@ mod tests {
         assert_eq!(failure.error.kind(), UseCaseErrorKind::Validation);
         let payload = failure.payload.expect("payload");
         assert_eq!(payload.artifact_type, ArtifactBuildMode::Unknown);
-        assert_eq!(
-            payload.target_kind,
-            crate::domain::load::LoadTargetKind::Unknown
-        );
+        assert_eq!(load_payload(&payload).target_kind, LoadTargetKind::Unknown);
         assert_eq!(payload.extension.as_deref(), None);
-        assert!(payload
-            .message
-            .as_deref()
-            .expect("message")
-            .contains("only .cf and .cfe"));
+        assert!(load_message(&payload).contains("only .cf and .cfe"));
     }
 
     #[cfg(unix)]
@@ -1392,15 +1385,8 @@ mod tests {
             payload.artifact_type,
             ArtifactBuildMode::ExternalDataProcessorEpf
         );
-        assert_eq!(
-            payload.target_kind,
-            crate::domain::load::LoadTargetKind::Unknown
-        );
+        assert_eq!(load_payload(&payload).target_kind, LoadTargetKind::Unknown);
         assert_eq!(payload.extension.as_deref(), None);
-        assert!(payload
-            .message
-            .as_deref()
-            .expect("message")
-            .contains("only .cf and .cfe"));
+        assert!(load_message(&payload).contains("only .cf and .cfe"));
     }
 }

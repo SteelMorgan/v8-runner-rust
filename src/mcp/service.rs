@@ -551,7 +551,7 @@ fn map_test_response(result: TestRunResult) -> McpTestResponse {
         .as_ref()
         .map(|metrics| (metrics.total, metrics.passed, metrics.failed))
         .or_else(|| {
-            result.report.as_ref().map(|report| {
+            execution.payload.as_ref().map(|report| {
                 (
                     report.summary.total,
                     report.summary.passed,
@@ -559,9 +559,13 @@ fn map_test_response(result: TestRunResult) -> McpTestResponse {
                 )
             })
         });
-    let detail = result.report.as_ref().map(|report| report.suites.clone());
+    let detail = execution
+        .payload
+        .as_ref()
+        .map(|report| report.suites.clone());
     let extracted_errors = result
-        .report
+        .execution
+        .payload
         .as_ref()
         .map(|report| report.extracted_errors.clone())
         .unwrap_or_default();
@@ -1125,7 +1129,7 @@ mod tests {
     #[test]
     fn run_all_tests_maps_success_response() {
         let mut result = sample_test_result(true);
-        if let Some(report) = result.report.as_mut() {
+        if let Some(report) = result.execution.payload.as_mut() {
             report.summary.errors = 2;
         }
         let port = StubPort::with_test_result(Ok(result));
@@ -1151,12 +1155,9 @@ mod tests {
     }
 
     #[test]
-    fn map_test_response_prefers_execution_over_legacy_projection() {
+    fn map_test_response_uses_execution_outcome_projection() {
         let mut result = sample_test_result(false);
-        result.ok = true;
-        result.diagnostics.clear();
-        result.retained_paths = None;
-        if let Some(report) = result.report.as_mut() {
+        if let Some(report) = result.execution.payload.as_mut() {
             report.summary.total = 99;
             report.summary.passed = 99;
             report.summary.failed = 0;

@@ -260,20 +260,23 @@ fn run_artifacts(
                 )]);
             }
             Ok(ArtifactsResult {
-                ok: true,
                 mode: resolved.mode,
                 source_set: Some(resolved.source_set_name),
                 extension: resolved.extension,
-                output_path: resolved.output_path,
-                platform_log_path,
-                artifacts: artifacts.clone(),
                 duration_ms: started.elapsed().as_millis() as u64,
-                message,
                 execution,
             })
         }
-        Err((error, artifacts, platform_log_path)) => {
+        Err((error, mut artifacts, platform_log_path)) => {
             let message = error.to_string();
+            if artifacts.get_by_role(ARTIFACT_ROLE_PLATFORM_LOG).is_none() {
+                if let Some(path) = platform_log_path.as_ref() {
+                    artifacts.push(
+                        ArtifactRef::new(ArtifactKind::PlatformLog, path)
+                            .with_role(ARTIFACT_ROLE_PLATFORM_LOG),
+                    );
+                }
+            }
             let metadata = ArtifactBuildMetadata {
                 artifact_type: resolved.mode,
                 output_path: resolved.output_path.clone(),
@@ -311,15 +314,10 @@ fn run_artifacts(
                 }]);
             }
             let payload = ArtifactsResult {
-                ok: false,
                 mode: resolved.mode,
                 source_set: Some(resolved.source_set_name),
                 extension: resolved.extension,
-                output_path: resolved.output_path,
-                platform_log_path,
-                artifacts: artifacts.clone(),
                 duration_ms: started.elapsed().as_millis() as u64,
-                message: Some(message.clone()),
                 execution,
             };
             Err(ArtifactsExecutionFailure::with_payload(error, payload))
@@ -1143,17 +1141,18 @@ fn empty_result(
             .unwrap_or_default(),
         published: false,
     };
+    let mut execution = ExecutionOutcome::new(ExecutionStatus::Failed).with_payload(metadata);
+    if let Some(message) = message.clone() {
+        execution = execution
+            .with_diagnostics(vec![message.clone()])
+            .with_errors(vec![ExecutionError::new("artifacts_failed", message)]);
+    }
     ArtifactsResult {
-        ok: false,
         mode,
         source_set,
         extension,
-        output_path,
-        platform_log_path: None,
-        artifacts: ArtifactSet::default(),
         duration_ms: started.elapsed().as_millis() as u64,
-        message: message.clone(),
-        execution: ExecutionOutcome::new(ExecutionStatus::Failed).with_payload(metadata),
+        execution,
     }
 }
 
@@ -1286,8 +1285,10 @@ mod tests {
         AppConfig, BuildConfig, BuilderBackend, PlatformToolConfig, SourceFormat, SourceSetConfig,
         SourceSetPurpose, TestsConfig, ToolsConfig,
     };
-    use crate::domain::artifact::{ARTIFACT_ROLE_PACKAGE_FILE, ARTIFACT_ROLE_PLATFORM_LOG};
-    use crate::domain::artifacts::ArtifactBuildMode;
+    use crate::domain::artifact::{
+        ArtifactSet, ARTIFACT_ROLE_PACKAGE_FILE, ARTIFACT_ROLE_PLATFORM_LOG,
+    };
+    use crate::domain::artifacts::{ArtifactBuildMetadata, ArtifactBuildMode, ArtifactsResult};
     use crate::domain::execution::ExecutionStatus;
     use crate::support::fs::{
         metadata_sidecar_path, read_temp_dir_metadata, write_temp_dir_metadata, TempDirKind,
@@ -1326,6 +1327,14 @@ mod tests {
         }
         fs::write(path, body).expect("write script");
         make_executable(path);
+    }
+
+    fn artifacts_payload(result: &ArtifactsResult) -> &ArtifactBuildMetadata {
+        result.execution.payload.as_ref().expect("payload")
+    }
+
+    fn artifacts_set(result: &ArtifactsResult) -> &ArtifactSet {
+        result.execution.artifacts.as_ref().expect("artifacts")
     }
 
     fn sample_config(
@@ -1491,14 +1500,13 @@ mod tests {
         )
         .expect("result");
 
-        assert!(result.ok);
-        assert!(result.output_path.is_file());
+        assert!(result.execution.is_ok());
+        assert!(artifacts_payload(&result).output_path.is_file());
         assert_eq!(
-            result.artifacts.get_by_role(ARTIFACT_ROLE_PACKAGE_FILE),
-            Some(result.output_path.as_path())
+            artifacts_set(&result).get_by_role(ARTIFACT_ROLE_PACKAGE_FILE),
+            Some(artifacts_payload(&result).output_path.as_path())
         );
-        assert!(result
-            .artifacts
+        assert!(artifacts_set(&result)
             .get_by_role(ARTIFACT_ROLE_PLATFORM_LOG)
             .is_some());
     }
@@ -1607,18 +1615,23 @@ mod tests {
             .clone();
         file_names.sort();
 
-        assert!(result.ok);
-        assert!(result.output_path.is_dir());
+        assert!(result.execution.is_ok());
+        assert!(artifacts_payload(&result).output_path.is_dir());
         assert_eq!(
             file_names,
             vec!["Alpha.epf".to_owned(), "Beta.epf".to_owned()]
         );
-        assert!(result
-            .artifacts
+        assert!(artifacts_set(&result)
             .get_by_role(ARTIFACT_ROLE_PLATFORM_LOG)
             .is_some());
-        assert!(result.output_path.join("Alpha.epf").is_file());
-        assert!(result.output_path.join("Beta.epf").is_file());
+        assert!(artifacts_payload(&result)
+            .output_path
+            .join("Alpha.epf")
+            .is_file());
+        assert!(artifacts_payload(&result)
+            .output_path
+            .join("Beta.epf")
+            .is_file());
     }
 
     #[cfg(unix)]
@@ -1670,7 +1683,7 @@ mod tests {
             .clone();
         file_names.sort();
 
-        assert!(result.ok);
+        assert!(result.execution.is_ok());
         assert_eq!(file_names, vec!["Alpha.epf".to_owned()]);
         assert!(!output.join("stale.epf").exists());
         assert!(output.join("Alpha.epf").is_file());
@@ -1729,7 +1742,7 @@ mod tests {
         );
         assert!(!output.join("Alpha.epf").exists());
         assert!(!output.join("Beta.epf").exists());
-        assert!(!payload.ok);
+        assert!(!payload.execution.is_ok());
         assert!(!payload.execution.errors[0].message.is_empty());
     }
 

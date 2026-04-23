@@ -1,6 +1,7 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use serde::Serialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -12,26 +13,30 @@ use crate::cli::args::{
 use crate::cli::signal::CliSignalGuard;
 use crate::config::model::{AppConfig, SourceSetPurpose};
 use crate::domain::artifact::{
-    ArtifactRef, ARTIFACT_ROLE_PACKAGE_FILE, ARTIFACT_ROLE_PLATFORM_LOG,
+    ArtifactRef, ArtifactSet, ARTIFACT_ROLE_PACKAGE_FILE, ARTIFACT_ROLE_PLATFORM_LOG,
 };
-use crate::domain::artifacts::{ArtifactBuildMode, ArtifactsResult};
+use crate::domain::artifacts::{ArtifactBuildMetadata, ArtifactBuildMode, ArtifactsResult};
 use crate::domain::build::{BuildMode, BuildResult};
 use crate::domain::convert::{ConvertDirection, ConvertResult, ConvertScope};
 use crate::domain::dump::{DumpMode, DumpResult};
 use crate::domain::execution::{
-    ExecutionError, ExecutionInterruptionDetails, ExecutionStepStatus, ExecutionTimeouts,
-    StepResult,
+    ExecutionError, ExecutionInterruptionDetails, ExecutionOutcome, ExecutionStepStatus,
+    ExecutionTimeouts, StepResult,
 };
 use crate::domain::init::{InitResult, InitStep, InitStepStatus};
 use crate::domain::issue::{Issue, IssueSeverity};
 use crate::domain::launch::{LaunchMode, LaunchResult};
-use crate::domain::load::{LoadMode, LoadResult};
+use crate::domain::load::{
+    CompatibilityState, LoadExecutionMetadata, LoadMode, LoadResult, LoadTargetKind,
+};
 use crate::domain::runner::{
     ExecutionPolicy, LaunchClientModeRequest, LaunchOptions, RunnerKind, RunnerOutputFormat,
     RunnerProfile,
 };
 use crate::domain::syntax::{SyntaxCheckResult, SyntaxCheckStatus};
-use crate::domain::test::{TestRunResult, TestStatus, TestTarget};
+use crate::domain::test::{
+    RetainedPaths, TestErrorKind, TestOutputMode, TestReport, TestRunResult, TestStatus, TestTarget,
+};
 use crate::output::json::Envelope;
 use crate::output::presenter::Presenter;
 use crate::output::text::{TimelineItem, TimelineStatus};
@@ -319,7 +324,8 @@ fn execute_test(
         || match run_tests::execute(&context, config, &request) {
             Ok(result) => {
                 if presenter.is_json() {
-                    presenter.print_envelope(&build_test_envelope(result, true));
+                    let envelope = build_test_envelope(&result);
+                    presenter.print_envelope(&envelope);
                 } else {
                     render_test_text(&result, presenter);
                 }
@@ -329,7 +335,8 @@ fn execute_test(
                 let error = failure.error;
                 if presenter.is_json() {
                     if let Some(result) = failure.payload {
-                        presenter.print_envelope(&build_test_envelope(result, false));
+                        let envelope = build_test_envelope(&result);
+                        presenter.print_envelope(&envelope);
                     }
                 } else {
                     if let Some(result) = failure.payload.as_ref() {
@@ -360,11 +367,8 @@ fn execute_load(
         || match load_artifact::execute(&context, config, &request) {
             Ok(result) => {
                 if presenter.is_json() {
-                    presenter.print_envelope(&Envelope::ok(
-                        CommandName::Load.as_str(),
-                        result.duration_ms,
-                        result,
-                    ));
+                    let envelope = build_load_envelope(&result);
+                    presenter.print_envelope(&envelope);
                 } else {
                     render_load_text(&result, presenter, true);
                 }
@@ -374,11 +378,8 @@ fn execute_load(
                 let error = failure.error;
                 if presenter.is_json() {
                     if let Some(result) = failure.payload {
-                        presenter.print_envelope(&Envelope::err(
-                            CommandName::Load.as_str(),
-                            result.duration_ms,
-                            result,
-                        ));
+                        let envelope = build_load_envelope(&result);
+                        presenter.print_envelope(&envelope);
                     }
                 } else {
                     if let Some(result) = failure.payload.as_ref() {
@@ -514,11 +515,8 @@ fn execute_artifacts(
         || match artifacts::execute(&context, config, &request) {
             Ok(result) => {
                 if presenter.is_json() {
-                    presenter.print_envelope(&Envelope::ok(
-                        CommandName::Artifacts.as_str(),
-                        result.duration_ms,
-                        result,
-                    ));
+                    let envelope = build_artifacts_envelope(&result);
+                    presenter.print_envelope(&envelope);
                 } else {
                     render_artifacts_text(&result, presenter, true);
                 }
@@ -528,11 +526,8 @@ fn execute_artifacts(
                 let error = failure.error;
                 if presenter.is_json() {
                     if let Some(result) = failure.payload {
-                        presenter.print_envelope(&Envelope::err(
-                            CommandName::Artifacts.as_str(),
-                            result.duration_ms,
-                            result,
-                        ));
+                        let envelope = build_artifacts_envelope(&result);
+                        presenter.print_envelope(&envelope);
                     }
                 } else {
                     if let Some(result) = failure.payload.as_ref() {
@@ -1102,14 +1097,214 @@ fn map_direct_launch_options(args: &LaunchOptionsArgs) -> LaunchOptions {
     }
 }
 
-fn build_test_envelope(result: TestRunResult, ok: bool) -> Envelope<TestRunResult> {
+#[derive(Debug, Serialize)]
+struct LoadJsonData<'a> {
+    pub ok: bool,
+    pub mode: LoadMode,
+    pub artifact_path: &'a Path,
+    pub artifact_type: ArtifactBuildMode,
+    pub target_kind: LoadTargetKind,
+    pub compatibility_state: CompatibilityState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platform_log_path: Option<PathBuf>,
+    pub duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    pub execution: &'a ExecutionOutcome<LoadExecutionMetadata>,
+}
+
+impl<'a> LoadJsonData<'a> {
+    fn from_result(result: &'a LoadResult) -> Self {
+        let metadata = load_metadata(result);
+        Self {
+            ok: result.execution.is_ok(),
+            mode: result.mode,
+            artifact_path: result.artifact_path.as_path(),
+            artifact_type: result.artifact_type,
+            target_kind: metadata
+                .map(|metadata| metadata.target_kind)
+                .unwrap_or(LoadTargetKind::Unknown),
+            compatibility_state: metadata
+                .map(|metadata| metadata.compatibility_state)
+                .unwrap_or(CompatibilityState::Unknown),
+            extension: result.extension.as_deref(),
+            platform_log_path: platform_log_path_from_artifacts(&result.execution.artifacts),
+            duration_ms: result.duration_ms,
+            message: load_message(result),
+            execution: &result.execution,
+        }
+    }
+}
+
+fn load_metadata(result: &LoadResult) -> Option<&LoadExecutionMetadata> {
+    result.execution.payload.as_ref()
+}
+
+fn load_message(result: &LoadResult) -> Option<String> {
+    if !result.execution.is_ok() {
+        return execution_message(&result.execution);
+    }
+
+    let metadata = load_metadata(result)?;
+    let mode = match result.mode {
+        LoadMode::Load => "load",
+        LoadMode::Merge => "merge",
+        LoadMode::Update => "update",
+    };
+    let mut message = format!(
+        "{mode} {} applied successfully after {:?} compatibility probe",
+        result.artifact_path.display(),
+        metadata.compatibility_state
+    );
+    if !result.execution.diagnostics.is_empty() {
+        message.push_str("; ");
+        message.push_str(&result.execution.diagnostics.join("; "));
+    }
+    Some(message)
+}
+
+fn build_load_envelope(result: &LoadResult) -> Envelope<LoadJsonData<'_>> {
     Envelope {
-        ok,
+        ok: result.execution.is_ok(),
+        command: CommandName::Load.as_str().to_owned(),
+        duration_ms: result.duration_ms,
+        warnings: Vec::new(),
+        steps: Vec::new(),
+        data: LoadJsonData::from_result(result),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ArtifactsJsonData<'a> {
+    pub ok: bool,
+    pub mode: ArtifactBuildMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_set: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension: Option<&'a str>,
+    pub output_path: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platform_log_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "ArtifactSet::is_empty")]
+    pub artifacts: ArtifactSet,
+    pub duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    pub execution: &'a ExecutionOutcome<ArtifactBuildMetadata>,
+}
+
+impl<'a> ArtifactsJsonData<'a> {
+    fn from_result(result: &'a ArtifactsResult) -> Self {
+        Self {
+            ok: result.execution.is_ok(),
+            mode: result.mode,
+            source_set: result.source_set.as_deref(),
+            extension: result.extension.as_deref(),
+            output_path: result
+                .execution
+                .payload
+                .as_ref()
+                .map(|metadata| metadata.output_path.clone())
+                .unwrap_or_default(),
+            platform_log_path: platform_log_path_from_artifacts(&result.execution.artifacts),
+            artifacts: artifact_set_from_execution(&result.execution),
+            duration_ms: result.duration_ms,
+            message: execution_message(&result.execution),
+            execution: &result.execution,
+        }
+    }
+}
+
+fn build_artifacts_envelope<'a>(result: &ArtifactsResult) -> Envelope<ArtifactsJsonData<'_>> {
+    Envelope {
+        ok: result.execution.is_ok(),
+        command: CommandName::Artifacts.as_str().to_owned(),
+        duration_ms: result.duration_ms,
+        warnings: Vec::new(),
+        steps: Vec::new(),
+        data: ArtifactsJsonData::from_result(result),
+    }
+}
+
+fn execution_message<T>(execution: &ExecutionOutcome<T>) -> Option<String> {
+    execution
+        .errors
+        .first()
+        .map(|error| error.message.clone())
+        .or_else(|| execution.diagnostics.first().cloned())
+}
+
+fn artifact_set_from_execution<T>(execution: &ExecutionOutcome<T>) -> ArtifactSet {
+    execution.artifacts.clone().unwrap_or_default()
+}
+
+fn platform_log_path_from_artifacts(artifacts: &Option<ArtifactSet>) -> Option<PathBuf> {
+    artifacts
+        .as_ref()
+        .and_then(|artifacts| artifacts.get_by_role(ARTIFACT_ROLE_PLATFORM_LOG))
+        .map(Path::to_path_buf)
+}
+
+#[derive(Debug, Serialize)]
+struct TestJsonData<'a> {
+    pub ok: bool,
+    pub target: &'a TestTarget,
+    pub mode: &'a TestOutputMode,
+    pub error_kind: Option<TestErrorKind>,
+    pub diagnostics: &'a [String],
+    pub retained_paths: Option<RetainedPaths>,
+    pub report: Option<&'a TestReport>,
+    pub execution: &'a ExecutionOutcome<TestReport>,
+}
+
+impl<'a> TestJsonData<'a> {
+    fn from_result(result: &'a TestRunResult) -> Self {
+        let execution = &result.execution;
+        Self {
+            ok: execution.is_ok(),
+            target: &result.target,
+            mode: &result.mode,
+            error_kind: test_error_kind_from_execution(execution),
+            diagnostics: &execution.diagnostics,
+            retained_paths: test_retained_paths_from_execution(execution),
+            report: execution.payload.as_ref(),
+            execution,
+        }
+    }
+}
+
+fn test_error_kind_from_execution(
+    execution: &ExecutionOutcome<TestReport>,
+) -> Option<TestErrorKind> {
+    execution
+        .errors
+        .first()
+        .and_then(|error| TestErrorKind::from_code(&error.code))
+}
+
+fn test_retained_paths_from_execution(
+    execution: &ExecutionOutcome<TestReport>,
+) -> Option<RetainedPaths> {
+    execution
+        .artifacts
+        .as_ref()
+        .and_then(RetainedPaths::from_artifact_set)
+}
+
+fn test_report(result: &TestRunResult) -> Option<&TestReport> {
+    result.execution.payload.as_ref()
+}
+
+fn build_test_envelope(result: &TestRunResult) -> Envelope<TestJsonData<'_>> {
+    Envelope {
+        ok: result.execution.is_ok(),
         command: CommandName::Test.as_str().to_owned(),
         duration_ms: result.duration_ms,
         warnings: result.warnings.clone(),
         steps: result.steps.clone(),
-        data: result,
+        data: TestJsonData::from_result(result),
     }
 }
 
@@ -1276,7 +1471,7 @@ fn append_step_signals(details: &mut Vec<String>, steps: &[StepResult]) {
 }
 
 fn append_report_failures(details: &mut Vec<String>, result: &TestRunResult) {
-    let Some(report) = result.report.as_ref() else {
+    let Some(report) = test_report(result) else {
         return;
     };
 
@@ -1313,7 +1508,7 @@ fn append_report_failures(details: &mut Vec<String>, result: &TestRunResult) {
 }
 
 fn append_retained_test_artifacts(details: &mut Vec<String>, result: &TestRunResult) {
-    let Some(paths) = result.retained_paths.as_ref() else {
+    let Some(paths) = test_retained_paths_from_execution(&result.execution) else {
         return;
     };
 
@@ -1343,11 +1538,12 @@ fn should_hide_success_test_diagnostic(diagnostic: &str) -> bool {
 }
 
 fn visible_test_diagnostics(result: &TestRunResult) -> Vec<String> {
-    if !result.ok {
-        return result.diagnostics.clone();
+    if !result.execution.is_ok() {
+        return result.execution.diagnostics.clone();
     }
 
     result
+        .execution
         .diagnostics
         .iter()
         .filter(|diagnostic| !should_hide_success_test_diagnostic(diagnostic))
@@ -1356,10 +1552,7 @@ fn visible_test_diagnostics(result: &TestRunResult) -> Vec<String> {
 }
 
 fn test_has_actionable_success_signal(result: &TestRunResult) -> bool {
-    result
-        .report
-        .as_ref()
-        .is_some_and(|report| !report.extracted_errors.is_empty())
+    test_report(result).is_some_and(|report| !report.extracted_errors.is_empty())
         || !visible_test_diagnostics(result).is_empty()
 }
 
@@ -1393,7 +1586,11 @@ fn render_load_text(result: &LoadResult, presenter: &Presenter, succeeded: bool)
         LoadMode::Merge => "merge",
         LoadMode::Update => "update",
     };
-    let target = match result.target_kind {
+    let metadata = load_metadata(result);
+    let target = match metadata
+        .map(|metadata| metadata.target_kind)
+        .unwrap_or(LoadTargetKind::Unknown)
+    {
         crate::domain::load::LoadTargetKind::Configuration => "configuration".to_owned(),
         crate::domain::load::LoadTargetKind::Extension => format!(
             "extension {}",
@@ -1425,18 +1622,14 @@ fn render_load_text(result: &LoadResult, presenter: &Presenter, succeeded: bool)
         let prefix = if succeeded { "warning" } else { "error" };
         append_if_present(
             &mut details,
-            result
-                .message
-                .as_deref()
-                .map(|message| bracketed_detail(prefix, message)),
+            load_message(result).map(|message| bracketed_detail(prefix, message)),
         );
         append_error_details(&mut details, &result.execution.errors);
         append_diagnostics(&mut details, &result.execution.diagnostics);
         append_interruptions(&mut details, &result.execution.interruptions);
         append_if_present(
             &mut details,
-            result
-                .platform_log_path
+            platform_log_path_from_artifacts(&result.execution.artifacts)
                 .as_deref()
                 .map(|path| format!("[diagnostic] platform log -> {}", path.display())),
         );
@@ -1571,8 +1764,9 @@ fn render_convert_text(result: &ConvertResult, presenter: &Presenter, succeeded:
 
 fn render_artifacts_text(result: &ArtifactsResult, presenter: &Presenter, succeeded: bool) {
     let source_set = result.source_set.as_deref().unwrap_or("<unresolved>");
+    let message = execution_message(&result.execution);
     let warning = succeeded
-        && (result.message.is_some()
+        && (message.is_some()
             || execution_has_warning(
                 &result.execution.diagnostics,
                 &result.execution.interruptions,
@@ -1587,19 +1781,31 @@ fn render_artifacts_text(result: &ArtifactsResult, presenter: &Presenter, succee
     let mut details = vec![
         format!("source-set: {source_set}"),
         format!("mode: {}", render_artifact_mode(result.mode)),
-        format!("output: {}", result.output_path.display()),
+        format!(
+            "output: {}",
+            result
+                .execution
+                .payload
+                .as_ref()
+                .map(|metadata| metadata.output_path.display().to_string())
+                .unwrap_or_else(|| "<unresolved>".to_owned())
+        ),
     ];
     if let Some(extension) = result.extension.as_deref() {
         details.push(format!("extension: {extension}"));
     }
     let package_artifacts = result
+        .execution
         .artifacts
-        .items
-        .iter()
+        .as_ref()
+        .into_iter()
+        .flat_map(|artifacts| artifacts.items.iter())
         .filter(|artifact| artifact.role.as_deref() == Some(ARTIFACT_ROLE_PACKAGE_FILE))
         .collect::<Vec<_>>();
     if package_artifacts.is_empty() {
-        details.push(render_output_artifact(&result.output_path));
+        if let Some(metadata) = result.execution.payload.as_ref() {
+            details.push(render_output_artifact(&metadata.output_path));
+        }
     } else {
         for artifact in package_artifacts {
             details.push(render_artifact_ref("artifact", artifact));
@@ -1609,25 +1815,23 @@ fn render_artifacts_text(result: &ArtifactsResult, presenter: &Presenter, succee
         let prefix = if succeeded { "warning" } else { "error" };
         append_if_present(
             &mut details,
-            result
-                .message
-                .as_deref()
-                .map(|message| bracketed_detail(prefix, message)),
+            message.map(|message| bracketed_detail(prefix, message)),
         );
         append_error_details(&mut details, &result.execution.errors);
         append_diagnostics(&mut details, &result.execution.diagnostics);
         append_interruptions(&mut details, &result.execution.interruptions);
         append_if_present(
             &mut details,
-            result
-                .platform_log_path
+            platform_log_path_from_artifacts(&result.execution.artifacts)
                 .as_deref()
                 .map(|path| format!("[diagnostic] platform log -> {}", path.display())),
         );
         for artifact in result
+            .execution
             .artifacts
-            .items
-            .iter()
+            .as_ref()
+            .into_iter()
+            .flat_map(|artifacts| artifacts.items.iter())
             .filter(|artifact| artifact.role.as_deref() == Some(ARTIFACT_ROLE_PLATFORM_LOG))
         {
             details.push(render_artifact_ref("diagnostic", artifact));
@@ -1751,7 +1955,8 @@ fn render_launch_mode(mode: &LaunchMode) -> &'static str {
 
 fn render_test_text(result: &TestRunResult, presenter: &Presenter) {
     let diagnostics = visible_test_diagnostics(result);
-    let has_warning = result.ok
+    let succeeded = result.execution.is_ok();
+    let has_warning = succeeded
         && (!result.warnings.is_empty()
             || test_has_actionable_success_signal(result)
             || !result.execution.interruptions.is_empty()
@@ -1759,7 +1964,7 @@ fn render_test_text(result: &TestRunResult, presenter: &Presenter) {
                 .steps
                 .iter()
                 .any(|step| !matches!(step.status, ExecutionStepStatus::Succeeded)));
-    let label = if result.ok {
+    let label = if succeeded {
         if has_warning {
             "Tests completed with warnings"
         } else {
@@ -1769,7 +1974,7 @@ fn render_test_text(result: &TestRunResult, presenter: &Presenter) {
         "Tests failed"
     };
     let mut details = vec![format!("target: {}", render_test_target(&result.target))];
-    if let Some(report) = &result.report {
+    if let Some(report) = test_report(result) {
         details.push(format!(
             "summary: total={}, passed={}, failed={}, skipped={}, errors={}",
             report.summary.total,
@@ -1780,7 +1985,7 @@ fn render_test_text(result: &TestRunResult, presenter: &Presenter) {
         ));
     }
 
-    if !result.ok || has_warning {
+    if !succeeded || has_warning {
         append_step_signals(&mut details, &result.steps);
         append_report_failures(&mut details, result);
         append_error_details(&mut details, &result.execution.errors);
@@ -1792,7 +1997,7 @@ fn render_test_text(result: &TestRunResult, presenter: &Presenter) {
         append_retained_test_artifacts(&mut details, result);
     }
 
-    single_timeline(presenter, timeline_status(result.ok), label, details);
+    single_timeline(presenter, timeline_status(succeeded), label, details);
 }
 
 fn render_test_target(target: &TestTarget) -> String {
@@ -1871,9 +2076,10 @@ fn status_label(status: &TestStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_name, execute_command, map_artifacts_request_with_config, map_build_request,
-        map_designer_config_request, map_dump_request, map_extensions_request, map_launch_request,
-        map_load_request, map_syntax_request, map_test_request, pre_dispatch_error_envelope,
+        build_load_envelope, command_name, execute_command, map_artifacts_request_with_config,
+        map_build_request, map_designer_config_request, map_dump_request, map_extensions_request,
+        map_launch_request, map_load_request, map_syntax_request, map_test_request,
+        pre_dispatch_error_envelope,
     };
     use crate::cli::args::{
         ArtifactsArgs, BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs,
@@ -1884,7 +2090,11 @@ mod tests {
         AppConfig, BuildConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
         TestsConfig, ToolsConfig,
     };
-    use crate::domain::load::LoadMode;
+    use crate::domain::artifacts::ArtifactBuildMode;
+    use crate::domain::execution::{ExecutionOutcome, ExecutionStatus};
+    use crate::domain::load::{
+        CompatibilityState, LoadExecutionMetadata, LoadMode, LoadResult, LoadTargetKind,
+    };
     use crate::domain::runner::{LaunchOptions, RunnerKind};
     use crate::output::presenter::{ColorMode, Presenter};
     use crate::support::fs::acquire_advisory_lock;
@@ -2465,5 +2675,36 @@ mod tests {
 
         assert_eq!(json["command"], "build");
         assert_eq!(json["data"]["message"], "workspace is busy");
+    }
+
+    #[test]
+    fn load_json_message_preserves_success_text_and_all_diagnostics() {
+        let result = LoadResult {
+            mode: LoadMode::Load,
+            artifact_path: PathBuf::from("main.cf"),
+            artifact_type: ArtifactBuildMode::ConfigurationCf,
+            extension: None,
+            duration_ms: 17,
+            execution: ExecutionOutcome::new(ExecutionStatus::Succeeded)
+                .with_diagnostics(vec![
+                    "deferred cancellation during apply".to_owned(),
+                    "deferred timeout during update_db_cfg".to_owned(),
+                ])
+                .with_payload(LoadExecutionMetadata {
+                    applied: true,
+                    target_kind: LoadTargetKind::Configuration,
+                    compatibility_state: CompatibilityState::NotSupported,
+                    update_db_cfg_ran: true,
+                }),
+        };
+
+        let json = serde_json::to_value(build_load_envelope(&result)).expect("json");
+        let message = json["data"]["message"].as_str().expect("message");
+
+        assert_eq!(json["ok"], true);
+        assert_eq!(json["data"]["ok"], true);
+        assert!(message.contains("load main.cf applied successfully after NotSupported"));
+        assert!(message.contains("deferred cancellation during apply"));
+        assert!(message.contains("deferred timeout during update_db_cfg"));
     }
 }

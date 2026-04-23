@@ -92,7 +92,7 @@
 ## Pipeline Execution Outcome
 
 1. Runner-like и pipeline-like сценарии должны использовать `ExecutionOutcome<T>` как canonical domain outcome для статуса, structured errors, diagnostics, metrics, artifacts and typed payload.
-2. Команда может сохранять command-specific top-level context и legacy compatibility fields, но не должна создавать новый ad hoc result shape для данных, уже выражаемых через `ExecutionOutcome<T>`.
+2. Domain result structs may keep command-specific context, but legacy compatibility fields for data already expressed by `ExecutionOutcome<T>` belong at the CLI/MCP adapter boundary.
 3. Pipeline composition живёт в use case слое; CLI/MCP adapters не собирают и не исполняют pipeline blocks.
 4. Blocks обмениваются typed context/input/output, а не hidden global state.
 5. Значимые pipeline blocks должны иметь step entry; минимальная текущая форма `StepResult` должна эволюционировать к richer `ExecutionStep` перед массовым добавлением новых combinations.

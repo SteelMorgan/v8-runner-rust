@@ -148,13 +148,8 @@ impl RetainedPaths {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TestRunResult {
-    pub ok: bool,
     pub target: TestTarget,
     pub mode: TestOutputMode,
-    pub error_kind: Option<TestErrorKind>,
-    pub diagnostics: Vec<String>,
-    pub retained_paths: Option<RetainedPaths>,
-    pub report: Option<TestReport>,
     #[serde(skip)]
     pub warnings: Vec<String>,
     #[serde(skip)]
@@ -166,7 +161,7 @@ pub struct TestRunResult {
 
 impl TestRunResult {
     pub fn from_outcome(
-        outcome: ExecutionOutcome<TestReport>,
+        mut outcome: ExecutionOutcome<TestReport>,
         target: TestTarget,
         mode: TestOutputMode,
         warnings: Vec<String>,
@@ -174,25 +169,13 @@ impl TestRunResult {
         duration_ms: u64,
     ) -> Self {
         let metrics = outcome.metrics.clone();
-        let mut report = outcome.payload.clone();
-        if let (Some(report), Some(metrics)) = (report.as_mut(), metrics.as_ref()) {
+        if let (Some(report), Some(metrics)) = (outcome.payload.as_mut(), metrics.as_ref()) {
             report.summary = TestSummary::from(metrics.clone());
         }
 
         Self {
-            ok: outcome.is_ok(),
             target,
             mode,
-            error_kind: outcome
-                .errors
-                .first()
-                .and_then(|error| TestErrorKind::from_code(&error.code)),
-            diagnostics: outcome.diagnostics.clone(),
-            retained_paths: outcome
-                .artifacts
-                .as_ref()
-                .and_then(RetainedPaths::from_artifact_set),
-            report,
             warnings,
             steps,
             duration_ms,
@@ -380,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn wrapper_restores_legacy_fields_from_outcome() {
+    fn test_run_result_derives_read_model_from_outcome() {
         let retained = RetainedPaths {
             run_dir: PathBuf::from("/tmp/run"),
             config_json: PathBuf::from("/tmp/config.json"),
@@ -425,16 +408,45 @@ mod tests {
             42,
         );
 
-        assert!(!result.ok);
-        assert_eq!(result.error_kind, Some(TestErrorKind::TestFailures));
-        assert_eq!(result.diagnostics, vec!["diag"]);
-        assert_eq!(result.retained_paths, Some(retained));
-        assert_eq!(result.report.as_ref().expect("report").summary.total, 3);
-        assert_eq!(result.to_outcome(), outcome);
+        assert!(!result.execution.is_ok());
+        assert_eq!(
+            result
+                .execution
+                .errors
+                .first()
+                .and_then(|error| TestErrorKind::from_code(&error.code)),
+            Some(TestErrorKind::TestFailures)
+        );
+        assert_eq!(result.execution.diagnostics, vec!["diag"]);
+        assert_eq!(
+            result
+                .execution
+                .artifacts
+                .as_ref()
+                .and_then(RetainedPaths::from_artifact_set),
+            Some(retained)
+        );
+        assert_eq!(
+            result
+                .execution
+                .payload
+                .as_ref()
+                .expect("report")
+                .summary
+                .total,
+            3
+        );
+        let mut expected = outcome;
+        if let Some(report) = expected.payload.as_mut() {
+            report.summary.total = 3;
+            report.summary.passed = 2;
+            report.summary.failed = 1;
+        }
+        assert_eq!(result.to_outcome(), expected);
     }
 
     #[test]
-    fn serde_shape_keeps_legacy_fields_and_serialized_execution() {
+    fn serde_shape_keeps_canonical_execution_only() {
         let result = TestRunResult::from_outcome(
             ExecutionOutcome::new(ExecutionStatus::Succeeded).with_payload(TestReport {
                 summary: TestSummary {
@@ -455,8 +467,11 @@ mod tests {
         );
 
         let value = serde_json::to_value(result).expect("json");
-        assert!(value.get("ok").is_some());
-        assert!(value.get("report").is_some());
+        assert!(value.get("ok").is_none());
+        assert!(value.get("report").is_none());
+        assert!(value.get("error_kind").is_none());
+        assert!(value.get("diagnostics").is_none());
+        assert!(value.get("retained_paths").is_none());
         assert!(value.get("warnings").is_none());
         assert!(value.get("steps").is_none());
         assert!(value.get("duration_ms").is_none());

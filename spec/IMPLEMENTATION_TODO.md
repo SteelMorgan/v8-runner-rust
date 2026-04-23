@@ -96,9 +96,15 @@ Detailed ADR task decomposition remains in [ADR_DERIVED_BACKLOG.md](ADR_DERIVED_
   `cargo test --locked`, reviewer, separate Rust expert, tester, and final completeness subagent
   gates passed.
 
-- [ ] `ADR-TASK-025`: Finish the migration to canonical `ExecutionOutcome<T>` and remove legacy
-  duplicated result fields. For runner-like commands, `execution` should become the only domain
-  source of truth, with any compatibility projections computed only at the adapter boundary.
+- [x] `ADR-TASK-025`: Finish the migration to canonical `ExecutionOutcome<T>` and remove legacy
+  duplicated result fields. Completed `2026-04-23`: `TestRunResult`, `ArtifactsResult`, and
+  `LoadResult` now keep `execution` as the canonical domain source for status, diagnostics,
+  structured errors, metrics, artifacts, retained paths, and typed payloads, while public CLI JSON
+  compatibility fields for `test`, `artifacts`, and `load` are computed by adapter-local
+  projections. MCP test mapping now reads the canonical outcome directly, and successful `load`
+  compatibility messages preserve deferred diagnostics through a regression test. Targeted
+  formatter/tests, tester-subagent verification, full `cargo test --locked --quiet`, reviewer, and
+  separate Rust expert gates passed with `no findings`.
 
 - [ ] `ADR-TASK-018`: Simplify the public `convert` contract and fix full-scope
   `DESIGNER -> EDT` conversion for external source sets. Revisit `ADR-0020`, add an explicit

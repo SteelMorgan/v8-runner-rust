@@ -10,7 +10,7 @@
 - MCP running cancellation/timeout с detached completion считается переходным механизмом до terminal-state semantics из ADR-0014.
 - External artifacts staging cleanup ещё нужно привести к ADR-0015: metadata должен ставиться на cleanup unit, чтобы stale staging directory удалялся безопасно.
 - `replace_dir_atomically` использует `.dump-backup-*` prefix даже для artifacts directory publication; имя internal, но префикс лучше сделать neutral/caller-specific.
-- `ExecutionOutcome<T>` уже используется частично, но legacy top-level fields и минимальный `StepResult` ещё создают риск расхождения outcome, diagnostics и presentation.
+- `ExecutionOutcome<T>` is now canonical for `test`, `artifacts`, and `load` domain results; the remaining risk is future reintroduction of duplicated result fields outside adapter projections.
 - Система сильно зависит от локальных внешних инструментов и корректности окружения, что ограничивает герметичное тестирование.
 - Многошаговые сценарии вроде build по нескольким `source-set` намеренно не являются атомарными.
 - Workspace lock является local advisory lock и не защищает от некорректной семантики блокировок на сетевых файловых системах или от команд на разных машинах.
