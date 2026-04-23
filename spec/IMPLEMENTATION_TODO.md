@@ -47,8 +47,8 @@ Detailed ADR task decomposition remains in [ADR_DERIVED_BACKLOG.md](ADR_DERIVED_
 - [x] `ADR-TASK-021`: Centralize source-set and config classification logic. Completed
   `2026-04-23`: descriptor XML classification and external logical-name parsing are now
   centralized in `src/support/source_descriptor.rs`, so `config validate`, `config init`,
-  reverse-sync `dump`, and external artifacts reuse one typed parser/classifier for
-  `Configuration`/`Extension`/`External*` markers, `MetaDataObject` wrappers, and
+  reverse-sync `dump`, and external artifacts reuse shared descriptor parsers and external root
+  scanners for `Configuration`/`Extension`/`External*` markers, `MetaDataObject` wrappers, and
   `Properties/Name`, while EDT extension name reads now reuse the shared
   `edt_project::read_project_name_from_dir(...)` helper instead of local `.project` parsers.
   Local duplicate XML/layout scanners were removed from `config` and `use_cases`; targeted

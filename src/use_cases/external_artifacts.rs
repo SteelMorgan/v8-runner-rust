@@ -49,21 +49,11 @@ pub fn discover_designer_external_artifacts(
     source_dir: &Path,
     expected_kind: ExternalArtifactKind,
 ) -> Result<Vec<ExternalArtifactDescriptor>, AppError> {
+    let entries = source_descriptor::scan_designer_external_root(source_dir)
+        .map_err(map_source_set_root_scan_error)?;
     let mut descriptors = Vec::new();
-    for entry in std::fs::read_dir(source_dir).map_err(|error| {
-        AppError::Runtime(format!(
-            "failed to read external source-set '{source_set_name}': {error}"
-        ))
-    })? {
-        let entry = entry.map_err(|error| {
-            AppError::Runtime(format!(
-                "failed to read external source-set entry for '{source_set_name}': {error}"
-            ))
-        })?;
-        let path = entry.path();
-        if !path.is_file() || path.extension().and_then(|value| value.to_str()) != Some("xml") {
-            continue;
-        }
+    for entry in entries {
+        let path = entry.path;
         let parsed = parse_external_descriptor(&path)?;
         if parsed.artifact_type != expected_kind {
             return Err(AppError::Validation(format!(
@@ -186,29 +176,19 @@ fn discover_edt_items(
     source_dir: &Path,
     expected_kind: ExternalArtifactKind,
 ) -> Result<Vec<ExternalArtifactDescriptor>, AppError> {
+    let entries = source_descriptor::scan_edt_external_root(source_dir)
+        .map_err(map_source_set_root_scan_error)?;
     let mut items = Vec::new();
-    for entry in std::fs::read_dir(source_dir).map_err(|error| {
-        AppError::Runtime(format!("failed to read EDT external source-set: {error}"))
-    })? {
-        let entry = entry.map_err(|error| {
-            AppError::Runtime(format!(
-                "failed to read EDT external source-set entry: {error}"
-            ))
-        })?;
-        let file_type = entry.file_type().map_err(|error| {
-            AppError::Runtime(format!(
-                "failed to inspect EDT external source-set entry: {error}"
-            ))
-        })?;
-        if file_type.is_symlink() || !file_type.is_dir() {
-            continue;
-        }
-        let path = entry.path();
+    for entry in entries {
+        let path = entry.path;
         let project =
             edt_project::validate_native_external_project(&path).map_err(AppError::Validation)?;
         let root_xml = edt_project::external_root_descriptor_path(&path);
-        let descriptor = parse_external_descriptor(&root_xml)?;
-        if descriptor.artifact_type != expected_kind {
+        let artifact_type = match entry.purpose {
+            Some(purpose) => map_external_purpose(purpose, &root_xml)?,
+            None => parse_external_descriptor(&root_xml)?.artifact_type,
+        };
+        if artifact_type != expected_kind {
             return Err(AppError::Validation(format!(
                 "external EDT project '{}' contains '{}', expected {}",
                 path.display(),
@@ -296,6 +276,15 @@ fn map_external_descriptor_parse_error(
             "external descriptor '{}' must contain Properties/Name",
             path.display()
         )),
+    }
+}
+
+fn map_source_set_root_scan_error(error: source_descriptor::SourceSetRootScanError) -> AppError {
+    match error {
+        source_descriptor::SourceSetRootScanError::Runtime(message) => AppError::Runtime(message),
+        source_descriptor::SourceSetRootScanError::Validation(message) => {
+            AppError::Validation(message)
+        }
     }
 }
 
@@ -427,6 +416,28 @@ mod tests {
             artifacts[0].artifact_type,
             ExternalArtifactKind::DataProcessor
         );
+    }
+
+    #[test]
+    fn discover_designer_external_artifacts_accepts_uppercase_xml_extension() {
+        let dir = tempdir().expect("tempdir");
+        let source = dir.path().join("designer/external");
+        fs::create_dir_all(&source).expect("source");
+        fs::write(
+            source.join("Foo.XML"),
+            "<ExternalDataProcessor><Properties><Name>Foo</Name></Properties></ExternalDataProcessor>",
+        )
+        .expect("xml");
+
+        let artifacts = discover_designer_external_artifacts(
+            "external",
+            &source,
+            ExternalArtifactKind::DataProcessor,
+        )
+        .expect("discover");
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].logical_name, "Foo");
     }
 
     #[cfg(unix)]
