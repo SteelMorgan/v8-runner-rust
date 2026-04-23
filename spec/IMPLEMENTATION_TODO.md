@@ -120,6 +120,24 @@ Detailed ADR task decomposition remains in [ADR_DERIVED_BACKLOG.md](ADR_DERIVED_
   target/source overlap, target/target overlap, single-source unselected-source overlap, and
   CLI help for the public `--output <DIR>` contract; ADR/docs/backlog surfaces are synchronized.
 
+- [ ] `ADR-TASK-031`: Add live text progress messages for long-running CLI stages before the
+  blocking work starts. Text stdout must print a stable stage name and start timestamp before each
+  long operation, using the existing build-style stage vocabulary as the reference pattern, so a
+  developer running commands such as `test` can see that the build prerequisite, test runner, dump,
+  load, convert, syntax, init, artifacts, extensions, or launch stage has started instead of
+  waiting for the final timeline only. Keep `--json-message` as the final structured envelope unless
+  a separate JSON progress contract is accepted, keep raw platform stdout/stderr in logs, and add
+  rendering/integration regressions proving that live text messages appear before a delayed stage
+  completes and do not leak secrets.
+  Open questions before implementation:
+  1. Should a long stage mean every external platform/EDT/Designer/IBCMD/Enterprise process
+     invocation, or only stages expected to run longer than a small threshold?
+  2. Should the timestamp be a local wall-clock start time, RFC3339 with timezone, or both start
+     time and final elapsed duration?
+  3. Do we need periodic heartbeat lines for very long stages, or is a start line plus final elapsed
+     duration enough?
+  4. Should this stay text-only for now, with JSON progress left out of scope?
+
 ## P2
 
 - [ ] `ADR-TASK-016`: Fix the CLI JSON error contract for early failures. Some validation,
@@ -132,3 +150,29 @@ Detailed ADR task decomposition remains in [ADR_DERIVED_BACKLOG.md](ADR_DERIVED_
   platform fixtures. Move repeated script creation, chmod, tempdir setup, cargo-bin bootstrap,
   and polling helpers into common test support so new CLI/MCP/platform regressions stop copying
   shell-stub boilerplate across many files.
+
+- [ ] `ADR-TASK-027`: Extract a shared staged-publication mechanism for full-replacement outputs.
+  `dump` and `artifacts` still duplicate the ADR-0015 flow: create target-local staging, write
+  metadata, execute the platform action, check interruption before the publish safe point, publish
+  through `run_no_process_critical_phase`, and merge cleanup/deferred-interruption warnings. Introduce
+  a small helper for file/directory staged publication without adding a generic pipeline engine or
+  changing public result contracts.
+
+- [ ] `ADR-TASK-028`: Centralize command interruption and deferred-interruption vocabulary across
+  use cases. Remaining duplicate helpers include `command_interruption_status`,
+  `command_interruption_details`, `deferred_interruption_warning/details`,
+  `interruption_before_safe_point`, and publication warning formatting across `build`, `dump`,
+  `load`, `artifacts`, `run_tests`, `init`, `convert`, and `configure_extensions`. Keep ADR-0014
+  terminal-state semantics and existing `ExecutionOutcome<T>` projections intact.
+
+- [ ] `ADR-TASK-029`: Reduce residual build coordinator duplication after the thin-coordinator split.
+  `build_project/coordinator.rs` still repeats the `analysis -> StepPlan -> execute or
+  fail_with_remaining_steps` flow for Designer, IBCMD, EDT export, and generated Designer load.
+  Extract narrow helpers for plan construction, remaining-step failure payloads, and
+  prepared/rescan commit handling without introducing a generic pipeline engine.
+
+- [ ] `ADR-TASK-030`: Add a read-only source-set runtime inventory/index for use-case orchestration.
+  `build`, `dump`, `artifacts`, and syntax paths still rebuild `SourceSetsService` contexts,
+  `contexts_by_name`, `config_by_name`, and single-configuration/extension lookup rules locally.
+  Provide a shared inventory helper that preserves source-set identity, validation-boundary
+  responsibilities, and the current CLI/MCP public contracts.
