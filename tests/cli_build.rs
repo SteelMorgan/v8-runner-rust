@@ -416,6 +416,8 @@ fn build_json_failure_returns_step_payload() {
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
     assert_eq!(payload["ok"], false);
     assert_eq!(payload["command"], "build");
+    assert_eq!(payload["error"]["code"], "platform_failure");
+    assert_eq!(payload["error"]["kind"], "platform");
     assert_eq!(payload["data"]["ok"], false);
     assert_eq!(payload["data"]["steps"][0]["source_set"], "main");
     assert_eq!(payload["data"]["steps"][0]["ok"], true);
@@ -448,6 +450,7 @@ fn build_ibcmd_json_failure_reports_operation_target_and_exit_code() {
     assert_eq!(output.status.code(), Some(4));
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
     assert_eq!(payload["ok"], false);
+    assert_eq!(payload["error"]["code"], "platform_failure");
     assert!(payload["data"]["steps"][0]["message"]
         .as_str()
         .expect("message")

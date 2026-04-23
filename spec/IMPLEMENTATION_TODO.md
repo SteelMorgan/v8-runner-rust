@@ -132,7 +132,7 @@ Detailed ADR task decomposition remains in [ADR_DERIVED_BACKLOG.md](ADR_DERIVED_
   regressions were added; targeted CLI suites, `support::logging`, full `cargo test --locked
   --quiet`, reviewer, and separate Rust expert subagent passes all passed.
 
-- [ ] `ADR-TASK-032`: Unify the CLI `--json-message` envelope and MCP `structured_content` command
+- [x] `ADR-TASK-032`: Unify the CLI `--json-message` envelope and MCP `structured_content` command
   payload for AI-agent consumers. Keep MCP protocol wrapping and transport/internal errors MCP-native,
   but make successful and business-failure command payloads use the same canonical machine-readable
   envelope as CLI JSON: `ok`, `command`, `duration_ms`, `data`, `warnings`, and `steps`. Move the
@@ -149,6 +149,16 @@ Detailed ADR task decomposition remains in [ADR_DERIVED_BACKLOG.md](ADR_DERIVED_
   3. Validation/runtime/platform business failures must preserve command identity and structured error
      details in the shared envelope.
   4. The shared envelope must not depend on CLI, MCP, or presentation modules.
+  Completed `2026-04-23`: the shared command envelope now lives in
+  `src/command_envelope.rs`, CLI JSON failures and MCP business failures both carry structured
+  `error { code, kind, message }` metadata, and MCP `structured_content` serializes the envelope
+  directly while preserving MCP-native `CallToolResult`/`isError` and internal transport errors.
+  MCP-only response/wrapper DTO files were retired, command identity uses the CLI command names with
+  tool/scope details preserved in `data`, and ADR/docs/arc42/checklist surfaces were synchronized.
+  Regression coverage includes CLI/MCP parity for `build`, `test`, `dump`, and syntax business
+  failure plus stdio/http contract checks; targeted CLI/MCP/architecture matrix passed locally and
+  in tester subagent, separate reviewer and Rust expert subagent gates passed after stale-docs
+  findings were fixed.
 
 ## P2
 

@@ -13,6 +13,20 @@ const ACCEPT_BOTH: &str = "application/json, text/event-stream";
 const V8_CONFIGURATION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ConfigurationNature";
 const EDT_RUNTIME_VERSION: &str = "8.3.27";
 
+fn assert_envelope_success(payload: &Value, command: &str) {
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["command"], command);
+    assert!(payload.get("error").is_none());
+}
+
+fn assert_envelope_business_failure(payload: &Value, command: &str) {
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["command"], command);
+    assert!(payload["error"]["code"].is_string());
+    assert!(payload["error"]["kind"].is_string());
+    assert!(payload["error"]["message"].is_string());
+}
+
 fn reserve_local_address() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral listener");
     let address = listener.local_addr().expect("local addr");
@@ -653,11 +667,9 @@ async fn mcp_http_dump_config_full_ibcmd_server_contract_passes_dbms_and_infobas
     .await;
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let payload = extract_sse_json(&response.text().await.expect("dump body"));
-    assert_eq!(payload["result"]["structuredContent"]["status"], "success");
-    assert_eq!(
-        payload["result"]["structuredContent"]["result"]["success"],
-        true
-    );
+    let structured = &payload["result"]["structuredContent"];
+    assert_envelope_success(structured, "dump");
+    assert_eq!(structured["data"]["ok"], true);
     let calls = fs::read_to_string(calls_log).expect("ibcmd calls");
     assert!(calls.contains("--dbms PostgreSQL --database-server localhost --database-name maindb"));
     assert!(calls.contains("--user Admin --password secret"));
@@ -689,11 +701,9 @@ async fn mcp_http_launch_app_returns_success_payload_over_live_session() {
     .await;
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let payload = extract_sse_json(&response.text().await.expect("launch body"));
-    assert_eq!(payload["result"]["structuredContent"]["status"], "success");
-    assert_eq!(
-        payload["result"]["structuredContent"]["result"]["success"],
-        true
-    );
+    let structured = &payload["result"]["structuredContent"];
+    assert_envelope_success(structured, "launch");
+    assert_eq!(structured["data"]["ok"], true);
 
     server.shutdown().await;
 }
@@ -724,16 +734,11 @@ async fn mcp_http_dump_config_partial_ibcmd_returns_degraded_success() {
     .await;
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let payload = extract_sse_json(&response.text().await.expect("dump body"));
-    assert_eq!(payload["result"]["structuredContent"]["status"], "success");
-    assert_eq!(
-        payload["result"]["structuredContent"]["result"]["success"],
-        true
-    );
-    assert_eq!(
-        payload["result"]["structuredContent"]["result"]["mode"],
-        "PARTIAL"
-    );
-    assert!(payload["result"]["structuredContent"]["result"]["message"]
+    let structured = &payload["result"]["structuredContent"];
+    assert_envelope_success(structured, "dump");
+    assert_eq!(structured["data"]["ok"], true);
+    assert_eq!(structured["data"]["mode"], "PARTIAL");
+    assert!(structured["data"]["message"]
         .as_str()
         .expect("message")
         .contains("IBCMD does not support object-scoped partial dump"));
@@ -770,26 +775,17 @@ async fn mcp_http_dump_config_partial_ibcmd_preserves_partial_mode_on_failure() 
     .await;
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let payload = extract_sse_json(&response.text().await.expect("dump failure body"));
-    assert_eq!(
-        payload["result"]["structuredContent"]["status"],
-        "business_failure"
-    );
-    assert_eq!(
-        payload["result"]["structuredContent"]["response"]["mode"],
-        "PARTIAL"
-    );
-    assert!(
-        payload["result"]["structuredContent"]["response"]["message"]
-            .as_str()
-            .expect("message")
-            .contains("IBCMD does not support object-scoped partial dump")
-    );
-    assert!(
-        payload["result"]["structuredContent"]["response"]["message"]
-            .as_str()
-            .expect("message")
-            .contains("dump failed for source-set 'main' with exit code 17")
-    );
+    let structured = &payload["result"]["structuredContent"];
+    assert_envelope_business_failure(structured, "dump");
+    assert_eq!(structured["data"]["mode"], "PARTIAL");
+    assert!(structured["data"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("IBCMD does not support object-scoped partial dump"));
+    assert!(structured["data"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("dump failed for source-set 'main' with exit code 17"));
     assert!(fs::read_to_string(calls_log)
         .expect("ibcmd calls")
         .contains("--sync"));
@@ -1124,14 +1120,8 @@ async fn mcp_http_reuses_one_edt_process_across_sessions_and_shares_capacity() {
     assert_eq!(second.status(), reqwest::StatusCode::OK);
     let first_payload = extract_sse_json(&first.text().await.expect("first edt body"));
     let second_payload = extract_sse_json(&second.text().await.expect("second edt body"));
-    assert_eq!(
-        first_payload["result"]["structuredContent"]["status"],
-        "success"
-    );
-    assert_eq!(
-        second_payload["result"]["structuredContent"]["status"],
-        "success"
-    );
+    assert_envelope_success(&first_payload["result"]["structuredContent"], "syntax");
+    assert_envelope_success(&second_payload["result"]["structuredContent"], "syntax");
 
     let lifecycle = fs::read_to_string(&lifecycle_log).expect("lifecycle log");
     let lines = lifecycle.lines().collect::<Vec<_>>();
@@ -1166,15 +1156,10 @@ async fn mcp_http_returns_terminal_business_failure_for_edt_syntax_timeout() {
     .await;
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let payload = extract_sse_json(&response.text().await.expect("edt timeout body"));
-    assert_eq!(
-        payload["result"]["structuredContent"]["status"],
-        "business_failure"
-    );
-    assert_eq!(
-        payload["result"]["structuredContent"]["response"]["check_result"],
-        "tool_failed"
-    );
-    assert!(payload["result"]["structuredContent"]["error"]["message"]
+    let structured = &payload["result"]["structuredContent"];
+    assert_envelope_business_failure(structured, "syntax");
+    assert_eq!(structured["data"]["status"], "tool_failed");
+    assert!(structured["error"]["message"]
         .as_str()
         .expect("message")
         .contains("terminal state was observed"));
@@ -1213,7 +1198,7 @@ async fn mcp_http_edt_action_log_contains_runtime_telemetry_events() {
     .await;
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let payload = extract_sse_json(&response.text().await.expect("edt body"));
-    assert_eq!(payload["result"]["structuredContent"]["status"], "success");
+    assert_envelope_success(&payload["result"]["structuredContent"], "syntax");
 
     wait_for_log_contains(&action_log, "mcp_execution_semaphore_wait").await;
     wait_for_log_contains(&action_log, "mcp_edt_queue_depth").await;

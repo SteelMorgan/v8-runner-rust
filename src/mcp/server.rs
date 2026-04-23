@@ -45,7 +45,6 @@ use crate::mcp::service::{map_syntax_use_case_result, normalize_check_syntax_edt
 use crate::mcp::telemetry::{
     McpEdtSessionObserver, McpTelemetry, SemaphoreWaitErrorKind, SemaphoreWaitOutcome,
 };
-use crate::mcp::tool_result::McpToolResult;
 use crate::platform::edt_session::{
     EdtSessionHostOptions, EdtSessionManager, EdtSessionShutdownError,
 };
@@ -891,12 +890,12 @@ where
 {
     match result {
         Ok(response) => Ok(CallToolResult::structured(
-            serde_json::to_value(McpToolResult::success(response))
+            serde_json::to_value(response)
                 .map_err(|error| ErrorData::internal_error(error.to_string(), None))?,
         )),
         Err(crate::mcp::error::McpServiceError::Business(failure)) => {
             Ok(CallToolResult::structured_error(
-                serde_json::to_value(McpToolResult::business_failure(failure))
+                serde_json::to_value(failure.response)
                     .map_err(|error| ErrorData::internal_error(error.to_string(), None))?,
             ))
         }

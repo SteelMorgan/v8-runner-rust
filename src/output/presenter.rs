@@ -1,4 +1,4 @@
-use crate::output::json::Envelope;
+use crate::command_envelope::Envelope;
 use crate::output::text::{JsonPresenter, TextPresenter, TimelineItem};
 use serde::Serialize;
 

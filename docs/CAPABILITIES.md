@@ -27,7 +27,7 @@
 | `syntax` | `syntax designer-config` и `syntax designer-modules` требуют `builder=DESIGNER`, `format=DESIGNER` | Проверки через Designer |
 | `syntax` | `syntax edt` требует `builder=DESIGNER`, `format=EDT` | Проверка через EDT `validate` |
 | `launch` | У команды нет отдельного деления по форматам | Требует соответствующую локальную утилиту 1С |
-| MCP | stdio и транспорт по протоколу `streamable HTTP` | Оба публикуют один и тот же набор из 8 инструментов |
+| MCP | stdio и транспорт по протоколу `streamable HTTP` | Оба публикуют один и тот же набор из 8 инструментов и возвращают command envelope в `structured_content` |
 
 ## Общие CLI-опции
 
@@ -47,6 +47,7 @@
 - Без `--json-message` CLI держит clean success path кратким и не печатает подробный успешный timeline без необходимости.
 - Warnings, degraded behavior, созданные артефакты и пути к диагностике должны быть видимы и в text output, и в JSON envelopes.
 - `--json-message` включает машинный контракт; text-режим не скрывает факты, но не дублирует сырой platform stdout как основной output.
+- MCP `structured_content` использует тот же envelope core (`ok`, `command`, `duration_ms`, `data`, `warnings`, `steps`, optional `error`), но `CallToolResult`/`isError` and transport errors остаются частью MCP protocol.
 
 ## Команда `config init`
 

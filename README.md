@@ -108,6 +108,7 @@ tests:
 - Без `--json-message` CLI показывает краткий clean success path без подробного успешного журнала на каждом шаге.
 - Text output и JSON envelopes одинаково сохраняют видимыми предупреждения, degraded behavior, созданные артефакты и пути к диагностике.
 - `--json-message` остаётся стабильным structured contract для автоматизации; text-режим не должен быть единственным источником важного факта.
+- MCP `structured_content` использует тот же command envelope core, что и CLI JSON, при сохранении MCP `CallToolResult`/`isError` как protocol-level семантики.
 
 ## Матрица поддержки
 

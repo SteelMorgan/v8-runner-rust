@@ -43,7 +43,7 @@
 2. Поддерживать failure contracts в:
 - `src/use_cases/result.rs`
 - `src/mcp/error.rs`
-- `src/mcp/tool_result.rs`
+- `src/command_envelope.rs`
 - `src/cli/execute.rs`
 - `src/mcp/service.rs`
 - `src/mcp/server.rs`

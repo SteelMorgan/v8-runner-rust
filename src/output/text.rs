@@ -1,4 +1,4 @@
-use crate::output::json::Envelope;
+use crate::command_envelope::Envelope;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

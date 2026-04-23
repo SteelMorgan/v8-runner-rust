@@ -8,13 +8,9 @@ pub mod error;
 pub mod port;
 /// MCP-facing request DTOs.
 pub mod request;
-/// MCP-facing response DTOs.
-pub mod response;
 /// MCP stdio and HTTP transport adapters.
 pub mod server;
 /// MCP-facing service layer over transport-neutral use cases.
 pub mod service;
 /// Runtime telemetry for MCP admission and shared EDT lifecycle.
 pub mod telemetry;
-/// Structured tool payloads used by MCP transports.
-pub mod tool_result;

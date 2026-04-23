@@ -24,7 +24,7 @@ validate request/config
 1. `src/domain/execution.rs` содержит `ExecutionOutcome<T>`, `ExecutionStatus`, `ExecutionError`, `ExecutionMetrics`, `ExecutionTimeouts` и `StepResult`.
 2. `src/domain/runner.rs` содержит `ScenarioExecutionRequest`, `RunnerProfile`, `RunnerKind`, output formats and retention policy.
 3. `test`, `artifacts` и `load` уже используют `ExecutionOutcome<T>` частично.
-4. CLI `Envelope<T>` и MCP DTO продолжают быть transport-specific presentation surfaces.
+4. CLI `--json-message` и MCP `structured_content` используют общий command envelope как shared presentation contract, а MCP request DTO и compatibility data остаются MCP-specific public surface.
 
 При этом разные команды всё ещё дублируют похожие поля (`ok`, `message`, `steps`, `diagnostics`, `retained_paths`, `platform_log_path`, parsed report, artifact paths) и по-разному решают, где хранить warning, degraded success, parse failure и retained artifacts.
 Это усложняет добавление новых runner-like сценариев: каждый новый tool вынужден заново изобретать result shape, step accounting, artifact retention и mapping в CLI/MCP.
@@ -120,13 +120,13 @@ Cancellation не требует отдельного состояния на к
 
 `ExecutionOutcome<T>` не заменяет:
 
-1. CLI `Envelope<T>`;
-2. MCP response DTO;
+1. shared command envelope;
+2. MCP request DTO and compatibility data payloads;
 3. `UseCaseFailure<T>`;
 4. command-specific top-level result structs.
 
-CLI and MCP adapters map `ExecutionOutcome<T>` into their own presentation contracts.
-Use case orchestration не зависит от `Presenter`, CLI `Envelope`, MCP DTO or JSON schema details.
+CLI and MCP adapters map `ExecutionOutcome<T>` into the shared command envelope and their transport-specific wrapping.
+Use case orchestration не зависит от `Presenter`, shared command envelope, MCP DTO or JSON schema details.
 
 ## Область применения
 
@@ -150,7 +150,7 @@ Use case orchestration не зависит от `Presenter`, CLI `Envelope`, MCP
 ## Неграницы (Non-goals)
 
 1. Не вводить немедленно generic pipeline engine на trait objects для всех команд.
-2. Не заменять CLI/MCP DTO единой serialized формой.
+2. Не заменять use-case/domain outcomes единой serialized presentation form.
 3. Не ломать существующие CLI/MCP compatibility fields одним изменением.
 4. Не превращать `ExecutionOutcome<T>` в transport error model; это остаётся зоной ADR-0009.
 5. Не скрывать command-specific domain context ради унификации.
@@ -160,7 +160,7 @@ Use case orchestration не зависит от `Presenter`, CLI `Envelope`, MCP
 
 1. Новые runner-like сценарии получают стандартный result grammar вместо ad hoc DTO.
 2. CLI/MCP rendering can become simpler: adapters read the same status/errors/metrics/artifacts model.
-3. Partial structured payloads in `UseCaseFailure<T>` can carry the same `ExecutionOutcome<T>` shape.
+3. Partial structured payloads in `UseCaseFailure<T>` can carry the same `ExecutionOutcome<T>` shape and can be projected by adapters into `ok=false` command envelopes.
 4. Warning/degraded behavior needs a clearer representation instead of being split randomly between `message`, `warnings`, diagnostics and text output.
 5. Step representation should evolve from minimal `StepResult` to richer `ExecutionStep` before adding many new pipeline combinations.
 6. `build`, `dump` and `syntax` should not be force-fit until there is a concrete benefit and a compatibility plan.

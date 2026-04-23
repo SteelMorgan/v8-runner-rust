@@ -265,7 +265,7 @@ fn launch_fails_when_process_exits_during_startup_probe() {
 }
 
 #[test]
-fn launch_json_failure_keeps_stdout_empty_and_exit_code() {
+fn launch_json_failure_returns_error_envelope_and_exit_code() {
     let (_dir, config_path, install_dir, _work_path) = setup_project();
     let thin = install_dir.join("bin").join("1cv8c");
     let staged = thin.with_extension("tmp");
@@ -288,8 +288,16 @@ fn launch_json_failure_keeps_stdout_empty_and_exit_code() {
 
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(4));
-    assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["command"], "launch");
+    assert_eq!(payload["error"]["code"], "platform_failure");
+    assert_eq!(payload["error"]["kind"], "platform");
+    assert!(payload["data"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("exited before startup completed"));
 }
 
 #[test]

@@ -33,7 +33,8 @@
 - `ExecutionStatus::TimedOut` и `ExecutionStatus::Cancelled` допустимы только после terminal-state semantics из ADR-0014.
 - Если cancellation/shutdown/timeout был requested внутри successful `CriticalNonAbortable` phase, итог остаётся `Succeeded`, а result содержит warning/diagnostic о deferred interruption.
 - Degraded success, например cleanup warning после успешного publish, не должен маскироваться как полностью чистый success.
-- CLI решает на адаптерной границе, печатать ли `Envelope<T>` через `--json-message`, text rendering или top-level error.
+- CLI решает на адаптерной границе, печатать ли shared command envelope через `--json-message`, text rendering или top-level error.
+- MCP возвращает тот же command envelope в `structured_content`, сохраняя `CallToolResult`/`isError` and transport/internal errors as MCP protocol behavior.
 - CLI output использует единый high-signal contract для человека и AI-агента; `--json-message` выбирает structured output, а `--output` резервируется для user-facing output path flags.
 - MCP дополнительно разделяет `McpBusinessFailure<T>` и `McpInternalError`, чтобы агент видел предсказуемые business failures, но не получал как business-response ошибки неправильного transport/runtime usage.
 - Это разделение является ключевым architectural invariant: orchestration не должна знать про конкретный transport payload format.
@@ -43,7 +44,7 @@
 
 - Логи и сгенерированные артефакты хранятся под `workPath`.
 - Телеметрия MCP публикуется как структурированные tracing-события, а не через отдельный metrics-backend.
-- `output::Presenter` и JSON `Envelope` являются частью CLI presentation, но не observability backend.
+- `output::Presenter` является частью CLI presentation, а shared command envelope является adapter-level machine contract для CLI JSON и MCP structured content, но не observability backend.
 
 ### 8.4.1 Публикация dump/artifacts
 

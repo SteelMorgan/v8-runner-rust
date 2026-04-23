@@ -14,6 +14,18 @@ pub enum McpErrorCode {
     Internal,
 }
 
+impl McpErrorCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidArgument => "invalid_argument",
+            Self::UnsupportedValue => "unsupported_value",
+            Self::RuntimeFailure => "runtime_failure",
+            Self::PlatformFailure => "platform_failure",
+            Self::Internal => "internal",
+        }
+    }
+}
+
 /// High-level business error class surfaced by the MCP service layer.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -21,6 +33,16 @@ pub enum McpBusinessErrorKind {
     Validation,
     Runtime,
     Platform,
+}
+
+impl McpBusinessErrorKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Validation => "validation",
+            Self::Runtime => "runtime",
+            Self::Platform => "platform",
+        }
+    }
 }
 
 impl From<UseCaseErrorKind> for McpBusinessErrorKind {

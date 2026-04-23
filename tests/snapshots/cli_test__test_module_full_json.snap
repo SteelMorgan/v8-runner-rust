@@ -149,6 +149,11 @@ Object {
         },
     },
     "duration_ms": String("<duration>"),
+    "error": Object {
+        "code": String("runtime_failure"),
+        "kind": String("runtime"),
+        "message": String("test run reported failures"),
+    },
     "ok": Bool(false),
     "steps": Array [
         Object {

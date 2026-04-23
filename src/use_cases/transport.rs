@@ -1,6 +1,7 @@
 use crate::config::model::AppConfig;
 use crate::use_cases::context::CommandName;
 use crate::use_cases::result::UseCaseError;
+#[cfg(test)]
 use crate::use_cases::result::UseCaseFailure;
 use crate::use_cases::workspace_lock::acquire_workspace_lock;
 
@@ -19,6 +20,7 @@ pub fn dispatch_with_workspace_lock<TResult>(
 
 /// Maps a use-case failure payload into a transport-specific response while preserving the
 /// original transport-neutral error for the adapter boundary.
+#[cfg(test)]
 pub fn map_failure_response<TPayload, TResponse, FPayload, FFallback>(
     failure: UseCaseFailure<TPayload>,
     payload_mapper: FPayload,

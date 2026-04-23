@@ -8,7 +8,7 @@
 CLI и MCP используют одни и те же бизнес-сценарии, но имеют разные public surface, входные DTO, правила presentation и форматы ошибок.
 Use case слой уже выделен в `src/use_cases` и содержит requests, `ExecutionContext`, structured results and failures.
 
-Если use case начнут зависеть от `clap`, `Presenter`, `Envelope`, MCP DTO или конкретного transport payload format, orchestration станет трудно переиспользовать между CLI и MCP.
+Если use case начнут зависеть от `clap`, `Presenter`, shared command envelope, MCP DTO или конкретного transport payload format, orchestration станет трудно переиспользовать между CLI и MCP.
 Это также приведет к тому, что изменение одного transport будет ломать другой transport.
 
 ## Решение
@@ -17,8 +17,8 @@ Use case слой уже выделен в `src/use_cases` и содержит r
 
 1. Use case не зависят от `clap`.
 2. Use case не зависят от `output::Presenter`.
-3. Use case не создают и не принимают CLI `Envelope`.
-4. Use case не принимают MCP DTO из `src/mcp/request.rs` и не возвращают MCP DTO из `src/mcp/response.rs`.
+3. Use case не создают и не принимают shared command envelope.
+4. Use case не принимают MCP DTO из `src/mcp/request.rs` и не возвращают MCP/shared-envelope DTO из `src/mcp/service.rs` или `src/command_envelope.rs`.
 5. Use case не знают конкретный CLI/MCP transport payload format.
 6. Transport adapters мапят свои входы в `use_cases::request::*` и мапят `UseCaseResult<T>` в свой output contract.
 7. `ExecutionContext` может содержать transport-neutral invocation metadata, но не должен становиться контейнером для raw CLI/MCP payload.
@@ -51,7 +51,7 @@ Use case слой уже выделен в `src/use_cases` и содержит r
 
 ## Верификация
 
-- [x] ADR явно запрещает зависимости use case от `clap`, `Presenter`, `Envelope`, MCP DTO и transport payload format.
+- [x] ADR явно запрещает зависимости use case от `clap`, `Presenter`, shared command envelope, MCP DTO и transport payload format.
 - [x] ADR описывает допустимую роль `ExecutionContext`.
 - [x] ADR фиксирует responsibility split между use case, CLI и MCP.
 - [x] Инвариант добавлен в архитектурную документацию.

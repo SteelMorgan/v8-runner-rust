@@ -1104,7 +1104,6 @@ mod tests {
         SourceSetPurpose, TestsConfig, ToolsConfig,
     };
     use crate::domain::dump::DumpMode;
-    use crate::output::json::Envelope;
     use crate::platform::process::{
         ProcessError, ProcessExecutionPolicy, ProcessRequest, ProcessResult, ProcessRunner,
         SpawnResult,
@@ -3168,12 +3167,12 @@ exit 0"#,
             message: Some("ok".to_owned()),
         };
 
-        let envelope = Envelope::ok(DUMP_COMMAND, result.duration_ms, result);
-        let json = serde_json::to_value(envelope).expect("json");
+        let json = serde_json::to_value(result).expect("json");
 
-        assert_eq!(json["data"]["source_set"], "main");
-        assert_eq!(json["data"]["extension"], "ext");
-        assert_eq!(json["data"]["platform_log_path"], "/tmp/platform.log");
+        assert_eq!(DUMP_COMMAND, "dump");
+        assert_eq!(json["source_set"], "main");
+        assert_eq!(json["extension"], "ext");
+        assert_eq!(json["platform_log_path"], "/tmp/platform.log");
     }
 
     #[test]

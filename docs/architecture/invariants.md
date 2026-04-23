@@ -96,7 +96,7 @@
 3. Pipeline composition живёт в use case слое; CLI/MCP adapters не собирают и не исполняют pipeline blocks.
 4. Blocks обмениваются typed context/input/output, а не hidden global state.
 5. Значимые pipeline blocks должны иметь step entry; минимальная текущая форма `StepResult` должна эволюционировать к richer `ExecutionStep` перед массовым добавлением новых combinations.
-6. `ExecutionOutcome<T>` не заменяет CLI `Envelope<T>`, MCP DTO или `UseCaseFailure<T>`.
+6. `ExecutionOutcome<T>` не заменяет shared command envelope, MCP request DTO/compatibility data или `UseCaseFailure<T>`.
 7. Timeout/cancellation statuses in outcome должны следовать terminal-state semantics из ADR-0014.
 8. Cancellation representation остаётся command-level: `ExecutionStatus::Cancelled` для фактической отмены и diagnostic/warning для deferred interruption при successful critical phase.
 9. Не вводить generic pipeline engine до появления повторяемой необходимости; сначала стандартизируются vocabulary, step contract and outcome shape.
@@ -106,7 +106,7 @@
 ## Use Case Layer
 
 1. `src/use_cases` остается транспортно-нейтральным orchestration-слоем.
-2. Use case не зависят от `clap`, CLI `Presenter`, CLI `Envelope`, MCP DTO и конкретного transport payload format.
+2. Use case не зависят от `clap`, CLI `Presenter`, shared command envelope, MCP DTO и конкретного transport payload format.
 3. CLI и MCP адаптеры преобразуют свои входные DTO/аргументы в `use_cases::request::*`.
 4. Presentation, envelope rendering и MCP tool payload formatting остаются за пределами use case.
 
@@ -164,5 +164,8 @@
 5. Clean success должен оставаться кратким, а ошибки, предупреждения, degraded behavior, created artifacts, пути к диагностике и следующий actionable hint не должны теряться.
 6. JSON остаётся стабильным structured contract для автоматизации; его schema не меняется только из-за различения ролей потребления.
 7. Use case слой не знает presentation rules и не различает роли потребителя output.
+8. CLI `--json-message` и MCP `structured_content` используют общий machine-readable command envelope с core fields `ok`, `command`, `duration_ms`, `data`, `warnings`, `steps`; business failures may include optional structured `error`.
+9. MCP `CallToolResult`/`isError` и transport/internal `ErrorData` остаются protocol-level behavior и не заменяются command envelope.
+10. Envelope `command` использует canonical CLI command identity; MCP tool/scope identity сохраняется внутри `data`, если она нужна клиенту.
 
 См. [ADR-0010](../decisions/0010-razdelit-cli-output-dlya-cheloveka-i-ai-agenta.md).

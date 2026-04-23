@@ -230,6 +230,8 @@ fn syntax_designer_modules_json_returns_structured_validation_failure() {
 
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
     assert_eq!(payload["ok"], false);
+    assert_eq!(payload["error"]["code"], "runtime_failure");
+    assert_eq!(payload["error"]["kind"], "runtime");
     assert_eq!(payload["data"]["status"], "issues_found");
     assert_eq!(payload["data"]["exit_code"], 101);
     assert_eq!(payload["data"]["summary"]["errors"], 1);

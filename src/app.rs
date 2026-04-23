@@ -5,8 +5,8 @@ use crate::cli::args::{
     Cli, Command, ConfigCommand, ConfigInitArgs, McpCommand, McpServeTransport,
 };
 use crate::cli::execute;
+use crate::command_envelope::Envelope;
 use crate::config::loader::load_config;
-use crate::output::json::Envelope;
 use crate::output::presenter::Presenter;
 use crate::output::text::{TimelineItem, TimelineStatus};
 use crate::use_cases::config_init::{ConfigBuilderRequest, ConfigFormatRequest, ConfigInitRequest};
@@ -149,6 +149,7 @@ fn run_config_init(args: &ConfigInitArgs, presenter: &Presenter) -> i32 {
                     duration_ms: result.duration_ms,
                     warnings: result.warnings.clone(),
                     steps: Vec::new(),
+                    error: None,
                     data: result,
                 });
             } else {

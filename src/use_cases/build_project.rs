@@ -516,7 +516,6 @@ mod tests {
         SourceSetPurpose, TestsConfig, ToolsConfig,
     };
     use crate::domain::build::BuildMode;
-    use crate::output::json::Envelope;
     use crate::use_cases::context::{CommandName, ExecutionContext};
     use crate::use_cases::request::BuildRequest as BuildArgs;
     use crate::use_cases::result::UseCaseErrorKind;
@@ -2034,8 +2033,8 @@ mod tests {
             duration_ms: 42,
         };
 
-        let envelope = Envelope::ok(BUILD_COMMAND, result.duration_ms, result);
-        let json = serde_json::to_string(&envelope).expect("json");
-        assert!(json.contains("\"command\":\"build\""));
+        let json = serde_json::to_value(result).expect("json");
+        assert_eq!(BUILD_COMMAND, "build");
+        assert_eq!(json["steps"][0]["mode"], "full");
     }
 }

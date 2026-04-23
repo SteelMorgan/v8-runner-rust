@@ -14,9 +14,9 @@
    - `docs/CAPABILITIES.md`
    - `src/mcp/server.rs`
    - `src/mcp/request.rs`
-   - `src/mcp/response.rs`
    - `src/mcp/service.rs`
-3. Добавить или обновить tests для `list_tools`, request/response DTO и business/runtime failure mapping по `ADR-0009`.
+   - `src/command_envelope.rs`, если меняется machine-readable command payload
+3. Добавить или обновить tests для `list_tools`, request DTO, shared envelope payload и business/runtime failure mapping по `ADR-0009`.
 4. Явно проверить, что изменение не публикует CLI-only сценарий как MCP tool по умолчанию.
 
 ## Новая public CLI/MCP команда, работающая с `workPath`

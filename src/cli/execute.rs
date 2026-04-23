@@ -11,6 +11,7 @@ use crate::cli::args::{
     SyntaxArgs, SyntaxTarget, TestArgs, TestRunner, TestScope, TestYaxunitArgs,
 };
 use crate::cli::signal::CliSignalGuard;
+use crate::command_envelope::{test_envelope, Envelope, EnvelopeError};
 use crate::config::model::{AppConfig, SourceSetPurpose};
 use crate::domain::artifact::{
     ArtifactRef, ArtifactSet, ARTIFACT_ROLE_PACKAGE_FILE, ARTIFACT_ROLE_PLATFORM_LOG,
@@ -34,10 +35,7 @@ use crate::domain::runner::{
     RunnerProfile,
 };
 use crate::domain::syntax::{SyntaxCheckResult, SyntaxCheckStatus};
-use crate::domain::test::{
-    RetainedPaths, TestErrorKind, TestOutputMode, TestReport, TestRunResult, TestStatus, TestTarget,
-};
-use crate::output::json::Envelope;
+use crate::domain::test::{RetainedPaths, TestReport, TestRunResult, TestStatus, TestTarget};
 use crate::output::presenter::Presenter;
 use crate::output::text::{TimelineItem, TimelineStatus};
 use crate::support::adapter_input::{
@@ -195,10 +193,11 @@ fn execute_extensions(
                 let error = failure.error;
                 if presenter.is_json() {
                     if let Some(result) = failure.payload {
-                        presenter.print_envelope(&Envelope::err(
+                        presenter.print_envelope(&failure_envelope(
                             CommandName::Extensions.as_str(),
                             result.duration_ms,
                             result,
+                            &error,
                         ));
                     }
                 } else {
@@ -240,10 +239,11 @@ fn execute_init(
                 let error = failure.error;
                 if presenter.is_json() {
                     if let Some(result) = failure.payload {
-                        presenter.print_envelope(&Envelope::err(
+                        presenter.print_envelope(&failure_envelope(
                             CommandName::Init.as_str(),
                             result.duration_ms,
                             result,
+                            &error,
                         ));
                     }
                 } else {
@@ -289,10 +289,11 @@ fn execute_build(
                 let error = failure.error;
                 if presenter.is_json() {
                     if let Some(result) = failure.payload {
-                        presenter.print_envelope(&Envelope::err(
+                        presenter.print_envelope(&failure_envelope(
                             CommandName::Build.as_str(),
                             result.duration_ms,
                             result,
+                            &error,
                         ));
                     }
                 } else {
@@ -324,7 +325,7 @@ fn execute_test(
         || match run_tests::execute(&context, config, &request) {
             Ok(result) => {
                 if presenter.is_json() {
-                    let envelope = build_test_envelope(&result);
+                    let envelope = test_envelope(&result);
                     presenter.print_envelope(&envelope);
                 } else {
                     render_test_text(&result, presenter);
@@ -335,7 +336,7 @@ fn execute_test(
                 let error = failure.error;
                 if presenter.is_json() {
                     if let Some(result) = failure.payload {
-                        let envelope = build_test_envelope(&result);
+                        let envelope = with_cli_error(test_envelope(&result), &error);
                         presenter.print_envelope(&envelope);
                     }
                 } else {
@@ -378,7 +379,7 @@ fn execute_load(
                 let error = failure.error;
                 if presenter.is_json() {
                     if let Some(result) = failure.payload {
-                        let envelope = build_load_envelope(&result);
+                        let envelope = with_cli_error(build_load_envelope(&result), &error);
                         presenter.print_envelope(&envelope);
                     }
                 } else {
@@ -424,10 +425,11 @@ fn execute_dump(
                 let error = failure.error;
                 if presenter.is_json() {
                     if let Some(result) = failure.payload {
-                        presenter.print_envelope(&Envelope::err(
+                        presenter.print_envelope(&failure_envelope(
                             CommandName::Dump.as_str(),
                             result.duration_ms,
                             result,
+                            &error,
                         ));
                     }
                 } else {
@@ -480,10 +482,11 @@ fn execute_convert(
                 let error = failure.error;
                 if presenter.is_json() {
                     if let Some(result) = failure.payload {
-                        presenter.print_envelope(&Envelope::err(
+                        presenter.print_envelope(&failure_envelope(
                             CommandName::Convert.as_str(),
                             result.duration_ms,
                             result,
+                            &error,
                         ));
                     }
                 } else {
@@ -526,7 +529,7 @@ fn execute_artifacts(
                 let error = failure.error;
                 if presenter.is_json() {
                     if let Some(result) = failure.payload {
-                        let envelope = build_artifacts_envelope(&result);
+                        let envelope = with_cli_error(build_artifacts_envelope(&result), &error);
                         presenter.print_envelope(&envelope);
                     }
                 } else {
@@ -573,10 +576,11 @@ fn execute_syntax(
                 let error = failure.error;
                 if presenter.is_json() {
                     if let Some(result) = failure.payload {
-                        presenter.print_envelope(&Envelope::err(
+                        presenter.print_envelope(&failure_envelope(
                             CommandName::Syntax.as_str(),
                             result.duration_ms,
                             result,
+                            &error,
                         ));
                     }
                 } else {
@@ -621,7 +625,14 @@ fn execute_launch(
             }
             Err(failure) => {
                 let error = failure.error;
-                if !presenter.is_json() {
+                if presenter.is_json() {
+                    presenter.print_envelope(&failure_envelope(
+                        CommandName::Launch.as_str(),
+                        started.elapsed().as_millis() as u64,
+                        json!({ "message": error.message() }),
+                        &error,
+                    ));
+                } else {
                     presenter.print_error(&error.to_string());
                 }
                 Err(error)
@@ -669,15 +680,45 @@ fn render_pre_dispatch_error(
 ) -> UseCaseError {
     let error = error.into();
     if presenter.is_json() {
-        presenter.print_envelope(&pre_dispatch_error_envelope(command, error.message()));
+        presenter.print_envelope(&pre_dispatch_error_envelope(command, &error));
     } else {
         presenter.print_error(&error.to_string());
     }
     error
 }
 
-fn pre_dispatch_error_envelope(command: CommandName, message: &str) -> Envelope<serde_json::Value> {
-    Envelope::err(command.as_str(), 0, json!({ "message": message }))
+fn pre_dispatch_error_envelope(
+    command: CommandName,
+    error: &UseCaseError,
+) -> Envelope<serde_json::Value> {
+    failure_envelope(
+        command.as_str(),
+        0,
+        json!({ "message": error.message() }),
+        error,
+    )
+}
+
+fn failure_envelope<T: Serialize>(
+    command: impl Into<String>,
+    duration_ms: u64,
+    data: T,
+    error: &UseCaseError,
+) -> Envelope<T> {
+    with_cli_error(Envelope::err(command, duration_ms, data), error)
+}
+
+fn with_cli_error<T: Serialize>(envelope: Envelope<T>, error: &UseCaseError) -> Envelope<T> {
+    envelope.with_error(cli_envelope_error(error))
+}
+
+fn cli_envelope_error(error: &UseCaseError) -> EnvelopeError {
+    let (code, kind) = match error.kind() {
+        UseCaseErrorKind::Validation => ("invalid_argument", "validation"),
+        UseCaseErrorKind::Runtime => ("runtime_failure", "runtime"),
+        UseCaseErrorKind::Platform => ("platform_failure", "platform"),
+    };
+    EnvelopeError::new(code, kind, error.message())
 }
 
 fn map_build_request(args: &BuildArgs) -> BuildRequest {
@@ -1173,6 +1214,7 @@ fn build_load_envelope(result: &LoadResult) -> Envelope<LoadJsonData<'_>> {
         duration_ms: result.duration_ms,
         warnings: Vec::new(),
         steps: Vec::new(),
+        error: None,
         data: LoadJsonData::from_result(result),
     }
 }
@@ -1225,6 +1267,7 @@ fn build_artifacts_envelope<'a>(result: &ArtifactsResult) -> Envelope<ArtifactsJ
         duration_ms: result.duration_ms,
         warnings: Vec::new(),
         steps: Vec::new(),
+        error: None,
         data: ArtifactsJsonData::from_result(result),
     }
 }
@@ -1248,43 +1291,6 @@ fn platform_log_path_from_artifacts(artifacts: &Option<ArtifactSet>) -> Option<P
         .map(Path::to_path_buf)
 }
 
-#[derive(Debug, Serialize)]
-struct TestJsonData<'a> {
-    pub ok: bool,
-    pub target: &'a TestTarget,
-    pub mode: &'a TestOutputMode,
-    pub error_kind: Option<TestErrorKind>,
-    pub diagnostics: &'a [String],
-    pub retained_paths: Option<RetainedPaths>,
-    pub report: Option<&'a TestReport>,
-    pub execution: &'a ExecutionOutcome<TestReport>,
-}
-
-impl<'a> TestJsonData<'a> {
-    fn from_result(result: &'a TestRunResult) -> Self {
-        let execution = &result.execution;
-        Self {
-            ok: execution.is_ok(),
-            target: &result.target,
-            mode: &result.mode,
-            error_kind: test_error_kind_from_execution(execution),
-            diagnostics: &execution.diagnostics,
-            retained_paths: test_retained_paths_from_execution(execution),
-            report: execution.payload.as_ref(),
-            execution,
-        }
-    }
-}
-
-fn test_error_kind_from_execution(
-    execution: &ExecutionOutcome<TestReport>,
-) -> Option<TestErrorKind> {
-    execution
-        .errors
-        .first()
-        .and_then(|error| TestErrorKind::from_code(&error.code))
-}
-
 fn test_retained_paths_from_execution(
     execution: &ExecutionOutcome<TestReport>,
 ) -> Option<RetainedPaths> {
@@ -1296,17 +1302,6 @@ fn test_retained_paths_from_execution(
 
 fn test_report(result: &TestRunResult) -> Option<&TestReport> {
     result.execution.payload.as_ref()
-}
-
-fn build_test_envelope(result: &TestRunResult) -> Envelope<TestJsonData<'_>> {
-    Envelope {
-        ok: result.execution.is_ok(),
-        command: CommandName::Test.as_str().to_owned(),
-        duration_ms: result.duration_ms,
-        warnings: result.warnings.clone(),
-        steps: result.steps.clone(),
-        data: TestJsonData::from_result(result),
-    }
 }
 
 fn render_build_text(result: &BuildResult, presenter: &Presenter, succeeded: bool) {
@@ -2105,7 +2100,7 @@ mod tests {
         ArtifactsModeRequest, DesignerClientScope, DesignerConfigCheck, DumpModeRequest,
         LaunchRequest, LaunchTargetRequest, SyntaxTargetRequest, TestScopeRequest,
     };
-    use crate::use_cases::result::UseCaseErrorKind;
+    use crate::use_cases::result::{UseCaseError, UseCaseErrorKind};
     use crate::use_cases::workspace_lock::workspace_lock_path;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -2671,11 +2666,13 @@ mod tests {
 
     #[test]
     fn pre_dispatch_json_error_keeps_command_identity() {
-        let envelope = pre_dispatch_error_envelope(CommandName::Build, "workspace is busy");
+        let error = UseCaseError::new(UseCaseErrorKind::Runtime, "workspace is busy");
+        let envelope = pre_dispatch_error_envelope(CommandName::Build, &error);
         let json = serde_json::to_value(envelope).expect("json");
 
         assert_eq!(json["command"], "build");
         assert_eq!(json["data"]["message"], "workspace is busy");
+        assert_eq!(json["error"]["code"], "runtime_failure");
     }
 
     #[test]

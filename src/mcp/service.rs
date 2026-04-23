@@ -1,15 +1,11 @@
+use serde::Serialize;
+use serde_json::{json, Value};
+use std::time::Instant;
+
+use crate::command_envelope::{test_envelope, Envelope, EnvelopeError};
 use crate::config::model::AppConfig;
-use crate::domain::artifact::{ARTIFACT_ROLE_PLATFORM_LOG, ARTIFACT_ROLE_RUNNER_LOG};
-use crate::domain::build::{BuildMode, BuildResult, BuildStep};
-use crate::domain::dump::{DumpMode, DumpResult};
-use crate::domain::execution::{
-    ExecutionStatus, ExecutionStepKind, ExecutionStepStatus, StepResult,
-};
-use crate::domain::issue::{EdtIssue, Issue, IssueSeverity, ModuleIssue, ObjectIssue};
-use crate::domain::launch::{LaunchMode, LaunchResult};
 use crate::domain::runner::LaunchOptions;
-use crate::domain::syntax::{SyntaxCheckResult, SyntaxCheckStatus};
-use crate::domain::test::{TestCase, TestRunResult, TestStatus, TestSuite};
+use crate::domain::syntax::SyntaxCheckResult;
 use crate::mcp::context::McpCallContext;
 use crate::mcp::error::{
     McpBusinessError, McpBusinessErrorKind, McpBusinessFailure, McpInternalError, McpServiceError,
@@ -20,12 +16,6 @@ use crate::mcp::request::{
     McpBuildProjectRequest, McpCheckSyntaxDesignerConfigRequest,
     McpCheckSyntaxDesignerModulesRequest, McpCheckSyntaxEdtRequest, McpDumpConfigRequest,
     McpLaunchAppRequest, McpRunAllTestsRequest, McpRunModuleTestsRequest,
-};
-use crate::mcp::response::{
-    McpBuildMode, McpBuildResponse, McpBuildStep, McpDumpResponse, McpEdtIssue, McpIssue,
-    McpIssueSeverity, McpLaunchResponse, McpModuleIssue, McpObjectIssue, McpStepKind,
-    McpStepResult, McpStepStatus, McpSyntaxCheckResponse, McpTestCase, McpTestResponse,
-    McpTestStatus, McpTestSuite,
 };
 use crate::support::adapter_input::{
     normalize_edt_projects, normalize_extension_scope, normalize_optional_string,
@@ -39,7 +29,8 @@ use crate::use_cases::request::{
     TestScopeRequest,
 };
 use crate::use_cases::result::{UseCaseError, UseCaseFailure, UseCaseResult};
-use crate::use_cases::transport::map_failure_response;
+
+type McpCommandEnvelope = Envelope<Value>;
 
 /// MCP-facing service layer over transport-neutral use cases.
 #[derive(Debug)]
@@ -62,7 +53,7 @@ where
         &self,
         call_context: McpCallContext,
         request: &McpBuildProjectRequest,
-    ) -> McpServiceResult<McpBuildResponse> {
+    ) -> McpServiceResult<McpCommandEnvelope> {
         let context = execution_context(call_context, CommandName::Build)
             .map_err(McpServiceError::Internal)?;
         let use_case_request = BuildRequest {
@@ -73,15 +64,13 @@ where
             .port
             .build_project(&context, self.config, &use_case_request)
         {
-            Ok(result) => Ok(map_build_response(result)),
-            Err(failure) => Err(map_use_case_failure(failure, map_build_response, |error| {
-                McpBuildResponse {
-                    success: false,
-                    message: error.message().to_owned(),
-                    build_time_ms: None,
-                    steps: None,
-                }
-            })),
+            Ok(result) => ok_envelope(CommandName::Build, result.duration_ms, result)
+                .map_err(McpServiceError::Internal),
+            Err(failure) => Err(map_use_case_failure_envelope(
+                failure,
+                |result| err_envelope(CommandName::Build, result.duration_ms, result),
+                |error| fallback_error_envelope(CommandName::Build, "build_project", error),
+            )),
         }
     }
 
@@ -90,7 +79,7 @@ where
         &self,
         call_context: McpCallContext,
         request: &McpRunAllTestsRequest,
-    ) -> McpServiceResult<McpTestResponse> {
+    ) -> McpServiceResult<McpCommandEnvelope> {
         let context = execution_context(call_context, CommandName::Test)
             .map_err(McpServiceError::Internal)?;
         let use_case_request = TestRequest {
@@ -103,22 +92,14 @@ where
             .port
             .run_tests(&context, self.config, &use_case_request)
         {
-            Ok(result) => Ok(map_test_response(result)),
-            Err(failure) => Err(map_use_case_failure(failure, map_test_response, |error| {
-                McpTestResponse {
-                    success: false,
-                    message: error.message().to_owned(),
-                    total_tests: None,
-                    passed_tests: None,
-                    failed_tests: None,
-                    execution_time_ms: None,
-                    enterprise_log_path: None,
-                    log_file: None,
-                    test_detail: None,
-                    steps: None,
-                    errors: Some(vec![error.message().to_owned()]),
-                }
-            })),
+            Ok(result) => {
+                mcp_value_envelope(test_envelope(&result)).map_err(McpServiceError::Internal)
+            }
+            Err(failure) => Err(map_use_case_failure_envelope(
+                failure,
+                |result| mcp_value_envelope(test_envelope(&result)),
+                |error| fallback_error_envelope(CommandName::Test, "run_all_tests", error),
+            )),
         }
     }
 
@@ -127,27 +108,22 @@ where
         &self,
         call_context: McpCallContext,
         request: &McpRunModuleTestsRequest,
-    ) -> McpServiceResult<McpTestResponse> {
+    ) -> McpServiceResult<McpCommandEnvelope> {
         let context = execution_context(call_context, CommandName::Test)
             .map_err(McpServiceError::Internal)?;
         let module_name =
             normalize_required_string(&request.module_name, "module_name").map_err(|error| {
                 let message = error.message().to_owned();
+                let business_error = McpBusinessError::from_use_case(&error);
                 McpServiceError::Business(McpBusinessFailure::new(
-                    McpBusinessError::from_use_case(&error),
-                    McpTestResponse {
-                        success: false,
-                        message: message.clone(),
-                        total_tests: None,
-                        passed_tests: None,
-                        failed_tests: None,
-                        execution_time_ms: None,
-                        enterprise_log_path: None,
-                        log_file: None,
-                        test_detail: None,
-                        steps: None,
-                        errors: Some(vec![message]),
-                    },
+                    business_error.clone(),
+                    adapter_error_envelope(
+                        CommandName::Test,
+                        "run_module_tests",
+                        &message,
+                        business_error,
+                        json!({ "field": "module_name" }),
+                    ),
                 ))
             })?;
         let use_case_request = TestRequest {
@@ -160,22 +136,14 @@ where
             .port
             .run_tests(&context, self.config, &use_case_request)
         {
-            Ok(result) => Ok(map_test_response(result)),
-            Err(failure) => Err(map_use_case_failure(failure, map_test_response, |error| {
-                McpTestResponse {
-                    success: false,
-                    message: error.message().to_owned(),
-                    total_tests: None,
-                    passed_tests: None,
-                    failed_tests: None,
-                    execution_time_ms: None,
-                    enterprise_log_path: None,
-                    log_file: None,
-                    test_detail: None,
-                    steps: None,
-                    errors: Some(vec![error.message().to_owned()]),
-                }
-            })),
+            Ok(result) => {
+                mcp_value_envelope(test_envelope(&result)).map_err(McpServiceError::Internal)
+            }
+            Err(failure) => Err(map_use_case_failure_envelope(
+                failure,
+                |result| mcp_value_envelope(test_envelope(&result)),
+                |error| fallback_error_envelope(CommandName::Test, "run_module_tests", error),
+            )),
         }
     }
 
@@ -184,33 +152,34 @@ where
         &self,
         call_context: McpCallContext,
         request: &McpDumpConfigRequest,
-    ) -> McpServiceResult<McpDumpResponse> {
+    ) -> McpServiceResult<McpCommandEnvelope> {
         let context = execution_context(call_context, CommandName::Dump)
             .map_err(McpServiceError::Internal)?;
         let use_case_request = DumpRequest {
             mode: parse_optional_dump_mode(request.mode.as_deref(), DumpModeRequest::Incremental)
                 .map_err(|error| {
                 let message = error.message().to_owned();
+                let business_error = raw_value_business_error(&error, "dump mode");
+                let mode = request
+                    .mode
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("FULL")
+                    .to_owned();
+                let data_message = request.mode.as_deref().map_or_else(
+                    || "dump mode is invalid".to_owned(),
+                    |value| format!("unsupported dump mode: {value}"),
+                );
                 McpServiceError::Business(McpBusinessFailure::new(
-                    raw_value_business_error(&error, "dump mode"),
-                    McpDumpResponse {
-                        success: false,
-                        message: request.mode.as_deref().map_or_else(
-                            || "dump mode is invalid".to_owned(),
-                            |value| format!("unsupported dump mode: {value}"),
-                        ),
-                        mode: request
-                            .mode
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .unwrap_or("FULL")
-                            .to_owned(),
-                        dump_time_ms: None,
-                        dumped_objects: None,
-                        errors: Some(vec![message]),
-                        steps: None,
-                    },
+                    business_error.clone(),
+                    adapter_error_envelope(
+                        CommandName::Dump,
+                        "dump_config",
+                        &data_message,
+                        business_error,
+                        json!({ "field": "mode", "mode": mode, "errors": [message] }),
+                    ),
                 ))
             })?,
             source_set: None,
@@ -222,18 +191,18 @@ where
             .port
             .dump_config(&context, self.config, &use_case_request)
         {
-            Ok(result) => Ok(map_dump_response(result)),
-            Err(failure) => Err(map_use_case_failure(failure, map_dump_response, |error| {
-                McpDumpResponse {
-                    success: false,
-                    message: error.message().to_owned(),
-                    mode: render_dump_mode(use_case_request.mode).to_owned(),
-                    dump_time_ms: None,
-                    dumped_objects: None,
-                    errors: Some(vec![error.message().to_owned()]),
-                    steps: None,
-                }
-            })),
+            Ok(result) => ok_envelope(CommandName::Dump, result.duration_ms, result)
+                .map_err(McpServiceError::Internal),
+            Err(failure) => Err(map_use_case_failure_envelope(
+                failure,
+                |result| err_envelope(CommandName::Dump, result.duration_ms, result),
+                |error| {
+                    let mut envelope =
+                        fallback_error_envelope(CommandName::Dump, "dump_config", error)?;
+                    envelope.data["mode"] = json!(render_dump_mode(use_case_request.mode));
+                    Ok(envelope)
+                },
+            )),
         }
     }
 
@@ -242,7 +211,7 @@ where
         &self,
         call_context: McpCallContext,
         request: &McpLaunchAppRequest,
-    ) -> McpServiceResult<McpLaunchResponse> {
+    ) -> McpServiceResult<McpCommandEnvelope> {
         let context = execution_context(call_context, CommandName::Launch)
             .map_err(McpServiceError::Internal)?;
         let use_case_request = LaunchRequest {
@@ -253,29 +222,42 @@ where
             )
             .map_err(|error| {
                 let message = error.message().to_owned();
+                let business_error = raw_value_business_error(&error, "utility_type");
                 McpServiceError::Business(McpBusinessFailure::new(
-                    raw_value_business_error(&error, "utility_type"),
-                    McpLaunchResponse {
-                        success: false,
-                        message,
-                    },
+                    business_error.clone(),
+                    adapter_error_envelope(
+                        CommandName::Launch,
+                        "launch_app",
+                        &message,
+                        business_error,
+                        json!({ "field": "utility_type" }),
+                    ),
                 ))
             })?,
             launch: LaunchOptions::default(),
         };
+        let started = Instant::now();
 
         match self
             .port
             .launch_app(&context, self.config, &use_case_request)
         {
-            Ok(result) => Ok(map_launch_response(result)),
-            Err(failure) => Err(map_use_case_failure(
+            Ok(result) => ok_envelope(
+                CommandName::Launch,
+                started.elapsed().as_millis() as u64,
+                result,
+            )
+            .map_err(McpServiceError::Internal),
+            Err(failure) => Err(map_use_case_failure_envelope(
                 failure,
-                map_launch_response,
-                |error| McpLaunchResponse {
-                    success: false,
-                    message: error.message().to_owned(),
+                |result| {
+                    err_envelope(
+                        CommandName::Launch,
+                        started.elapsed().as_millis() as u64,
+                        result,
+                    )
                 },
+                |error| fallback_error_envelope(CommandName::Launch, "launch_app", error),
             )),
         }
     }
@@ -285,7 +267,7 @@ where
         &self,
         call_context: McpCallContext,
         request: &McpCheckSyntaxEdtRequest,
-    ) -> McpServiceResult<McpSyntaxCheckResponse> {
+    ) -> McpServiceResult<McpCommandEnvelope> {
         let context = execution_context(call_context, CommandName::Syntax)
             .map_err(McpServiceError::Internal)?;
         let use_case_request = normalize_check_syntax_edt_request(request);
@@ -301,12 +283,14 @@ where
         &self,
         call_context: McpCallContext,
         request: &McpCheckSyntaxDesignerConfigRequest,
-    ) -> McpServiceResult<McpSyntaxCheckResponse> {
+    ) -> McpServiceResult<McpCommandEnvelope> {
         let context = execution_context(call_context, CommandName::Syntax)
             .map_err(McpServiceError::Internal)?;
         let use_case_request = SyntaxRequest {
             target: SyntaxTargetRequest::DesignerConfig(
-                map_designer_config_request(request).map_err(invalid_syntax_request)?,
+                map_designer_config_request(request).map_err(|error| {
+                    invalid_syntax_request(error, "check_syntax_designer_config")
+                })?,
             ),
         };
 
@@ -314,17 +298,17 @@ where
             .port
             .check_syntax(&context, self.config, &use_case_request)
         {
-            Ok(result) => Ok(map_syntax_response(result)),
-            Err(failure) => Err(map_use_case_failure(
+            Ok(result) => ok_envelope(CommandName::Syntax, result.duration_ms, result)
+                .map_err(McpServiceError::Internal),
+            Err(failure) => Err(map_use_case_failure_envelope(
                 failure,
-                map_syntax_response,
-                |error| McpSyntaxCheckResponse {
-                    success: false,
-                    message: error.message().to_owned(),
-                    check_result: None,
-                    errors: Some(vec![error.message().to_owned()]),
-                    issues: None,
-                    duration_ms: None,
+                |result| err_envelope(CommandName::Syntax, result.duration_ms, result),
+                |error| {
+                    fallback_error_envelope(
+                        CommandName::Syntax,
+                        "check_syntax_designer_config",
+                        error,
+                    )
                 },
             )),
         }
@@ -335,12 +319,14 @@ where
         &self,
         call_context: McpCallContext,
         request: &McpCheckSyntaxDesignerModulesRequest,
-    ) -> McpServiceResult<McpSyntaxCheckResponse> {
+    ) -> McpServiceResult<McpCommandEnvelope> {
         let context = execution_context(call_context, CommandName::Syntax)
             .map_err(McpServiceError::Internal)?;
         let use_case_request = SyntaxRequest {
             target: SyntaxTargetRequest::DesignerModules(
-                map_designer_modules_request(request).map_err(invalid_syntax_request)?,
+                map_designer_modules_request(request).map_err(|error| {
+                    invalid_syntax_request(error, "check_syntax_designer_modules")
+                })?,
             ),
         };
 
@@ -348,17 +334,17 @@ where
             .port
             .check_syntax(&context, self.config, &use_case_request)
         {
-            Ok(result) => Ok(map_syntax_response(result)),
-            Err(failure) => Err(map_use_case_failure(
+            Ok(result) => ok_envelope(CommandName::Syntax, result.duration_ms, result)
+                .map_err(McpServiceError::Internal),
+            Err(failure) => Err(map_use_case_failure_envelope(
                 failure,
-                map_syntax_response,
-                |error| McpSyntaxCheckResponse {
-                    success: false,
-                    message: error.message().to_owned(),
-                    check_result: None,
-                    errors: Some(vec![error.message().to_owned()]),
-                    issues: None,
-                    duration_ms: None,
+                |result| err_envelope(CommandName::Syntax, result.duration_ms, result),
+                |error| {
+                    fallback_error_envelope(
+                        CommandName::Syntax,
+                        "check_syntax_designer_modules",
+                        error,
+                    )
                 },
             )),
         }
@@ -383,34 +369,127 @@ fn execution_context(
     }
 }
 
-fn map_use_case_failure<TPayload, TResponse, FPayload, FFallback>(
+fn ok_envelope<T: Serialize>(
+    command: CommandName,
+    duration_ms: u64,
+    data: T,
+) -> Result<McpCommandEnvelope, McpInternalError> {
+    mcp_value_envelope(Envelope::ok(command.as_str(), duration_ms, data))
+}
+
+fn err_envelope<T: Serialize>(
+    command: CommandName,
+    duration_ms: u64,
+    data: T,
+) -> Result<McpCommandEnvelope, McpInternalError> {
+    mcp_value_envelope(Envelope::err(command.as_str(), duration_ms, data))
+}
+
+fn mcp_value_envelope<T: Serialize>(
+    envelope: Envelope<T>,
+) -> Result<McpCommandEnvelope, McpInternalError> {
+    let Envelope {
+        ok,
+        command,
+        duration_ms,
+        data,
+        warnings,
+        steps,
+        error,
+    } = envelope;
+    let data = serde_json::to_value(data).map_err(|error| {
+        McpInternalError::new(format!("failed to serialize command data: {error}"))
+    })?;
+    Ok(Envelope {
+        ok,
+        command,
+        duration_ms,
+        data,
+        warnings,
+        steps,
+        error,
+    })
+}
+
+fn map_use_case_failure_envelope<TPayload, FPayload, FFallback>(
     failure: UseCaseFailure<TPayload>,
     payload_mapper: FPayload,
     fallback_response: FFallback,
-) -> McpServiceError<TResponse>
+) -> McpServiceError<McpCommandEnvelope>
 where
-    FPayload: FnOnce(TPayload) -> TResponse,
-    FFallback: FnOnce(&UseCaseError) -> TResponse,
+    FPayload: FnOnce(TPayload) -> Result<McpCommandEnvelope, McpInternalError>,
+    FFallback: FnOnce(&UseCaseError) -> Result<McpCommandEnvelope, McpInternalError>,
 {
-    let (error, response) = map_failure_response(failure, payload_mapper, fallback_response);
-    McpServiceError::Business(McpBusinessFailure::new(
-        McpBusinessError::from_use_case(&error),
-        response,
+    let error = failure.error;
+    let business_error = McpBusinessError::from_use_case(&error);
+    let response = match failure.payload {
+        Some(payload) => payload_mapper(payload),
+        None => fallback_response(&error),
+    };
+    match response {
+        Ok(response) => McpServiceError::Business(McpBusinessFailure::new(
+            business_error.clone(),
+            response.with_error(envelope_error(&business_error)),
+        )),
+        Err(error) => McpServiceError::Internal(error),
+    }
+}
+
+fn fallback_error_envelope(
+    command: CommandName,
+    tool: &'static str,
+    error: &UseCaseError,
+) -> Result<McpCommandEnvelope, McpInternalError> {
+    mcp_value_envelope(Envelope::err(
+        command.as_str(),
+        0,
+        json!({
+            "message": error.message(),
+            "tool": tool,
+        }),
     ))
 }
 
-fn invalid_syntax_request(error: UseCaseError) -> McpServiceError<McpSyntaxCheckResponse> {
+fn adapter_error_envelope(
+    command: CommandName,
+    tool: &'static str,
+    message: &str,
+    business_error: McpBusinessError,
+    mut extra: Value,
+) -> McpCommandEnvelope {
+    let mut data = json!({
+        "message": message,
+        "tool": tool,
+    });
+    if let (Some(data_object), Some(extra_object)) = (data.as_object_mut(), extra.as_object_mut()) {
+        data_object.extend(extra_object.clone());
+    }
+    Envelope::err(command.as_str(), 0, data).with_error(envelope_error(&business_error))
+}
+
+fn envelope_error(error: &McpBusinessError) -> EnvelopeError {
+    EnvelopeError::new(
+        error.code.as_str(),
+        error.kind.as_str(),
+        error.message.clone(),
+    )
+}
+
+fn invalid_syntax_request(
+    error: UseCaseError,
+    tool: &'static str,
+) -> McpServiceError<McpCommandEnvelope> {
     let message = error.message().to_owned();
+    let business_error = McpBusinessError::from_use_case(&error);
     McpServiceError::Business(McpBusinessFailure::new(
-        McpBusinessError::from_use_case(&error),
-        McpSyntaxCheckResponse {
-            success: false,
-            message: message.clone(),
-            check_result: None,
-            errors: Some(vec![message]),
-            issues: None,
-            duration_ms: None,
-        },
+        business_error.clone(),
+        adapter_error_envelope(
+            CommandName::Syntax,
+            tool,
+            &message,
+            business_error,
+            json!({ "errors": [message] }),
+        ),
     ))
 }
 
@@ -521,179 +600,6 @@ fn map_designer_modules_request(
     )
 }
 
-fn map_build_response(result: BuildResult) -> McpBuildResponse {
-    let message = if result.ok {
-        if result
-            .steps
-            .iter()
-            .all(|step| step.ok && matches!(step.mode, BuildMode::Skipped))
-        {
-            "Build completed: no changes".to_owned()
-        } else {
-            "Build completed successfully".to_owned()
-        }
-    } else {
-        "Build failed".to_owned()
-    };
-
-    McpBuildResponse {
-        success: result.ok,
-        message,
-        build_time_ms: Some(result.duration_ms),
-        steps: (!result.ok).then(|| map_build_steps(result.steps)),
-    }
-}
-
-fn map_test_response(result: TestRunResult) -> McpTestResponse {
-    let execution = &result.execution;
-    let summary = execution
-        .metrics
-        .as_ref()
-        .map(|metrics| (metrics.total, metrics.passed, metrics.failed))
-        .or_else(|| {
-            execution.payload.as_ref().map(|report| {
-                (
-                    report.summary.total,
-                    report.summary.passed,
-                    report.summary.failed,
-                )
-            })
-        });
-    let detail = execution
-        .payload
-        .as_ref()
-        .map(|report| report.suites.clone());
-    let extracted_errors = result
-        .execution
-        .payload
-        .as_ref()
-        .map(|report| report.extracted_errors.clone())
-        .unwrap_or_default();
-    let mut errors = Vec::new();
-    for error in &execution.errors {
-        push_unique(&mut errors, error.message.clone());
-        for detail in &error.details {
-            push_unique(&mut errors, detail.clone());
-        }
-    }
-    for diagnostic in &execution.diagnostics {
-        push_unique(&mut errors, diagnostic.clone());
-    }
-    for extracted in extracted_errors {
-        push_unique(&mut errors, extracted);
-    }
-    let artifacts = execution.artifacts.as_ref();
-    let success = execution.status.is_ok();
-    let include_steps = !result.steps.is_empty()
-        && result
-            .steps
-            .iter()
-            .any(|step| step.status != ExecutionStepStatus::Succeeded);
-
-    McpTestResponse {
-        success,
-        message: test_status_message(execution.status).to_owned(),
-        total_tests: summary.map(|summary| summary.0),
-        passed_tests: summary.map(|summary| summary.1),
-        failed_tests: summary.map(|summary| summary.2),
-        execution_time_ms: Some(result.duration_ms),
-        enterprise_log_path: artifacts.and_then(|artifacts| {
-            artifacts
-                .get_by_role(ARTIFACT_ROLE_PLATFORM_LOG)
-                .map(|path| path.display().to_string())
-        }),
-        log_file: artifacts.and_then(|artifacts| {
-            artifacts
-                .get_by_role(ARTIFACT_ROLE_RUNNER_LOG)
-                .map(|path| path.display().to_string())
-        }),
-        test_detail: detail.map(map_test_suites),
-        steps: include_steps.then(|| map_step_results(result.steps)),
-        errors: (!errors.is_empty()).then_some(errors),
-    }
-}
-
-fn test_status_message(status: ExecutionStatus) -> &'static str {
-    match status {
-        ExecutionStatus::Succeeded => "Tests completed successfully",
-        ExecutionStatus::Failed => "Tests failed",
-        ExecutionStatus::Cancelled => "Tests cancelled",
-        ExecutionStatus::TimedOut => "Tests timed out",
-        ExecutionStatus::InvalidOutput => "Tests produced invalid output",
-    }
-}
-
-fn push_unique(items: &mut Vec<String>, value: String) {
-    if !items.contains(&value) {
-        items.push(value);
-    }
-}
-
-fn map_dump_response(result: DumpResult) -> McpDumpResponse {
-    McpDumpResponse {
-        success: result.ok,
-        message: result.message.unwrap_or_else(|| {
-            if result.ok {
-                "Dump completed successfully".to_owned()
-            } else {
-                "Dump failed".to_owned()
-            }
-        }),
-        mode: render_dump_mode_request_from_domain(result.mode).to_owned(),
-        dump_time_ms: Some(result.duration_ms),
-        dumped_objects: None,
-        errors: None,
-        steps: None,
-    }
-}
-
-fn map_launch_response(result: LaunchResult) -> McpLaunchResponse {
-    let default_message = match result.mode {
-        LaunchMode::Designer => "Launched Designer successfully",
-        LaunchMode::Thin => "Launched thin client successfully",
-        LaunchMode::Thick => "Launched thick client successfully",
-        LaunchMode::Ordinary => "Launched ordinary application successfully",
-    };
-
-    McpLaunchResponse {
-        success: result.ok,
-        message: result.message.unwrap_or_else(|| default_message.to_owned()),
-    }
-}
-
-pub(crate) fn map_syntax_response(result: SyntaxCheckResult) -> McpSyntaxCheckResponse {
-    let success = matches!(result.status, SyntaxCheckStatus::Clean);
-    let mut errors = Vec::new();
-    if let Some(stderr) = result.stderr.as_ref() {
-        let trimmed = stderr.trim();
-        if !trimmed.is_empty() {
-            errors.push(trimmed.to_owned());
-        }
-    }
-    if let Some(warning) = result.log_read_warning.as_ref() {
-        errors.push(warning.clone());
-    }
-
-    McpSyntaxCheckResponse {
-        success,
-        message: match result.status {
-            SyntaxCheckStatus::Clean => {
-                format!("Syntax check {} completed successfully", result.check_name)
-            }
-            SyntaxCheckStatus::IssuesFound => {
-                format!("Syntax check {} found issues", result.check_name)
-            }
-            SyntaxCheckStatus::ToolFailed => {
-                format!("Syntax check {} failed", result.check_name)
-            }
-        },
-        check_result: Some(render_syntax_status(result.status).to_owned()),
-        errors: (!errors.is_empty()).then_some(errors),
-        issues: (!result.issues.is_empty()).then(|| map_issues(result.issues)),
-        duration_ms: Some(result.duration_ms),
-    }
-}
-
 pub(crate) fn normalize_check_syntax_edt_request(
     request: &McpCheckSyntaxEdtRequest,
 ) -> SyntaxRequest {
@@ -706,153 +612,15 @@ pub(crate) fn normalize_check_syntax_edt_request(
 
 pub(crate) fn map_syntax_use_case_result(
     result: UseCaseResult<SyntaxCheckResult>,
-) -> McpServiceResult<McpSyntaxCheckResponse> {
+) -> McpServiceResult<McpCommandEnvelope> {
     match result {
-        Ok(result) => Ok(map_syntax_response(result)),
-        Err(failure) => Err(map_use_case_failure(
+        Ok(result) => ok_envelope(CommandName::Syntax, result.duration_ms, result)
+            .map_err(McpServiceError::Internal),
+        Err(failure) => Err(map_use_case_failure_envelope(
             failure,
-            map_syntax_response,
-            |error| McpSyntaxCheckResponse {
-                success: false,
-                message: error.message().to_owned(),
-                check_result: None,
-                errors: Some(vec![error.message().to_owned()]),
-                issues: None,
-                duration_ms: None,
-            },
+            |result| err_envelope(CommandName::Syntax, result.duration_ms, result),
+            |error| fallback_error_envelope(CommandName::Syntax, "check_syntax_edt", error),
         )),
-    }
-}
-
-fn map_build_steps(steps: Vec<BuildStep>) -> Vec<McpBuildStep> {
-    steps
-        .into_iter()
-        .map(|step| McpBuildStep {
-            source_set: step.source_set,
-            mode: match step.mode {
-                BuildMode::EdtExport => McpBuildMode::EdtExport,
-                BuildMode::Full => McpBuildMode::Full,
-                BuildMode::Partial { file_count } => McpBuildMode::Partial { file_count },
-                BuildMode::Skipped => McpBuildMode::Skipped,
-            },
-            ok: step.ok,
-            message: step.message,
-            duration_ms: step.duration_ms,
-        })
-        .collect()
-}
-
-fn map_step_results(steps: Vec<StepResult>) -> Vec<McpStepResult> {
-    steps
-        .into_iter()
-        .map(|step| McpStepResult {
-            name: step.name,
-            ok: step.ok,
-            status: match step.status {
-                ExecutionStepStatus::Succeeded => McpStepStatus::Succeeded,
-                ExecutionStepStatus::Failed => McpStepStatus::Failed,
-                ExecutionStepStatus::Skipped => McpStepStatus::Skipped,
-                ExecutionStepStatus::Degraded => McpStepStatus::Degraded,
-            },
-            kind: match step.kind {
-                ExecutionStepKind::Validation => McpStepKind::Validation,
-                ExecutionStepKind::ResolveTarget => McpStepKind::ResolveTarget,
-                ExecutionStepKind::PrepareWorkspace => McpStepKind::PrepareWorkspace,
-                ExecutionStepKind::PlatformCommand => McpStepKind::PlatformCommand,
-                ExecutionStepKind::ParseOutput => McpStepKind::ParseOutput,
-                ExecutionStepKind::Publish => McpStepKind::Publish,
-                ExecutionStepKind::Cleanup => McpStepKind::Cleanup,
-                ExecutionStepKind::Diagnostics => McpStepKind::Diagnostics,
-                ExecutionStepKind::Other => McpStepKind::Other,
-            },
-            duration_ms: step.duration_ms,
-            target: step.target,
-            message: step.message,
-            diagnostics: step.diagnostics,
-            errors: step.errors.into_iter().map(|error| error.message).collect(),
-            artifacts: step
-                .artifacts
-                .into_iter()
-                .flat_map(|artifacts| artifacts.items.into_iter().map(|artifact| artifact.path))
-                .map(|path| path.display().to_string())
-                .collect(),
-        })
-        .collect()
-}
-
-fn map_test_suites(suites: Vec<TestSuite>) -> Vec<McpTestSuite> {
-    suites
-        .into_iter()
-        .map(|suite| McpTestSuite {
-            name: suite.name,
-            cases: suite.cases.into_iter().map(map_test_case).collect(),
-            duration_ms: suite.duration_ms,
-        })
-        .collect()
-}
-
-fn map_test_case(case: TestCase) -> McpTestCase {
-    McpTestCase {
-        name: case.name,
-        class_name: case.class_name,
-        status: match case.status {
-            TestStatus::Passed => McpTestStatus::Passed,
-            TestStatus::Failed => McpTestStatus::Failed,
-            TestStatus::Skipped => McpTestStatus::Skipped,
-            TestStatus::Error => McpTestStatus::Error,
-        },
-        duration_ms: case.duration_ms,
-        failure_message: case.failure_message,
-        stack_trace: case.stack_trace,
-    }
-}
-
-fn map_issues(issues: Vec<Issue>) -> Vec<McpIssue> {
-    issues.into_iter().map(map_issue).collect()
-}
-
-fn map_issue(issue: Issue) -> McpIssue {
-    match issue {
-        Issue::Module(issue) => McpIssue::Module(map_module_issue(issue)),
-        Issue::Object(issue) => McpIssue::Object(map_object_issue(issue)),
-        Issue::Edt(issue) => McpIssue::Edt(map_edt_issue(issue)),
-    }
-}
-
-fn map_module_issue(issue: ModuleIssue) -> McpModuleIssue {
-    McpModuleIssue {
-        path: issue.path,
-        line: issue.line,
-        column: issue.column,
-        message: issue.message,
-        severity: map_issue_severity(issue.severity),
-    }
-}
-
-fn map_object_issue(issue: ObjectIssue) -> McpObjectIssue {
-    McpObjectIssue {
-        object: issue.object,
-        message: issue.message,
-        severity: map_issue_severity(issue.severity),
-    }
-}
-
-fn map_edt_issue(issue: EdtIssue) -> McpEdtIssue {
-    McpEdtIssue {
-        path: issue.path,
-        line: issue.line,
-        column: issue.column,
-        message: issue.message,
-        severity: map_issue_severity(issue.severity),
-        check: issue.check,
-    }
-}
-
-fn map_issue_severity(severity: IssueSeverity) -> McpIssueSeverity {
-    match severity {
-        IssueSeverity::Error => McpIssueSeverity::Error,
-        IssueSeverity::Warning => McpIssueSeverity::Warning,
-        IssueSeverity::Info => McpIssueSeverity::Info,
     }
 }
 
@@ -864,22 +632,6 @@ fn render_dump_mode(mode: DumpModeRequest) -> &'static str {
     }
 }
 
-fn render_dump_mode_request_from_domain(mode: DumpMode) -> &'static str {
-    match mode {
-        DumpMode::Full => "FULL",
-        DumpMode::Incremental => "INCREMENTAL",
-        DumpMode::Partial => "PARTIAL",
-    }
-}
-
-fn render_syntax_status(status: SyntaxCheckStatus) -> &'static str {
-    match status {
-        SyntaxCheckStatus::Clean => "clean",
-        SyntaxCheckStatus::IssuesFound => "issues_found",
-        SyntaxCheckStatus::ToolFailed => "tool_failed",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -887,7 +639,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{map_test_response, McpService};
+    use super::McpService;
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, PlatformToolConfig, SourceFormat, SourceSetConfig,
         SourceSetPurpose, TestsConfig, ToolsConfig,
@@ -909,10 +661,6 @@ mod tests {
         McpBuildProjectRequest, McpCheckSyntaxDesignerConfigRequest,
         McpCheckSyntaxDesignerModulesRequest, McpCheckSyntaxEdtRequest, McpDumpConfigRequest,
         McpLaunchAppRequest, McpRunAllTestsRequest, McpRunModuleTestsRequest,
-    };
-    use crate::mcp::response::{
-        McpBuildMode, McpBuildResponse, McpBuildStep, McpIssue, McpIssueSeverity, McpObjectIssue,
-        McpStepKind, McpStepResult, McpStepStatus, McpSyntaxCheckResponse, McpTestResponse,
     };
     use crate::support::adapter_input::normalize_extension_scope;
     use crate::use_cases::context::{CommandName, ExecutionContext, ExecutionTransport};
@@ -1076,15 +824,11 @@ mod tests {
             )
             .expect("success");
 
-        assert_eq!(
-            response,
-            McpBuildResponse {
-                success: true,
-                message: "Build completed successfully".to_owned(),
-                build_time_ms: Some(42),
-                steps: None,
-            }
-        );
+        assert!(response.ok);
+        assert_eq!(response.command, "build");
+        assert_eq!(response.duration_ms, 42);
+        assert_eq!(response.data["ok"], true);
+        assert_eq!(response.data["steps"][0]["mode"], "full");
         let requests = service.port.build_requests.borrow();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].0.command(), CommandName::Build);
@@ -1118,9 +862,18 @@ mod tests {
         match error {
             McpServiceError::Business(failure) => {
                 assert_eq!(failure.error.code, McpErrorCode::RuntimeFailure);
-                assert_eq!(failure.response.success, false);
-                assert_eq!(failure.response.build_time_ms, Some(19));
-                assert_eq!(failure.response.steps.expect("steps").len(), 1);
+                assert!(!failure.response.ok);
+                assert_eq!(failure.response.command, "build");
+                assert_eq!(failure.response.duration_ms, 19);
+                assert_eq!(failure.response.data["steps"][0]["ok"], false);
+                assert_eq!(
+                    failure
+                        .response
+                        .error
+                        .as_ref()
+                        .map(|error| error.code.as_str()),
+                    Some("runtime_failure")
+                );
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -1143,42 +896,16 @@ mod tests {
             )
             .expect("success");
 
-        assert_eq!(response.success, true);
-        assert_eq!(response.total_tests, Some(3));
-        assert_eq!(response.passed_tests, Some(2));
-        assert_eq!(response.failed_tests, Some(1));
-        assert_eq!(response.execution_time_ms, Some(120));
-        assert!(response.errors.is_none());
+        assert!(response.ok);
+        assert_eq!(response.command, "test");
+        assert_eq!(response.duration_ms, 120);
+        assert_eq!(response.data["report"]["summary"]["total"], 3);
+        assert_eq!(response.data["report"]["summary"]["passed"], 2);
+        assert_eq!(response.data["report"]["summary"]["failed"], 1);
+        assert!(response.error.is_none());
         let requests = service.port.test_requests.borrow();
         assert_eq!(requests[0].1.full, true);
         assert_eq!(requests[0].1.scope, TestScopeRequest::All);
-    }
-
-    #[test]
-    fn map_test_response_uses_execution_outcome_projection() {
-        let mut result = sample_test_result(false);
-        if let Some(report) = result.execution.payload.as_mut() {
-            report.summary.total = 99;
-            report.summary.passed = 99;
-            report.summary.failed = 0;
-        }
-
-        let response = map_test_response(result);
-
-        assert!(!response.success);
-        assert_eq!(response.message, "Tests failed");
-        assert_eq!(response.total_tests, Some(3));
-        assert_eq!(response.passed_tests, Some(2));
-        assert_eq!(response.failed_tests, Some(1));
-        assert_eq!(
-            response.enterprise_log_path.as_deref(),
-            Some("/tmp/platform.log")
-        );
-        assert_eq!(response.log_file.as_deref(), Some("/tmp/yaxunit.log"));
-        assert!(response
-            .errors
-            .expect("errors")
-            .contains(&"Tests failed".to_owned()));
     }
 
     #[test]
@@ -1202,12 +929,20 @@ mod tests {
         match error {
             McpServiceError::Business(failure) => {
                 assert_eq!(failure.error.code, McpErrorCode::RuntimeFailure);
-                assert_eq!(failure.response.success, false);
-                assert!(failure
-                    .response
-                    .errors
-                    .expect("errors")
-                    .contains(&"enterprise exited non-zero".to_owned()));
+                assert!(!failure.response.ok);
+                assert_eq!(failure.response.command, "test");
+                assert!(failure.response.data["diagnostics"]
+                    .as_array()
+                    .expect("diagnostics")
+                    .contains(&json!("enterprise exited non-zero")));
+                assert_eq!(
+                    failure
+                        .response
+                        .error
+                        .as_ref()
+                        .map(|error| error.code.as_str()),
+                    Some("runtime_failure")
+                );
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -1229,7 +964,8 @@ mod tests {
             )
             .expect("success");
 
-        assert_eq!(response.success, true);
+        assert!(response.ok);
+        assert_eq!(response.command, "test");
         let requests = service.port.test_requests.borrow();
         assert_eq!(requests[0].0.transport(), ExecutionTransport::McpHttp);
         assert_eq!(
@@ -1261,7 +997,12 @@ mod tests {
         match error {
             McpServiceError::Business(failure) => {
                 assert_eq!(failure.error.code, McpErrorCode::InvalidArgument);
-                assert_eq!(failure.response.message, "module_name must not be blank");
+                assert_eq!(failure.response.command, "test");
+                assert_eq!(
+                    failure.response.data["message"],
+                    "module_name must not be blank"
+                );
+                assert_eq!(failure.response.data["tool"], "run_module_tests");
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -1293,8 +1034,9 @@ mod tests {
             )
             .expect("success");
 
-        assert_eq!(response.success, true);
-        assert_eq!(response.mode, "INCREMENTAL");
+        assert!(response.ok);
+        assert_eq!(response.command, "dump");
+        assert_eq!(response.data["mode"], "INCREMENTAL");
         let requests = service.port.dump_requests.borrow();
         assert_eq!(requests[0].1.mode, DumpModeRequest::Incremental);
         assert_eq!(requests[0].1.extension, None);
@@ -1336,8 +1078,9 @@ mod tests {
         assert_eq!(requests[0].1.mode, DumpModeRequest::Incremental);
         match error {
             McpServiceError::Business(failure) => {
-                assert_eq!(failure.response.mode, "INCREMENTAL");
-                assert_eq!(failure.response.message, "dump failed");
+                assert_eq!(failure.response.command, "dump");
+                assert_eq!(failure.response.data["mode"], "INCREMENTAL");
+                assert_eq!(failure.response.data["message"], "dump failed");
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -1369,12 +1112,10 @@ mod tests {
         assert_eq!(requests[0].1.mode, DumpModeRequest::Incremental);
         match error {
             McpServiceError::Business(failure) => {
-                assert_eq!(failure.response.mode, "INCREMENTAL");
-                assert_eq!(failure.response.message, "dump failed");
-                assert_eq!(
-                    failure.response.errors,
-                    Some(vec!["dump failed".to_owned()])
-                );
+                assert_eq!(failure.response.command, "dump");
+                assert_eq!(failure.response.data["mode"], "INCREMENTAL");
+                assert_eq!(failure.response.data["message"], "dump failed");
+                assert_eq!(failure.response.data["tool"], "dump_config");
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -1411,10 +1152,19 @@ mod tests {
         match error {
             McpServiceError::Business(failure) => {
                 assert_eq!(failure.error.code, McpErrorCode::UnsupportedValue);
-                assert_eq!(failure.response.mode, "garbage");
+                assert_eq!(failure.response.command, "dump");
+                assert_eq!(failure.response.data["mode"], "garbage");
                 assert_eq!(
-                    failure.response.errors,
-                    Some(vec!["unsupported dump mode: garbage".to_owned()])
+                    failure.response.data["errors"][0],
+                    "unsupported dump mode: garbage"
+                );
+                assert_eq!(
+                    failure
+                        .response
+                        .error
+                        .as_ref()
+                        .map(|error| error.code.as_str()),
+                    Some("unsupported_value")
                 );
             }
             other => panic!("unexpected error: {other:?}"),
@@ -1450,10 +1200,11 @@ mod tests {
             )
             .expect("success");
 
-        assert!(response.success);
-        assert_eq!(response.mode, "PARTIAL");
-        assert!(response
-            .message
+        assert!(response.ok);
+        assert_eq!(response.data["mode"], "PARTIAL");
+        assert!(response.data["message"]
+            .as_str()
+            .expect("message")
             .contains("IBCMD does not support object-scoped partial dump"));
         let requests = service.port.dump_requests.borrow();
         assert_eq!(requests[0].1.mode, DumpModeRequest::Partial);
@@ -1499,10 +1250,10 @@ mod tests {
 
         match error {
             McpServiceError::Business(failure) => {
-                assert_eq!(failure.response.mode, "PARTIAL");
-                assert!(failure
-                    .response
-                    .message
+                assert_eq!(failure.response.data["mode"], "PARTIAL");
+                assert!(failure.response.data["message"]
+                    .as_str()
+                    .expect("message")
                     .contains("IBCMD does not support object-scoped partial dump"));
             }
             other => panic!("unexpected error: {other:?}"),
@@ -1616,7 +1367,8 @@ mod tests {
                 )
                 .expect("success");
 
-            assert_eq!(response.success, true, "alias {alias}");
+            assert!(response.ok, "alias {alias}");
+            assert_eq!(response.command, "launch");
             let requests = service.port.launch_requests.borrow();
             assert_eq!(requests[0].1.target, request_mode, "alias {alias}");
         }
@@ -1649,7 +1401,11 @@ mod tests {
             McpServiceError::Business(failure) => {
                 assert_eq!(failure.error.code, McpErrorCode::InvalidArgument);
                 assert_eq!(failure.error.message, "utility_type must not be blank");
-                assert_eq!(failure.response.message, "utility_type must not be blank");
+                assert_eq!(
+                    failure.response.data["message"],
+                    "utility_type must not be blank"
+                );
+                assert_eq!(failure.response.data["tool"], "launch_app");
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -1682,7 +1438,7 @@ mod tests {
             McpServiceError::Business(failure) => {
                 assert_eq!(failure.error.code, McpErrorCode::UnsupportedValue);
                 assert_eq!(
-                    failure.response.message,
+                    failure.response.data["message"],
                     "unsupported launch utility_type: unknown"
                 );
             }
@@ -1705,7 +1461,8 @@ mod tests {
             )
             .expect("success");
 
-        assert_eq!(response.success, true);
+        assert!(response.ok);
+        assert_eq!(response.command, "syntax");
         let requests = service.port.syntax_requests.borrow();
         assert_eq!(
             requests[0].1.target,
@@ -1731,11 +1488,8 @@ mod tests {
         match error {
             McpServiceError::Business(failure) => {
                 assert_eq!(failure.error.code, McpErrorCode::InvalidArgument);
-                assert_eq!(failure.response.message, "edt project not found");
-                assert_eq!(
-                    failure.response.errors,
-                    Some(vec!["edt project not found".to_owned()])
-                );
+                assert_eq!(failure.response.data["message"], "edt project not found");
+                assert_eq!(failure.response.data["tool"], "check_syntax_edt");
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -1795,7 +1549,8 @@ mod tests {
             )
             .expect("success");
 
-        assert_eq!(response.success, true);
+        assert!(response.ok);
+        assert_eq!(response.command, "syntax");
         let requests = service.port.syntax_requests.borrow();
         match &requests[0].1.target {
             SyntaxTargetRequest::DesignerConfig(request) => {
@@ -1857,14 +1612,12 @@ mod tests {
             McpServiceError::Business(failure) => {
                 assert_eq!(failure.error.code, McpErrorCode::InvalidArgument);
                 assert_eq!(
-                    failure.response.message,
+                    failure.response.data["message"],
                     "checkUseSynchronousCalls requires extendedModulesCheck=true"
                 );
                 assert_eq!(
-                    failure.response.errors,
-                    Some(vec![
-                        "checkUseSynchronousCalls requires extendedModulesCheck=true".to_owned()
-                    ])
+                    failure.response.data["errors"][0],
+                    "checkUseSynchronousCalls requires extendedModulesCheck=true"
                 );
             }
             other => panic!("unexpected error: {other:?}"),
@@ -1893,14 +1646,12 @@ mod tests {
             McpServiceError::Business(failure) => {
                 assert_eq!(failure.error.code, McpErrorCode::InvalidArgument);
                 assert_eq!(
-                    failure.response.message,
+                    failure.response.data["message"],
                     "checkUseModality requires extendedModulesCheck=true"
                 );
                 assert_eq!(
-                    failure.response.errors,
-                    Some(vec![
-                        "checkUseModality requires extendedModulesCheck=true".to_owned()
-                    ])
+                    failure.response.data["errors"][0],
+                    "checkUseModality requires extendedModulesCheck=true"
                 );
             }
             other => panic!("unexpected error: {other:?}"),
@@ -1926,17 +1677,9 @@ mod tests {
         match error {
             McpServiceError::Business(failure) => {
                 assert_eq!(failure.error.code, McpErrorCode::PlatformFailure);
-                assert_eq!(
-                    failure.response.check_result.as_deref(),
-                    Some("tool_failed")
-                );
-                assert_eq!(
-                    failure.response.errors,
-                    Some(vec![
-                        "designer stderr".to_owned(),
-                        "log truncated".to_owned()
-                    ])
-                );
+                assert_eq!(failure.response.data["status"], "tool_failed");
+                assert_eq!(failure.response.data["stderr"], "designer stderr");
+                assert_eq!(failure.response.data["log_read_warning"], "log truncated");
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -1960,7 +1703,8 @@ mod tests {
             )
             .expect("success");
 
-        assert_eq!(response.success, false);
+        assert!(response.ok);
+        assert_eq!(response.data["status"], "issues_found");
         let requests = service.port.syntax_requests.borrow();
         match &requests[0].1.target {
             SyntaxTargetRequest::DesignerModules(request) => {
@@ -2018,7 +1762,11 @@ mod tests {
         match error {
             McpServiceError::Business(failure) => {
                 assert_eq!(failure.error.code, McpErrorCode::InvalidArgument);
-                assert_eq!(failure.response.message, "no syntax modes selected");
+                assert_eq!(failure.response.data["message"], "no syntax modes selected");
+                assert_eq!(
+                    failure.response.data["tool"],
+                    "check_syntax_designer_modules"
+                );
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -2073,129 +1821,6 @@ mod tests {
 
         assert!(matches!(error, McpServiceError::Internal(_)));
         assert!(!matches!(error, McpServiceError::Business(_)));
-    }
-
-    #[test]
-    fn serializes_test_response_shape() {
-        let response = McpTestResponse {
-            success: false,
-            message: "Tests failed".to_owned(),
-            total_tests: Some(3),
-            passed_tests: Some(2),
-            failed_tests: Some(1),
-            execution_time_ms: Some(120),
-            enterprise_log_path: Some("/tmp/platform.log".to_owned()),
-            log_file: Some("/tmp/yaxunit.log".to_owned()),
-            test_detail: None,
-            steps: Some(vec![McpStepResult {
-                name: "build".to_owned(),
-                ok: false,
-                status: McpStepStatus::Failed,
-                kind: McpStepKind::PlatformCommand,
-                duration_ms: 10,
-                target: None,
-                message: Some("boom".to_owned()),
-                diagnostics: vec![],
-                errors: vec!["boom".to_owned()],
-                artifacts: vec![],
-            }]),
-            errors: Some(vec!["boom".to_owned()]),
-        };
-
-        let json = serde_json::to_value(response).expect("json");
-
-        assert_eq!(
-            json,
-            json!({
-                "success": false,
-                "message": "Tests failed",
-                "total_tests": 3,
-                "passed_tests": 2,
-                "failed_tests": 1,
-                "execution_time_ms": 120,
-                "enterprise_log_path": "/tmp/platform.log",
-                "log_file": "/tmp/yaxunit.log",
-                "steps": [{
-                    "name": "build",
-                    "ok": false,
-                    "status": "failed",
-                    "kind": "platform_command",
-                    "duration_ms": 10,
-                    "message": "boom",
-                    "errors": ["boom"]
-                }],
-                "errors": ["boom"]
-            })
-        );
-    }
-
-    #[test]
-    fn serializes_syntax_response_shape() {
-        let response = McpSyntaxCheckResponse {
-            success: false,
-            message: "Syntax check CheckConfig failed".to_owned(),
-            check_result: Some("tool_failed".to_owned()),
-            errors: Some(vec!["stderr".to_owned()]),
-            issues: Some(vec![McpIssue::Object(McpObjectIssue {
-                object: "Catalog.Item".to_owned(),
-                message: "broken".to_owned(),
-                severity: McpIssueSeverity::Error,
-            })]),
-            duration_ms: Some(55),
-        };
-
-        let json = serde_json::to_value(response).expect("json");
-
-        assert_eq!(
-            json,
-            json!({
-                "success": false,
-                "message": "Syntax check CheckConfig failed",
-                "check_result": "tool_failed",
-                "errors": ["stderr"],
-                "issues": [{
-                    "kind": "object",
-                    "object": "Catalog.Item",
-                    "message": "broken",
-                    "severity": "ERROR"
-                }],
-                "duration_ms": 55
-            })
-        );
-    }
-
-    #[test]
-    fn serializes_build_failure_response_shape() {
-        let response = McpBuildResponse {
-            success: false,
-            message: "Build failed".to_owned(),
-            build_time_ms: Some(19),
-            steps: Some(vec![McpBuildStep {
-                source_set: "main".to_owned(),
-                mode: McpBuildMode::Full,
-                ok: false,
-                message: Some("broken".to_owned()),
-                duration_ms: 9,
-            }]),
-        };
-
-        let json = serde_json::to_value(response).expect("json");
-
-        assert_eq!(
-            json,
-            json!({
-                "success": false,
-                "message": "Build failed",
-                "build_time_ms": 19,
-                "steps": [{
-                    "source_set": "main",
-                    "mode": "full",
-                    "ok": false,
-                    "message": "broken",
-                    "duration_ms": 9
-                }]
-            })
-        );
     }
 
     fn sample_config() -> AppConfig {
