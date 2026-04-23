@@ -168,7 +168,9 @@ fn config_init_rejects_global_config_shortcut_in_json_mode() {
     assert_eq!(output.status.code(), Some(2));
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
     assert_eq!(payload["ok"], false);
-    assert_eq!(payload["command"], "error");
+    assert_eq!(payload["command"], "config init");
+    assert_eq!(payload["error"]["code"], "invalid_argument");
+    assert_eq!(payload["error"]["kind"], "validation");
     assert!(payload["data"]["message"]
         .as_str()
         .expect("message")
@@ -302,6 +304,24 @@ fn config_init_refuses_to_overwrite_without_force() {
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("already exists"));
+
+    let json_output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .current_dir(dir.path())
+        .args(["--json-message", "config", "init"])
+        .output()
+        .expect("run json command");
+
+    assert!(!json_output.status.success());
+    assert_eq!(json_output.status.code(), Some(2));
+    let payload: Value = serde_json::from_slice(&json_output.stdout).expect("json");
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["command"], "config init");
+    assert_eq!(payload["error"]["code"], "invalid_argument");
+    assert!(payload["data"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("already exists"));
 }
 
 #[test]

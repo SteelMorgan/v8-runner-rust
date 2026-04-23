@@ -162,11 +162,21 @@ Detailed ADR task decomposition remains in [ADR_DERIVED_BACKLOG.md](ADR_DERIVED_
 
 ## P2
 
-- [ ] `ADR-TASK-016`: Fix the CLI JSON error contract for early failures. Some validation,
+- [x] `ADR-TASK-016`: Fix the CLI JSON error contract for early failures. Some validation,
   bootstrap, and pre-dispatch failures still lose command identity and return
   `command = "error"` instead of a command-specific envelope. Preserve command identity for
   `config init`, early CLI validation/preflight failures, and shared bootstrap paths, then add
-  regression coverage.
+  regression coverage. Completed `2026-04-23`: command-specific early error envelopes now live in
+  the CLI output boundary and carry structured `error { code, kind, message }` metadata for
+  bootstrap, `config init`, and pre-dispatch validation failures instead of falling back to
+  `command = "error"`. `app.rs` now preserves command identity for config-load and action-log
+  bootstrap failures plus `config init` special paths, and CLI pre-dispatch mapper failures for
+  `test`, `load`, `dump`, `make`, and `launch` route through the shared command-aware renderer.
+  Regression coverage was added for missing config, action logging failure, `config init` JSON
+  errors, `test` blank-module validation, `make` unknown source-set validation, and helper-level
+  command identity for clap-unreachable mapper branches. Targeted checks, tester-subagent full
+  `cargo test --locked --quiet`, local full `cargo test --locked --quiet`, reviewer, and separate
+  Rust expert subagent gates passed.
 
 - [ ] `ADR-TASK-026`: Reduce test maintenance cost with a shared test harness for shell and
   platform fixtures. Move repeated script creation, chmod, tempdir setup, cargo-bin bootstrap,

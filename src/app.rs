@@ -5,11 +5,16 @@ use crate::cli::args::{
     Cli, Command, ConfigCommand, ConfigInitArgs, McpCommand, McpServeTransport,
 };
 use crate::cli::execute;
+use crate::cli::output::print_command_error;
 use crate::command_envelope::Envelope;
 use crate::config::loader::load_config;
 use crate::output::presenter::Presenter;
 use crate::output::text::{TimelineItem, TimelineStatus};
+use crate::support::error::AppError;
 use crate::use_cases::config_init::{ConfigBuilderRequest, ConfigFormatRequest, ConfigInitRequest};
+use crate::use_cases::result::{UseCaseError, UseCaseErrorKind};
+
+const CONFIG_INIT_COMMAND: &str = "config init";
 
 pub fn run() -> i32 {
     let cli = Cli::parse();
@@ -33,8 +38,10 @@ pub fn run() -> i32 {
     let config = match load_config(cli.config.as_deref(), cli.workdir.as_deref()) {
         Ok(c) => c,
         Err(e) => {
-            presenter.print_error(&format!("{e}"));
-            return crate::output::exit_codes::VALIDATION_ERROR;
+            let message = e.to_string();
+            let error = UseCaseError::from(AppError::from(e));
+            print_command_error(&presenter, command_name(&cli.command), &error, &message);
+            return error.exit_code();
         }
     };
 
@@ -47,8 +54,10 @@ pub fn run() -> i32 {
     ) {
         Ok(path) => path,
         Err(e) => {
-            presenter.print_error(&format!("{e}"));
-            return crate::output::exit_codes::RUNTIME_ERROR;
+            let message = e.to_string();
+            let error = UseCaseError::new(UseCaseErrorKind::Runtime, message.clone());
+            print_command_error(&presenter, command_name(&cli.command), &error, &message);
+            return error.exit_code();
         }
     };
 
@@ -116,17 +125,20 @@ fn run_config_command(args: &crate::cli::args::ConfigArgs, presenter: &Presenter
 
 fn run_config_init(args: &ConfigInitArgs, presenter: &Presenter) -> i32 {
     if config_flag_was_explicitly_set() {
-        presenter.print_error(
-            "global --config flag is not supported for `config init`; use `config init --output <FILE>` to choose where the generated config is written",
-        );
-        return crate::output::exit_codes::VALIDATION_ERROR;
+        let message =
+            "global --config flag is not supported for `config init`; use `config init --output <FILE>` to choose where the generated config is written";
+        let error = UseCaseError::new(UseCaseErrorKind::Validation, message);
+        print_command_error(presenter, CONFIG_INIT_COMMAND, &error, message);
+        return error.exit_code();
     }
 
     let project_dir = match std::env::current_dir() {
         Ok(path) => path,
         Err(error) => {
-            presenter.print_error(&format!("failed to resolve current directory: {error}"));
-            return crate::output::exit_codes::RUNTIME_ERROR;
+            let message = format!("failed to resolve current directory: {error}");
+            let error = UseCaseError::new(UseCaseErrorKind::Runtime, message.clone());
+            print_command_error(presenter, CONFIG_INIT_COMMAND, &error, &message);
+            return error.exit_code();
         }
     };
     let output_path = args.output.as_deref().unwrap_or("v8project.yaml");
@@ -145,7 +157,7 @@ fn run_config_init(args: &ConfigInitArgs, presenter: &Presenter) -> i32 {
             if presenter.is_json() {
                 presenter.print_envelope(&Envelope {
                     ok: true,
-                    command: "config init".to_owned(),
+                    command: CONFIG_INIT_COMMAND.to_owned(),
                     duration_ms: result.duration_ms,
                     warnings: result.warnings.clone(),
                     steps: Vec::new(),
@@ -158,13 +170,10 @@ fn run_config_init(args: &ConfigInitArgs, presenter: &Presenter) -> i32 {
             0
         }
         Err(error) => {
-            presenter.print_error(&error.to_string());
-            match error {
-                crate::support::error::AppError::Validation(_) => {
-                    crate::output::exit_codes::VALIDATION_ERROR
-                }
-                _ => crate::output::exit_codes::RUNTIME_ERROR,
-            }
+            let message = error.to_string();
+            let error = UseCaseError::from(error);
+            print_command_error(presenter, CONFIG_INIT_COMMAND, &error, &message);
+            error.exit_code()
         }
     }
 }

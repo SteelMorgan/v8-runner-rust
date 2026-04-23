@@ -10,8 +10,9 @@ use crate::cli::args::{
     DesignerModulesSyntaxArgs, DumpArgs, ExtensionsArgs, LaunchArgs, LaunchOptionsArgs, LoadArgs,
     SyntaxArgs, SyntaxTarget, TestArgs, TestRunner, TestScope, TestYaxunitArgs,
 };
+use crate::cli::output::{failure_envelope, print_command_use_case_error, with_cli_error};
 use crate::cli::signal::CliSignalGuard;
-use crate::command_envelope::{test_envelope, Envelope, EnvelopeError};
+use crate::command_envelope::{test_envelope, Envelope};
 use crate::config::model::{AppConfig, SourceSetPurpose};
 use crate::domain::artifact::{
     ArtifactRef, ArtifactSet, ARTIFACT_ROLE_PACKAGE_FILE, ARTIFACT_ROLE_PLATFORM_LOG,
@@ -315,7 +316,8 @@ fn execute_test(
     clean_before_execution: bool,
     cancellation: CancellationToken,
 ) -> Result<(), UseCaseError> {
-    let request = map_test_request(config, args)?;
+    let request = map_test_request(config, args)
+        .map_err(|error| render_pre_dispatch_error(presenter, CommandName::Test, error))?;
     let context = cli_context(config, CommandName::Test, cancellation);
     with_cli_workspace_lock(
         config,
@@ -358,7 +360,8 @@ fn execute_load(
     clean_before_execution: bool,
     cancellation: CancellationToken,
 ) -> Result<(), UseCaseError> {
-    let request = map_load_request(args)?;
+    let request = map_load_request(args)
+        .map_err(|error| render_pre_dispatch_error(presenter, CommandName::Load, error))?;
     let context = cli_context(config, CommandName::Load, cancellation);
     with_cli_workspace_lock(
         config,
@@ -401,7 +404,8 @@ fn execute_dump(
     clean_before_execution: bool,
     cancellation: CancellationToken,
 ) -> Result<(), UseCaseError> {
-    let request = map_dump_request(args)?;
+    let request = map_dump_request(args)
+        .map_err(|error| render_pre_dispatch_error(presenter, CommandName::Dump, error))?;
     let context = cli_context(config, CommandName::Dump, cancellation);
     with_cli_workspace_lock(
         config,
@@ -508,7 +512,8 @@ fn execute_artifacts(
     clean_before_execution: bool,
     cancellation: CancellationToken,
 ) -> Result<(), UseCaseError> {
-    let request = map_artifacts_request_with_config(config, args)?;
+    let request = map_artifacts_request_with_config(config, args)
+        .map_err(|error| render_pre_dispatch_error(presenter, CommandName::Artifacts, error))?;
     let context = cli_context(config, CommandName::Artifacts, cancellation);
     with_cli_workspace_lock(
         config,
@@ -602,7 +607,8 @@ fn execute_launch(
     clean_before_execution: bool,
     cancellation: CancellationToken,
 ) -> Result<(), UseCaseError> {
-    let request = map_launch_request(args)?;
+    let request = map_launch_request(args)
+        .map_err(|error| render_pre_dispatch_error(presenter, CommandName::Launch, error))?;
     let context = cli_context(config, CommandName::Launch, cancellation);
     let started = Instant::now();
     with_cli_workspace_lock(
@@ -679,46 +685,8 @@ fn render_pre_dispatch_error(
     error: impl Into<UseCaseError>,
 ) -> UseCaseError {
     let error = error.into();
-    if presenter.is_json() {
-        presenter.print_envelope(&pre_dispatch_error_envelope(command, &error));
-    } else {
-        presenter.print_error(&error.to_string());
-    }
+    print_command_use_case_error(presenter, command, &error);
     error
-}
-
-fn pre_dispatch_error_envelope(
-    command: CommandName,
-    error: &UseCaseError,
-) -> Envelope<serde_json::Value> {
-    failure_envelope(
-        command.as_str(),
-        0,
-        json!({ "message": error.message() }),
-        error,
-    )
-}
-
-fn failure_envelope<T: Serialize>(
-    command: impl Into<String>,
-    duration_ms: u64,
-    data: T,
-    error: &UseCaseError,
-) -> Envelope<T> {
-    with_cli_error(Envelope::err(command, duration_ms, data), error)
-}
-
-fn with_cli_error<T: Serialize>(envelope: Envelope<T>, error: &UseCaseError) -> Envelope<T> {
-    envelope.with_error(cli_envelope_error(error))
-}
-
-fn cli_envelope_error(error: &UseCaseError) -> EnvelopeError {
-    let (code, kind) = match error.kind() {
-        UseCaseErrorKind::Validation => ("invalid_argument", "validation"),
-        UseCaseErrorKind::Runtime => ("runtime_failure", "runtime"),
-        UseCaseErrorKind::Platform => ("platform_failure", "platform"),
-    };
-    EnvelopeError::new(code, kind, error.message())
 }
 
 fn map_build_request(args: &BuildArgs) -> BuildRequest {
@@ -2075,13 +2043,13 @@ mod tests {
         build_load_envelope, command_name, execute_command, map_artifacts_request_with_config,
         map_build_request, map_designer_config_request, map_dump_request, map_extensions_request,
         map_launch_request, map_load_request, map_syntax_request, map_test_request,
-        pre_dispatch_error_envelope,
     };
     use crate::cli::args::{
         ArtifactsArgs, BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs,
         DumpArgs, ExtensionsArgs, LaunchArgs, LaunchOptionsArgs, LoadArgs, SyntaxArgs,
         SyntaxTarget, TestArgs, TestRunner, TestScope, TestYaxunitArgs,
     };
+    use crate::cli::output::pre_dispatch_error_envelope;
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
         TestsConfig, ToolsConfig,
@@ -2667,12 +2635,32 @@ mod tests {
     #[test]
     fn pre_dispatch_json_error_keeps_command_identity() {
         let error = UseCaseError::new(UseCaseErrorKind::Runtime, "workspace is busy");
-        let envelope = pre_dispatch_error_envelope(CommandName::Build, &error);
+        for (command, expected) in [
+            (CommandName::Build, "build"),
+            (CommandName::Load, "load"),
+            (CommandName::Dump, "dump"),
+            (CommandName::Test, "test"),
+            (CommandName::Artifacts, "make"),
+            (CommandName::Launch, "launch"),
+        ] {
+            let envelope = pre_dispatch_error_envelope(command.as_str(), &error);
+            let json = serde_json::to_value(envelope).expect("json");
+
+            assert_eq!(json["command"], expected);
+            assert_eq!(json["data"]["message"], "workspace is busy");
+            assert_eq!(json["error"]["code"], "runtime_failure");
+        }
+    }
+
+    #[test]
+    fn pre_dispatch_json_error_supports_config_init_identity() {
+        let error = UseCaseError::new(UseCaseErrorKind::Validation, "bad config init request");
+        let envelope = pre_dispatch_error_envelope("config init", &error);
         let json = serde_json::to_value(envelope).expect("json");
 
-        assert_eq!(json["command"], "build");
-        assert_eq!(json["data"]["message"], "workspace is busy");
-        assert_eq!(json["error"]["code"], "runtime_failure");
+        assert_eq!(json["command"], "config init");
+        assert_eq!(json["data"]["message"], "bad config init request");
+        assert_eq!(json["error"]["code"], "invalid_argument");
     }
 
     #[test]
