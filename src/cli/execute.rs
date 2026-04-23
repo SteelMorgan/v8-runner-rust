@@ -925,6 +925,7 @@ fn map_convert_request(args: &ConvertArgs) -> ConvertRequest {
             },
             None => ConvertScopeRequest::All,
         },
+        output_root: args.output.clone(),
     }
 }
 

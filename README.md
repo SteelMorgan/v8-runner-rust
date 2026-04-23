@@ -121,7 +121,7 @@ tests:
 | `test yaxunit` | Следует матрице `build` и всегда сначала запускает `build` |
 | `test va` | `tests.va` с выбранным профилем, `epf_path` и `params_path`; всегда сначала запускает `build` |
 | `dump` | `format=DESIGNER` или `format=EDT` с `builder=DESIGNER` или `IBCMD`; при `format=EDT` reverse sync идёт через internal Designer snapshot и EDT import |
-| `convert` | CLI-only repo-aware конвертация текущих `source-set` через EDT CLI; direction выводится из `format`, output публикуется под `workPath/convert/out`, не требует `builder` или подключения к ИБ |
+| `convert` | CLI-only repo-aware конвертация текущих `source-set` через EDT CLI; direction выводится из `format`, output по умолчанию публикуется под `workPath/convert/out`, а `--output` задаёт user-facing target root с mirror-layout; не требует `builder` или подключения к ИБ |
 | `make` / `artifacts` | Экспорт `.cf` и `.cfe` через Designer; публикация `.epf`/`.erf` для внешних `source-set`; требуется `builder=DESIGNER` |
 | `syntax` | Проверки через Designer для `DESIGNER`-исходников и валидация EDT для `EDT` |
 | `launch` | Designer, тонкий клиент, толстый клиент, обычное приложение; поддерживает `--c`, `--execute`, `--use-privileged-mode`, `--output`, `--raw-key` |
@@ -154,9 +154,10 @@ v8-runner artifacts --output dist/tools --source-set tools
 ```bash
 v8-runner convert
 v8-runner convert --source-set main
+v8-runner convert --output tests/fixtures/edt
 ```
 
-`convert` работает от текущего `v8project.yaml`: без аргументов обрабатывает все `source-set` в конфигурационном порядке, а `--source-set` ограничивает выполнение одним именем. Направление выводится из `format`: `EDT -> Designer` для `format=EDT` и `Designer -> EDT` для `format=DESIGNER`. Результат всегда публикуется только в `workPath/convert/out/<source-set>/<designer|edt>/`, команда использует отдельный workspace `workPath/convert/edt-workspace`, не зависит от `builder`, не использует `infobase.connection` и не опубликована как MCP-инструмент. Это отдельный сценарий от `dump`: `convert` конвертирует текущие project files, а `dump` делает reverse sync из ИБ.
+`convert` работает от текущего `v8project.yaml`: без аргументов обрабатывает все `source-set` в конфигурационном порядке, а `--source-set` ограничивает выполнение одним именем. Направление выводится из `format`: `EDT -> Designer` для `format=EDT` и `Designer -> EDT` для `format=DESIGNER`. Без `--output` результат публикуется в `workPath/convert/out/<source-set>/<designer|edt>/`; с `--output <DIR>` команда публикует под заданный target root, зеркаля `source-set.path` относительно `basePath` (`configuration`, `extension`, `external/processor` и т.п.). Публикация остаётся staged full replacement с защитой от overlap, команда использует отдельный workspace `workPath/convert/edt-workspace`, не зависит от `builder`, не использует `infobase.connection` и не опубликована как MCP-инструмент. Это отдельный сценарий от `dump`: `convert` конвертирует текущие project files, а `dump` делает reverse sync из ИБ.
 
 ### Расширенный запуск 1С
 
@@ -196,7 +197,7 @@ v8-runner launch thin --raw-key /WA- --raw-key /DisplayAllFunctions
 - [docs/decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md](docs/decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md): текущая граница поддержки `IBCMD` и целевой принцип взаимозаменяемости builder backend.
 - [docs/decisions/0003-podderzhivat-servernye-ib-dlya-vseh-instrumentov.md](docs/decisions/0003-podderzhivat-servernye-ib-dlya-vseh-instrumentov.md): целевой контракт поддержки серверных ИБ для всех инструментов.
 - [docs/decisions/0004-avtoobnaruzhivat-komponenty-platformy-1s-po-versii-maske.md](docs/decisions/0004-avtoobnaruzhivat-komponenty-platformy-1s-po-versii-maske.md): автопоиск компонентов платформы 1С по точной версии или версии-маске.
-- [docs/decisions/0020-dobavit-cli-only-convert-dlya-dvustoronney-konvertatsii-edt-i-designer.md](docs/decisions/0020-dobavit-cli-only-convert-dlya-dvustoronney-konvertatsii-edt-i-designer.md): repo-aware CLI-only контракт для `convert [--source-set <name>]` и явное разделение `convert` и `dump` как разных сценариев.
+- [docs/decisions/0020-dobavit-cli-only-convert-dlya-dvustoronney-konvertatsii-edt-i-designer.md](docs/decisions/0020-dobavit-cli-only-convert-dlya-dvustoronney-konvertatsii-edt-i-designer.md): repo-aware CLI-only контракт для `convert [--source-set <name>] [--output <dir>]` и явное разделение `convert` и `dump` как разных сценариев.
 
 <details>
 <summary>Текущие ограничения и оговорки</summary>

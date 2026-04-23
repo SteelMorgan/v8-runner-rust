@@ -108,6 +108,8 @@ pub enum ConvertScopeRequest {
 pub struct ConvertRequest {
     /// Requested convert scope.
     pub scope: ConvertScopeRequest,
+    /// Optional user-facing target root for converted source-set layout.
+    pub output_root: Option<String>,
 }
 
 /// Transport-neutral artifact export mode.

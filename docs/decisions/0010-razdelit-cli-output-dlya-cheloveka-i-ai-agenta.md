@@ -79,7 +79,7 @@ CLI `v8-runner` будет потребляться двумя разными р
 - `text` и `json` не противоречат друг другу по ключевым фактам.
 7. Ввести и поддерживать help/parse regressions для public contract:
 - `--json-message` выбирает structured output без изменения JSON schema;
-- `config init --output`, `launch --output`, `make/artifacts --output` и будущий `convert --output` используют одно и то же user-facing имя;
+- `config init --output`, `launch --output`, `make/artifacts --output` и `convert --output` используют одно и то же user-facing имя;
 - `config init` не использует глобальный `--config` как shortcut output path.
 8. При добавлении новой CLI команды, нового result field или нового output path flag обновлять rendering/help/parse tests before exposing the behavior.
 

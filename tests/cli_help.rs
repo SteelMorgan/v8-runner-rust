@@ -67,3 +67,20 @@ fn make_help_keeps_output_path_under_command_options() {
     assert!(stdout.contains("--output <OUTPUT>"));
     assert!(stdout.contains("--json-message"));
 }
+
+#[test]
+fn convert_help_uses_output_target_root_name() {
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args(["convert", "--help"])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Command options:"));
+    assert!(stdout.contains("Global options:"));
+    assert!(stdout.contains("--output <OUTPUT>"));
+    assert!(stdout.contains("--source-set <SOURCE_SET>"));
+    assert!(stdout.contains("--json-message"));
+}

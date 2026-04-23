@@ -23,7 +23,7 @@
 | `test` | Та же матрица, что и у `build` | Всегда сначала запускает `build`, затем YaXUnit через Enterprise |
 | `dump` | `format=DESIGNER` + `builder=DESIGNER` | Полная, инкрементальная или точечная частичная выгрузка объектов |
 | `dump` | `format=DESIGNER` + `builder=IBCMD` | Полная и инкрементальная выгрузка; запрос `partial` деградирует в инкрементальную выгрузку с предупреждением |
-| `convert` | CLI-only repo-aware конвертация текущих `source-set` между EDT и Designer | Использует EDT CLI, direction выводит из `format`, публикует output только под `workPath/convert/out`, использует отдельный workspace `workPath/convert/edt-workspace`; не требует `builder` и не использует ИБ |
+| `convert` | CLI-only repo-aware конвертация текущих `source-set` между EDT и Designer | Использует EDT CLI, direction выводит из `format`, по умолчанию публикует output под `workPath/convert/out`, а `--output` задаёт target root с mirror-layout; использует отдельный workspace `workPath/convert/edt-workspace`, не требует `builder` и не использует ИБ |
 | `syntax` | `syntax designer-config` и `syntax designer-modules` требуют `builder=DESIGNER`, `format=DESIGNER` | Проверки через Designer |
 | `syntax` | `syntax edt` требует `builder=DESIGNER`, `format=EDT` | Проверка через EDT `validate` |
 | `launch` | У команды нет отдельного деления по форматам | Требует соответствующую локальную утилиту 1С |
@@ -188,7 +188,7 @@ v8-runner dump --mode <full|incremental|partial> [--source-set <NAME>] [--extens
 ## Команда `convert`
 
 ```bash
-v8-runner convert [--source-set <NAME>]
+v8-runner convert [--source-set <NAME>] [--output <DIR>]
 ```
 
 Поведение:
@@ -197,11 +197,13 @@ v8-runner convert [--source-set <NAME>]
 - Работает от текущего `v8project.yaml`, а не по произвольным путям.
 - Без `--source-set` обрабатывает все `source-set` в конфигурационном порядке.
 - `--source-set` ограничивает конвертацию одним конкретным `source-set`.
+- `--output <DIR>` задаёт user-facing target root; каждый выбранный `source-set` публикуется под тем же logical path segment, что и во входном `basePath`.
 - Направление выводится из `format`: `format=EDT` означает `EDT -> Designer`, `format=DESIGNER` означает `Designer -> EDT`.
 - Не использует `builder` и не требует `infobase.connection`.
 - Команда использует отдельный workspace `workPath/convert/edt-workspace`.
-- Output публикуется только в deterministic generated targets под `workPath/convert/out/<sourceSetName>/<designer|edt>/`.
+- Без `--output` output публикуется в deterministic generated targets под `workPath/convert/out/<sourceSetName>/<designer|edt>/`.
 - Публикация выполняется как full replacement через staging/backup; stale содержимое output target не сохраняется.
+- Source/target overlap и пересекающиеся target paths отклоняются до публикации.
 - JSON validation/pre-dispatch errors сохраняют `command = "convert"`.
 
 ## Команда `syntax`

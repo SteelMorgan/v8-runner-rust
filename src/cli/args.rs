@@ -7,7 +7,12 @@ use clap::{Args, Parser, Subcommand};
 )]
 pub struct Cli {
     /// Path to an existing YAML config file. Defaults to ./v8project.yaml
-    #[arg(long, global = true, env = "V8TR_CONFIG", help_heading = "Global options")]
+    #[arg(
+        long,
+        global = true,
+        env = "V8TR_CONFIG",
+        help_heading = "Global options"
+    )]
     pub config: Option<String>,
 
     /// Print structured JSON envelopes instead of text output
@@ -206,6 +211,10 @@ pub struct ConvertArgs {
     /// Limit conversion to one source-set from v8project.yaml
     #[arg(long)]
     pub source_set: Option<String>,
+
+    /// Target root for converted source-set layout. Defaults to workPath/convert/out
+    #[arg(long)]
+    pub output: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -614,14 +623,8 @@ mod tests {
 
     #[test]
     fn parses_config_init_output_override() {
-        let cli = Cli::try_parse_from([
-            "v8-runner",
-            "config",
-            "init",
-            "--output",
-            "custom.yaml",
-        ])
-        .expect("parse config init");
+        let cli = Cli::try_parse_from(["v8-runner", "config", "init", "--output", "custom.yaml"])
+            .expect("parse config init");
 
         match cli.command {
             Command::Config(config) => match config.command {
@@ -737,8 +740,9 @@ mod tests {
         let cli = Cli::try_parse_from(["v8-runner", "convert"]).expect("parse convert");
 
         match cli.command {
-            Command::Convert(ConvertArgs { source_set }) => {
+            Command::Convert(ConvertArgs { source_set, output }) => {
                 assert!(source_set.is_none());
+                assert!(output.is_none());
             }
             _ => panic!("unexpected command"),
         }
@@ -750,8 +754,23 @@ mod tests {
             .expect("parse convert");
 
         match cli.command {
-            Command::Convert(ConvertArgs { source_set }) => {
+            Command::Convert(ConvertArgs { source_set, output }) => {
                 assert_eq!(source_set.as_deref(), Some("ext-sales"));
+                assert!(output.is_none());
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parses_convert_with_output_root() {
+        let cli = Cli::try_parse_from(["v8-runner", "convert", "--output", "tests/fixtures/edt"])
+            .expect("parse convert");
+
+        match cli.command {
+            Command::Convert(ConvertArgs { source_set, output }) => {
+                assert!(source_set.is_none());
+                assert_eq!(output.as_deref(), Some("tests/fixtures/edt"));
             }
             _ => panic!("unexpected command"),
         }

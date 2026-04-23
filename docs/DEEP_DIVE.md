@@ -145,7 +145,8 @@
 
 - `convert` без аргументов конвертирует все `source-set` текущего проекта в конфигурационном порядке;
 - `convert --source-set <name>` ограничивает выполнение одним `source-set`;
-- направление определяется только из `format`, а output публикуется только под `workPath/convert/out/<source-set>/<designer|edt>/`.
+- `convert --output <dir>` публикует результат под user-facing target root, зеркаля `source-set.path` относительно `basePath`;
+- направление определяется только из `format`, а output без `--output` публикуется под `workPath/convert/out/<source-set>/<designer|edt>/`.
 
 Практически это означает, что `dump` и `convert` нельзя считать синонимами:
 

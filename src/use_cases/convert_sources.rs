@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -17,7 +17,9 @@ use crate::support::error::AppError;
 use crate::support::fs::{
     ensure_dir, remove_path_if_exists, replace_dir_atomically, write_temp_dir_metadata, TempDirKind,
 };
-use crate::support::path::{nearest_existing_canonical_path, stable_path_identity};
+use crate::support::path::{
+    is_filesystem_root, nearest_existing_canonical_path, stable_path_identity,
+};
 use crate::use_cases::context::{CommandName, ExecutionContext, InterruptionSafetyClass};
 use crate::use_cases::external_artifacts::{
     discover_designer_external_artifacts, parse_external_descriptor, ExternalArtifactKind,
@@ -42,6 +44,7 @@ struct ConvertBaseProjectSource {
     source_set_name: String,
     source_path: PathBuf,
     target_path: PathBuf,
+    stable_project_dir_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -50,7 +53,9 @@ struct ResolvedConvertItem {
     purpose: SourceSetPurpose,
     source_path: PathBuf,
     target_path: PathBuf,
+    canonical_target_path: PathBuf,
     target_identity: String,
+    stable_project_dir_name: String,
     import_options: ConvertImportOptions,
 }
 
@@ -285,12 +290,12 @@ fn execute_with_dsl(
         })?;
 
         let run_id = make_run_id();
-        let staging_dir = target_parent.join(format!(".convert-stage-{run_id}"));
-        ensure_dir(&staging_dir).map_err(|error| {
+        let staging_root = target_parent.join(format!(".convert-stage-{run_id}"));
+        ensure_dir(&staging_root).map_err(|error| {
             ConvertExecutionFailure::with_payload(
                 AppError::Runtime(format!(
                     "failed to create convert staging directory '{}': {error}",
-                    staging_dir.display()
+                    staging_root.display()
                 )),
                 result_snapshot(
                     false,
@@ -302,24 +307,47 @@ fn execute_with_dsl(
                     started,
                     Some(format!(
                         "failed to create convert staging directory '{}': {error}",
-                        staging_dir.display()
+                        staging_root.display()
+                    )),
+                ),
+            )
+        })?;
+        let staging_publish_dir = staging_publication_dir(resolved.direction, item, &staging_root);
+        ensure_dir(&staging_publish_dir).map_err(|error| {
+            let _ = remove_path_if_exists(&staging_root);
+            ConvertExecutionFailure::with_payload(
+                AppError::Runtime(format!(
+                    "failed to create convert staging directory '{}': {error}",
+                    staging_publish_dir.display()
+                )),
+                result_snapshot(
+                    false,
+                    resolved.direction,
+                    resolved.scope,
+                    resolved.source_set.clone(),
+                    resolved.workspace_path.clone(),
+                    outputs.clone(),
+                    started,
+                    Some(format!(
+                        "failed to create convert staging directory '{}': {error}",
+                        staging_publish_dir.display()
                     )),
                 ),
             )
         })?;
         write_temp_dir_metadata(
-            &staging_dir,
+            &staging_publish_dir,
             TempDirKind::Stage,
             &run_id,
             &item.target_path,
             &item.target_identity,
         )
         .map_err(|error| {
-            let _ = remove_path_if_exists(&staging_dir);
+            let _ = remove_path_if_exists(&staging_root);
             ConvertExecutionFailure::with_payload(
                 AppError::Runtime(format!(
                     "failed to write convert staging metadata '{}': {error}",
-                    staging_dir.display()
+                    staging_publish_dir.display()
                 )),
                 result_snapshot(
                     false,
@@ -331,53 +359,63 @@ fn execute_with_dsl(
                     started,
                     Some(format!(
                         "failed to write convert staging metadata '{}': {error}",
-                        staging_dir.display()
+                        staging_publish_dir.display()
                     )),
                 ),
             )
         })?;
 
-        run_platform_conversion(dsl, resolved.direction, item, &import_options, &staging_dir)
-            .map_err(|error| {
-                let _ = remove_path_if_exists(&staging_dir);
-                let message = error.to_string();
-                ConvertExecutionFailure::with_payload(
-                    error,
-                    result_snapshot(
-                        false,
-                        resolved.direction,
-                        resolved.scope,
-                        resolved.source_set.clone(),
-                        resolved.workspace_path.clone(),
-                        outputs.clone(),
-                        started,
-                        Some(message),
-                    ),
-                )
-            })?;
+        run_platform_conversion(
+            dsl,
+            resolved.direction,
+            item,
+            &import_options,
+            &staging_publish_dir,
+        )
+        .map_err(|error| {
+            let _ = remove_path_if_exists(&staging_root);
+            let message = error.to_string();
+            ConvertExecutionFailure::with_payload(
+                error,
+                result_snapshot(
+                    false,
+                    resolved.direction,
+                    resolved.scope,
+                    resolved.source_set.clone(),
+                    resolved.workspace_path.clone(),
+                    outputs.clone(),
+                    started,
+                    Some(message),
+                ),
+            )
+        })?;
 
-        validate_staging_output(resolved.direction, item, &import_options, &staging_dir).map_err(
-            |error| {
-                let _ = remove_path_if_exists(&staging_dir);
-                let message = error.to_string();
-                ConvertExecutionFailure::with_payload(
-                    error,
-                    result_snapshot(
-                        false,
-                        resolved.direction,
-                        resolved.scope,
-                        resolved.source_set.clone(),
-                        resolved.workspace_path.clone(),
-                        outputs.clone(),
-                        started,
-                        Some(message),
-                    ),
-                )
-            },
-        )?;
+        validate_staging_output(
+            resolved.direction,
+            item,
+            &import_options,
+            &staging_publish_dir,
+        )
+        .map_err(|error| {
+            let _ = remove_path_if_exists(&staging_root);
+            let message = error.to_string();
+            ConvertExecutionFailure::with_payload(
+                error,
+                result_snapshot(
+                    false,
+                    resolved.direction,
+                    resolved.scope,
+                    resolved.source_set.clone(),
+                    resolved.workspace_path.clone(),
+                    outputs.clone(),
+                    started,
+                    Some(message),
+                ),
+            )
+        })?;
 
         if let Some(interruption) = context.interruption() {
-            let _ = remove_path_if_exists(&staging_dir);
+            let _ = remove_path_if_exists(&staging_root);
             let error = AppError::Runtime(format!(
                 "{} for command '{}' before entering convert publication safe point",
                 interruption.message(context.command()),
@@ -402,7 +440,7 @@ fn execute_with_dsl(
         let publish_phase = context
             .run_no_process_critical_phase(|| {
                 replace_dir_atomically(
-                    &staging_dir,
+                    &staging_publish_dir,
                     &item.target_path,
                     &run_id,
                     &item.target_identity,
@@ -428,6 +466,14 @@ fn execute_with_dsl(
                     ),
                 )
             })?;
+        if staging_root.exists() {
+            if let Err(error) = remove_path_if_exists(&staging_root) {
+                messages.push(format!(
+                    "failed to remove convert staging wrapper '{}': {error}",
+                    staging_root.display()
+                ));
+            }
+        }
 
         if let Some(message) = publish_phase.value.cleanup_warning {
             messages.push(message);
@@ -468,32 +514,55 @@ fn resolve_request(
     let direction = direction_from_format(config.format);
     let scope = scope_from_request(request);
     let source_set = source_set_from_request(request);
+    let explicit_output_root = explicit_output_root(request)?;
     let selected = select_source_sets(config, request)?;
-    let base_project_source =
-        resolve_base_project_source(config, direction, &selected, source_set.as_deref())?;
+    let base_project_source = resolve_base_project_source(
+        config,
+        direction,
+        &selected,
+        source_set.as_deref(),
+        explicit_output_root.as_deref(),
+    )?;
 
     let mut items = Vec::new();
     for selected_source_set in selected {
         let source_path = resolve_source_set_path(config, selected_source_set);
         validate_selected_source(selected_source_set, direction, &source_path)?;
 
-        let target_path = convert_output_path(config, &selected_source_set.name, direction);
-        validate_convert_target(&source_path, &target_path, &selected_source_set.name)?;
-        let target_identity = stable_path_identity(
-            &nearest_existing_canonical_path(&target_path).map_err(|error| {
+        let target_path = convert_output_path(
+            config,
+            selected_source_set,
+            direction,
+            explicit_output_root.as_deref(),
+        )?;
+        validate_convert_target(
+            config,
+            &target_path,
+            &selected_source_set.name,
+            explicit_output_root.is_some(),
+        )?;
+        let canonical_target_path =
+            nearest_existing_canonical_path(&target_path).map_err(|error| {
                 AppError::Runtime(format!(
                     "failed to canonicalize convert output '{}': {error}",
                     target_path.display()
                 ))
-            })?,
-        );
+            })?;
+        if is_filesystem_root(&canonical_target_path) {
+            return Err(AppError::Validation(
+                "convert output target must not equal filesystem root".to_owned(),
+            ));
+        }
+        let target_identity = stable_path_identity(&canonical_target_path);
 
         items.push(ResolvedConvertItem {
             source_set_name: selected_source_set.name.clone(),
             purpose: selected_source_set.purpose,
             source_path,
             target_path,
+            canonical_target_path,
             target_identity,
+            stable_project_dir_name: stable_project_dir_name(config, selected_source_set),
             import_options: infer_import_options(
                 config,
                 selected_source_set,
@@ -502,6 +571,7 @@ fn resolve_request(
             )?,
         });
     }
+    validate_convert_targets_do_not_overlap(&items)?;
 
     Ok(ResolvedConvertRequest {
         direction,
@@ -532,6 +602,7 @@ fn resolve_base_project_source(
     direction: ConvertDirection,
     selected: &[&SourceSetConfig],
     requested_source_set: Option<&str>,
+    explicit_output_root: Option<&Path>,
 ) -> Result<Option<ConvertBaseProjectSource>, AppError> {
     if direction != ConvertDirection::DesignerToEdt
         || !selected
@@ -565,7 +636,13 @@ fn resolve_base_project_source(
     Ok(Some(ConvertBaseProjectSource {
         source_set_name: configuration_source_set.name.clone(),
         source_path,
-        target_path: convert_output_path(config, &configuration_source_set.name, direction),
+        target_path: convert_output_path(
+            config,
+            configuration_source_set,
+            direction,
+            explicit_output_root,
+        )?,
+        stable_project_dir_name: stable_project_dir_name(config, configuration_source_set),
     }))
 }
 
@@ -643,17 +720,11 @@ fn validate_selected_source(
 }
 
 fn validate_convert_target(
-    source_path: &Path,
+    config: &AppConfig,
     target_path: &Path,
     source_set_name: &str,
+    is_explicit_output: bool,
 ) -> Result<(), AppError> {
-    let source = nearest_existing_canonical_path(source_path).map_err(|error| {
-        AppError::Runtime(format!(
-            "failed to canonicalize convert source-set '{}' path '{}': {error}",
-            source_set_name,
-            source_path.display()
-        ))
-    })?;
     let target = nearest_existing_canonical_path(target_path).map_err(|error| {
         AppError::Runtime(format!(
             "failed to canonicalize convert output '{}': {error}",
@@ -661,12 +732,27 @@ fn validate_convert_target(
         ))
     })?;
 
-    if paths_overlap(&source, &target) {
-        return Err(AppError::Validation(format!(
-            "convert output for source-set '{source_set_name}' overlaps source path: source={}, target={}",
-            source_path.display(),
-            target_path.display()
-        )));
+    for source_set in &config.source_sets {
+        let source_path = resolve_source_set_path(config, source_set);
+        let source = nearest_existing_canonical_path(&source_path).map_err(|error| {
+            AppError::Runtime(format!(
+                "failed to canonicalize convert source-set '{}' path '{}': {error}",
+                source_set.name,
+                source_path.display()
+            ))
+        })?;
+        if paths_overlap(&source, &target) {
+            return Err(AppError::Validation(format!(
+                "convert output for source-set '{source_set_name}' overlaps source-set '{}' path: source={}, target={}",
+                source_set.name,
+                source_path.display(),
+                target_path.display()
+            )));
+        }
+    }
+
+    if is_explicit_output {
+        validate_explicit_convert_target_roots(config, target_path, &target)?;
     }
 
     Ok(())
@@ -674,6 +760,38 @@ fn validate_convert_target(
 
 fn paths_overlap(left: &Path, right: &Path) -> bool {
     left == right || left.starts_with(right) || right.starts_with(left)
+}
+
+fn validate_explicit_convert_target_roots(
+    config: &AppConfig,
+    target_path: &Path,
+    canonical_target_path: &Path,
+) -> Result<(), AppError> {
+    let canonical_base_path = nearest_existing_canonical_path(&config.base_path)
+        .map_err(|error| AppError::Runtime(format!("failed to canonicalize basePath: {error}")))?;
+    if canonical_target_path == canonical_base_path
+        || canonical_target_path.starts_with(&canonical_base_path)
+    {
+        return Err(AppError::Validation(format!(
+            "convert --output target must not be inside basePath: basePath={}, target={}",
+            config.base_path.display(),
+            target_path.display()
+        )));
+    }
+
+    let canonical_work_path = nearest_existing_canonical_path(&config.work_path)
+        .map_err(|error| AppError::Runtime(format!("failed to canonicalize workPath: {error}")))?;
+    if canonical_target_path == canonical_work_path
+        || canonical_target_path.starts_with(&canonical_work_path)
+    {
+        return Err(AppError::Validation(format!(
+            "convert --output target must not be inside workPath: workPath={}, target={}",
+            config.work_path.display(),
+            target_path.display()
+        )));
+    }
+
+    Ok(())
 }
 
 fn validate_directory_path(path: &Path, label: &str) -> Result<(), AppError> {
@@ -990,23 +1108,30 @@ fn infer_runtime_base_project_name(
         ))
     })?;
 
-    let temp_dir = temp_parent.join(format!(".convert-base-project-{}", make_run_id()));
-    remove_path_if_exists(&temp_dir).map_err(|error| {
+    let temp_root = temp_parent.join(format!(".convert-base-project-{}", make_run_id()));
+    remove_path_if_exists(&temp_root).map_err(|error| {
         AppError::Runtime(format!(
             "failed to clean temporary base project directory '{}': {error}",
-            temp_dir.display()
+            temp_root.display()
         ))
     })?;
-    ensure_dir(&temp_dir).map_err(|error| {
+    ensure_dir(&temp_root).map_err(|error| {
         AppError::Runtime(format!(
             "failed to create temporary base project directory '{}': {error}",
-            temp_dir.display()
+            temp_root.display()
+        ))
+    })?;
+    let temp_project_dir = temp_root.join(&base_project_source.stable_project_dir_name);
+    ensure_dir(&temp_project_dir).map_err(|error| {
+        AppError::Runtime(format!(
+            "failed to create temporary base project directory '{}': {error}",
+            temp_project_dir.display()
         ))
     })?;
 
     let import_result = dsl
         .import_configuration_files(
-            &temp_dir,
+            &temp_project_dir,
             &base_project_source.source_path,
             version,
             None,
@@ -1021,17 +1146,17 @@ fn infer_runtime_base_project_name(
             &result,
         )?;
         read_edt_project_name(
-            &temp_dir,
+            &temp_project_dir,
             &format!(
                 "temporary EDT import for source-set '{}'",
                 base_project_source.source_set_name
             ),
         )
     })();
-    let cleanup_result = remove_path_if_exists(&temp_dir).map_err(|error| {
+    let cleanup_result = remove_path_if_exists(&temp_root).map_err(|error| {
         AppError::Runtime(format!(
             "failed to cleanup temporary base project directory '{}': {error}",
-            temp_dir.display()
+            temp_root.display()
         ))
     });
 
@@ -1243,20 +1368,44 @@ fn convert_session_host_options(
     options
 }
 
+fn explicit_output_root(request: &ConvertRequest) -> Result<Option<PathBuf>, AppError> {
+    let Some(output_root) = request.output_root.as_deref() else {
+        return Ok(None);
+    };
+    let output_root = output_root.trim();
+    if output_root.is_empty() {
+        return Err(AppError::Validation(
+            "convert requires non-empty --output".to_owned(),
+        ));
+    }
+    let path = PathBuf::from(output_root);
+    if is_filesystem_root(&path) {
+        return Err(AppError::Validation(
+            "convert --output must not equal filesystem root".to_owned(),
+        ));
+    }
+    Ok(Some(path))
+}
+
 fn convert_output_path(
     config: &AppConfig,
-    source_set_name: &str,
+    source_set: &SourceSetConfig,
     direction: ConvertDirection,
-) -> PathBuf {
-    config
+    explicit_output_root: Option<&Path>,
+) -> Result<PathBuf, AppError> {
+    if let Some(output_root) = explicit_output_root {
+        return Ok(output_root.join(source_set_output_relative_path(config, source_set)?));
+    }
+
+    Ok(config
         .work_path
         .join("convert")
         .join("out")
-        .join(source_set_name)
+        .join(&source_set.name)
         .join(match direction {
             ConvertDirection::EdtToDesigner => "designer",
             ConvertDirection::DesignerToEdt => "edt",
-        })
+        }))
 }
 
 fn resolve_source_set_path(config: &AppConfig, source_set: &SourceSetConfig) -> PathBuf {
@@ -1264,6 +1413,90 @@ fn resolve_source_set_path(config: &AppConfig, source_set: &SourceSetConfig) -> 
         source_set.path.clone()
     } else {
         config.base_path.join(&source_set.path)
+    }
+}
+
+fn source_set_output_relative_path(
+    config: &AppConfig,
+    source_set: &SourceSetConfig,
+) -> Result<PathBuf, AppError> {
+    let raw_path = source_set.path.as_path();
+    let relative = if raw_path.is_absolute() {
+        raw_path.strip_prefix(&config.base_path).map_err(|_| {
+            AppError::Validation(format!(
+                "convert --output requires source-set '{}' path to be relative to basePath",
+                source_set.name
+            ))
+        })?
+    } else {
+        raw_path
+    };
+
+    normalize_relative_source_set_path(&source_set.name, relative)
+}
+
+fn normalize_relative_source_set_path(
+    source_set_name: &str,
+    relative: &Path,
+) -> Result<PathBuf, AppError> {
+    let mut normalized = PathBuf::new();
+    for component in relative.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => normalized.push(part),
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(AppError::Validation(format!(
+                    "convert --output cannot mirror unsafe source-set '{}' path '{}'",
+                    source_set_name,
+                    relative.display()
+                )));
+            }
+        }
+    }
+    Ok(normalized)
+}
+
+fn stable_project_dir_name(config: &AppConfig, source_set: &SourceSetConfig) -> String {
+    let logical_path = source_set_output_relative_path(config, source_set).unwrap_or_else(|_| {
+        source_set
+            .path
+            .file_name()
+            .map(PathBuf::from)
+            .unwrap_or_default()
+    });
+    logical_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| source_set.name.clone())
+}
+
+fn validate_convert_targets_do_not_overlap(items: &[ResolvedConvertItem]) -> Result<(), AppError> {
+    for (index, left) in items.iter().enumerate() {
+        for right in items.iter().skip(index + 1) {
+            if paths_overlap(&left.canonical_target_path, &right.canonical_target_path) {
+                return Err(AppError::Validation(format!(
+                    "convert output targets overlap: source-set '{}' -> {}, source-set '{}' -> {}",
+                    left.source_set_name,
+                    left.target_path.display(),
+                    right.source_set_name,
+                    right.target_path.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn staging_publication_dir(
+    direction: ConvertDirection,
+    item: &ResolvedConvertItem,
+    staging_root: &Path,
+) -> PathBuf {
+    match direction {
+        ConvertDirection::EdtToDesigner => staging_root.to_path_buf(),
+        ConvertDirection::DesignerToEdt => staging_root.join(&item.stable_project_dir_name),
     }
 }
 

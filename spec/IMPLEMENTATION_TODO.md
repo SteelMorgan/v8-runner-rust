@@ -106,11 +106,19 @@ Detailed ADR task decomposition remains in [ADR_DERIVED_BACKLOG.md](ADR_DERIVED_
   formatter/tests, tester-subagent verification, full `cargo test --locked --quiet`, reviewer, and
   separate Rust expert gates passed with `no findings`.
 
-- [ ] `ADR-TASK-018`: Simplify the public `convert` contract and fix full-scope
-  `DESIGNER -> EDT` conversion for external source sets. Revisit `ADR-0020`, add an explicit
-  user-facing `--output` target root, keep staged publication and overlap safety, stabilize
-  generated EDT project naming, and cover the fixed external conversion flow with regression
-  tests and docs updates.
+- [x] `ADR-TASK-018`: Simplify the public `convert` contract and fix full-scope
+  `DESIGNER -> EDT` conversion for external source sets. Completed `2026-04-23`: `convert`
+  now exposes `convert [--source-set <name>] [--output <dir>]`, keeps direction inference tied to
+  `config.format`, preserves the default `workPath/convert/out/<sourceSetName>/<target-format>/`
+  output, and treats explicit `--output` as a target root whose layout mirrors `source-set.path`
+  relative to `basePath`. Staged full replacement and workspace locking are preserved; explicit
+  output is rejected when it is a filesystem root, publishes under `basePath`/`workPath`, overlaps
+  any source-set path, or produces overlapping targets. `DESIGNER -> EDT` staging now uses stable
+  project directory names so
+  generated `.project` names and extension base-project references do not inherit
+  `.convert-stage-*`. Regression coverage includes full-scope external Designer-to-EDT output,
+  target/source overlap, target/target overlap, single-source unselected-source overlap, and
+  CLI help for the public `--output <DIR>` contract; ADR/docs/backlog surfaces are synchronized.
 
 ## P2
 

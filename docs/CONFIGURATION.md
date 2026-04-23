@@ -40,6 +40,18 @@ v8-runner config init --format edt
 
 `config init` не использует глобальный `--config` как shortcut output path: если нужно выбрать путь для сгенерированного файла, используйте `config init --output <FILE>`.
 
+## Конвертация исходников
+
+`convert` читает текущий `v8project.yaml`, выбирает все `source-set` или один `--source-set <NAME>` и выводит направление из `format`: `EDT -> Designer` для `format=EDT`, `Designer -> EDT` для `format=DESIGNER`.
+
+```bash
+v8-runner convert
+v8-runner convert --source-set main
+v8-runner convert --output tests/fixtures/edt
+```
+
+Без `--output` результат публикуется под `workPath/convert/out/<sourceSetName>/<designer|edt>/`. С `--output <DIR>` команда публикует результат под заданный target root, зеркаля `source-set.path` относительно `basePath`; например `configuration`, `extension`, `external/processor`. Публикация выполняется через staging/full replacement, а пересечение output target с исходными каталогами или другими target paths отклоняется validation error.
+
 ## Полный пример
 
 ```yaml
