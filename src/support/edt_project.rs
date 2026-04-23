@@ -308,13 +308,14 @@ pub fn validate_native_ordinary_project(
         ));
     }
     if expected_kind == EdtProjectKind::Extension {
-        let actual_base_project = manifest.base_project.ok_or_else(|| {
-            format!(
-                "EDT extension project must declare Base-Project in 'DT-INF/PROJECT.PMF': {}",
-                project_dir.display()
-            )
-        })?;
         if let Some(expected_base_project) = expected_base_project {
+            let actual_base_project = manifest.base_project.ok_or_else(|| {
+                format!(
+                    "EDT extension project must declare Base-Project '{}' in 'DT-INF/PROJECT.PMF': {}",
+                    expected_base_project,
+                    project_dir.display()
+                )
+            })?;
             if actual_base_project != expected_base_project {
                 return Err(format!(
                     "EDT extension project must declare Base-Project '{}' but found '{}': {}",
@@ -390,10 +391,8 @@ fn manifest_matches_kind(manifest: &EdtProjectManifest, kind: EdtProjectKind) ->
         .as_deref()
         .is_some_and(is_valid_runtime_version)
         && match kind {
-            EdtProjectKind::Configuration => true,
-            EdtProjectKind::Extension | EdtProjectKind::ExternalObjects => {
-                manifest.base_project.is_some()
-            }
+            EdtProjectKind::Configuration | EdtProjectKind::Extension => true,
+            EdtProjectKind::ExternalObjects => manifest.base_project.is_some(),
         }
 }
 
@@ -569,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn native_extension_requires_base_project_in_manifest() {
+    fn native_extension_detects_without_base_project_in_manifest() {
         let dir = tempdir().expect("tempdir");
         write_project(
             dir.path(),
@@ -584,8 +583,26 @@ mod tests {
 
         assert_eq!(
             detect_native_ordinary_project_kind(dir.path()).expect("ordinary project"),
-            None
+            Some(EdtProjectKind::Extension)
         );
+    }
+
+    #[test]
+    fn ordinary_extension_validation_without_expected_base_project_accepts_missing_base_project() {
+        let dir = tempdir().expect("tempdir");
+        write_project(
+            dir.path(),
+            "ExtensionProject",
+            V8_EXTENSION_NATURE,
+            "Manifest-Version: 1.0\nRuntime-Version: 8.3.27\n",
+        );
+        write_file(
+            &ordinary_root_marker_path(dir.path()),
+            "<Configuration />\n",
+        );
+
+        validate_native_ordinary_project(dir.path(), EdtProjectKind::Extension, None)
+            .expect("missing Base-Project should be accepted when no expected base is required");
     }
 
     #[test]

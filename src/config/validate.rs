@@ -360,15 +360,6 @@ fn validate_ordinary_edt_source_set_layout(
             ),
         ));
     }
-    if detected == SourceSetPurpose::Extension && manifest.base_project.is_none() {
-        return Err(source_set_layout_error(
-            &source_set.name,
-            format!(
-                "EDT extension source-set must declare Base-Project in 'DT-INF/PROJECT.PMF': {}",
-                path.display()
-            ),
-        ));
-    }
     if !has_native_ordinary_edt_root_marker(path) {
         return Err(source_set_layout_error(
             &source_set.name,
@@ -1447,7 +1438,7 @@ mod tests {
     }
 
     #[test]
-    fn edt_format_rejects_native_extension_project_without_base_project() {
+    fn edt_format_accepts_native_extension_project_without_base_project() {
         let base = tempdir().expect("base");
         let work = tempdir().expect("work");
         let config_dir = base.path().join("edt-main");
@@ -1496,12 +1487,7 @@ mod tests {
             tests: TestsConfig::default(),
         };
 
-        let err = validate(&config).expect_err("expected missing Base-Project validation error");
-        assert!(matches!(
-            err,
-            ConfigValidationError::SourceSetLayoutInvalid { name, details }
-                if name == "ext" && details.contains("Base-Project")
-        ));
+        validate(&config).expect("missing Base-Project should not invalidate EDT extension");
     }
 
     #[test]

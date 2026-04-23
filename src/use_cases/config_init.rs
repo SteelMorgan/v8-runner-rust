@@ -60,6 +60,8 @@ pub fn execute(request: &ConfigInitRequest) -> Result<ConfigInitResult, AppError
     let detected = discover_sources(&project_dir)?;
     let format = choose_format(request.format, &detected);
     let source_sets = build_source_sets(&project_dir, &detected, format);
+    let platform_version = detect_platform_version(&project_dir, format, &source_sets)?;
+    let warnings = collect_discovery_warnings(&project_dir, format, &source_sets)?;
     validate_discovered_source_sets(&project_dir, request.builder, &source_sets)?;
     let yaml = render_config(
         &project_dir,
@@ -67,6 +69,7 @@ pub fn execute(request: &ConfigInitRequest) -> Result<ConfigInitResult, AppError
         format,
         request.builder,
         &source_sets,
+        platform_version.as_deref(),
     );
 
     if let Some(parent) = output_path.parent() {
@@ -89,7 +92,9 @@ pub fn execute(request: &ConfigInitRequest) -> Result<ConfigInitResult, AppError
         path: output_path.display().to_string(),
         format: format.as_yaml().to_owned(),
         builder: request.builder.as_yaml().to_owned(),
+        platform_version,
         source_sets,
+        warnings,
         overwritten,
         duration_ms: started.elapsed().as_millis() as u64,
     })
@@ -555,6 +560,7 @@ fn render_config(
     format: ConfigFormatRequest,
     builder: ConfigBuilderRequest,
     source_sets: &[ConfigInitSourceSet],
+    platform_version: Option<&str>,
 ) -> String {
     let connection = connection.unwrap_or("File=build/ib");
     let mut yaml = String::new();
@@ -574,6 +580,14 @@ fn render_config(
         yaml.push_str(&format!("  - name: {}\n", source_set.name));
         yaml.push_str(&format!("    type: {}\n", source_set.source_type));
         yaml.push_str(&format!("    path: '{}'\n", escape_yaml(&source_set.path)));
+    }
+    if let Some(platform_version) = platform_version {
+        yaml.push_str("tools:\n");
+        yaml.push_str("  platform:\n");
+        yaml.push_str(&format!(
+            "    version: '{}'\n",
+            escape_yaml(platform_version)
+        ));
     }
     yaml.push_str("build:\n");
     yaml.push_str("  partialLoadThreshold: 20\n");
@@ -612,6 +626,64 @@ fn validate_discovered_source_sets(
         ));
     }
     Ok(())
+}
+
+fn detect_platform_version(
+    project_dir: &Path,
+    format: ConfigFormatRequest,
+    source_sets: &[ConfigInitSourceSet],
+) -> Result<Option<String>, AppError> {
+    if format != ConfigFormatRequest::Edt {
+        return Ok(None);
+    }
+
+    let Some(configuration) = source_sets
+        .iter()
+        .find(|source_set| source_set.source_type == SourcePurpose::Configuration.as_yaml())
+    else {
+        return Ok(None);
+    };
+    let source_path = project_dir.join(&configuration.path);
+    let Some(manifest) =
+        edt_project::read_project_manifest_from_dir(&source_path).map_err(AppError::Validation)?
+    else {
+        return Ok(None);
+    };
+
+    Ok(manifest.runtime_version)
+}
+
+fn collect_discovery_warnings(
+    project_dir: &Path,
+    format: ConfigFormatRequest,
+    source_sets: &[ConfigInitSourceSet],
+) -> Result<Vec<String>, AppError> {
+    if format != ConfigFormatRequest::Edt {
+        return Ok(Vec::new());
+    }
+
+    let mut warnings = Vec::new();
+    for source_set in source_sets {
+        if source_set.source_type != SourcePurpose::Extension.as_yaml() {
+            continue;
+        }
+
+        let source_path = project_dir.join(&source_set.path);
+        let Some(manifest) = edt_project::read_project_manifest_from_dir(&source_path)
+            .map_err(AppError::Validation)?
+        else {
+            continue;
+        };
+        if manifest.base_project.is_none() {
+            warnings.push(format!(
+                "EDT extension source-set '{}' does not declare Base-Project in 'DT-INF/PROJECT.PMF': {}",
+                source_set.name,
+                source_set.path
+            ));
+        }
+    }
+
+    Ok(warnings)
 }
 
 fn escape_yaml(value: &str) -> String {
@@ -819,6 +891,7 @@ mod tests {
         .expect("init config");
 
         assert_eq!(result.format, "EDT");
+        assert_eq!(result.platform_version.as_deref(), Some("8.3.27"));
         assert!(result.source_sets.iter().any(|source| {
             source.path == "workspace/cfg-project" && source.source_type == "CONFIGURATION"
         }));
@@ -828,7 +901,7 @@ mod tests {
     }
 
     #[test]
-    fn native_edt_extension_without_base_project_is_not_detected() {
+    fn native_edt_extension_without_base_project_is_detected_with_warning() {
         let dir = tempdir().expect("tempdir");
         let config_project = dir.path().join("workspace").join("cfg-project");
         let extension_project = dir.path().join("workspace").join("addon-project");
@@ -845,11 +918,27 @@ mod tests {
             None,
         );
 
-        let detected = discover_sources(dir.path()).expect("discover sources");
+        let result = execute(&ConfigInitRequest {
+            project_dir: dir.path().to_path_buf(),
+            output_path: "v8project.yaml".into(),
+            force: false,
+            connection: None,
+            format: ConfigFormatRequest::Auto,
+            builder: ConfigBuilderRequest::Designer,
+        })
+        .expect("init config");
 
-        assert_eq!(detected.edt.len(), 1);
-        assert_eq!(detected.edt[0].path, config_project);
-        assert_eq!(detected.edt[0].purpose, SourcePurpose::Configuration);
+        assert_eq!(result.format, "EDT");
+        assert_eq!(result.platform_version.as_deref(), Some("8.3.27"));
+        assert!(result.source_sets.iter().any(|source| {
+            source.path == "workspace/cfg-project" && source.source_type == "CONFIGURATION"
+        }));
+        assert!(result.source_sets.iter().any(|source| {
+            source.path == "workspace/addon-project" && source.source_type == "EXTENSION"
+        }));
+        assert!(result.warnings.iter().any(|warning| {
+            warning.contains("addon-project") && warning.contains("Base-Project")
+        }));
     }
 
     #[test]

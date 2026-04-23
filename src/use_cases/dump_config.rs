@@ -2903,9 +2903,12 @@ exit 0"#,
             None,
         );
 
-        let error =
-            super::validate_edt_dump_staging_output(dir.path(), SourceSetPurpose::Extension, None)
-                .expect_err("expected missing Base-Project validation error");
+        let error = super::validate_edt_dump_staging_output(
+            dir.path(),
+            SourceSetPurpose::Extension,
+            Some("BaseProject"),
+        )
+        .expect_err("expected missing Base-Project validation error");
 
         match error {
             AppError::Validation(message) => {

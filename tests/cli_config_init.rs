@@ -208,10 +208,78 @@ fn config_init_detects_native_edt_fixture_source_sets() {
     assert!(output.status.success());
     let config = fs::read_to_string(dir.path().join("v8project.yaml")).expect("config");
     assert!(config.contains("format: EDT"));
+    assert!(config.contains("tools:\n  platform:\n    version: '8.3.27'"));
     assert!(config.contains("path: 'workspace/configuration'"));
     assert!(config.contains("path: 'workspace/extension'"));
     assert!(config.contains("type: CONFIGURATION"));
     assert!(config.contains("type: EXTENSION"));
+}
+
+#[test]
+fn config_init_detects_edt_extension_without_base_project_and_warns() {
+    let dir = tempdir().expect("tempdir");
+    let workspace = dir.path().join("workspace");
+    copy_native_edt_fixture(&workspace);
+    fs::write(
+        workspace
+            .join("extension")
+            .join("DT-INF")
+            .join("PROJECT.PMF"),
+        "Manifest-Version: 1.0\nRuntime-Version: 8.3.27\n",
+    )
+    .expect("manifest");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .current_dir(dir.path())
+        .args(["--no-color", "config", "init"])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("source-set extension: workspace/extension (EXTENSION)"));
+    assert!(stdout.contains("platform version: 8.3.27"));
+    assert!(stdout.contains("[warning] EDT extension source-set 'extension'"));
+    assert!(stdout.contains("Base-Project"));
+    assert!(stdout.contains("Config written with warnings"));
+
+    let config = fs::read_to_string(dir.path().join("v8project.yaml")).expect("config");
+    assert!(config.contains("tools:\n  platform:\n    version: '8.3.27'"));
+    assert!(config.contains("path: 'workspace/extension'"));
+    assert!(config.contains("type: EXTENSION"));
+
+    let json_output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .current_dir(dir.path())
+        .args([
+            "--json-message",
+            "config",
+            "init",
+            "--force",
+            "--output",
+            "json-v8project.yaml",
+        ])
+        .output()
+        .expect("run json command");
+
+    assert!(json_output.status.success());
+    let payload: Value = serde_json::from_slice(&json_output.stdout).expect("json");
+    assert_eq!(payload["data"]["platform_version"], "8.3.27");
+    let source_sets = payload["data"]["source_sets"]
+        .as_array()
+        .expect("source sets");
+    assert!(source_sets.iter().any(|source_set| {
+        source_set["path"] == "workspace/extension" && source_set["type"] == "EXTENSION"
+    }));
+    assert!(payload["data"]["warnings"][0]
+        .as_str()
+        .expect("warning")
+        .contains("Base-Project"));
+    assert!(payload["warnings"][0]
+        .as_str()
+        .expect("envelope warning")
+        .contains("Base-Project"));
 }
 
 #[test]

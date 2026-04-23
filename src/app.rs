@@ -143,7 +143,14 @@ fn run_config_init(args: &ConfigInitArgs, presenter: &Presenter) -> i32 {
     match crate::use_cases::config_init::execute(&request) {
         Ok(result) => {
             if presenter.is_json() {
-                presenter.print_envelope(&Envelope::ok("config init", result.duration_ms, result));
+                presenter.print_envelope(&Envelope {
+                    ok: true,
+                    command: "config init".to_owned(),
+                    duration_ms: result.duration_ms,
+                    warnings: result.warnings.clone(),
+                    steps: Vec::new(),
+                    data: result,
+                });
             } else {
                 render_config_init_text(&result, presenter);
             }
@@ -173,16 +180,27 @@ fn render_config_init_text(
     if result.overwritten {
         details.push("overwritten: yes".to_owned());
     }
+    if let Some(platform_version) = result.platform_version.as_deref() {
+        details.push(format!("platform version: {platform_version}"));
+    }
     for source_set in &result.source_sets {
         details.push(format!(
             "source-set {}: {} ({})",
             source_set.name, source_set.path, source_set.source_type
         ));
     }
+    for warning in &result.warnings {
+        details.push(format!("[warning] {warning}"));
+    }
 
+    let completion = if result.warnings.is_empty() {
+        "Config written successfully"
+    } else {
+        "Config written with warnings"
+    };
     let timeline = vec![
         TimelineItem::new(TimelineStatus::Succeeded, "config:").with_detail(details.join("\n")),
-        TimelineItem::new(TimelineStatus::Succeeded, "Config written successfully"),
+        TimelineItem::new(TimelineStatus::Succeeded, completion),
     ];
     presenter.print_timeline(&timeline);
 }
