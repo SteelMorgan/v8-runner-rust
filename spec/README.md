@@ -1,17 +1,22 @@
 # Spec Guide
 
-`spec/` now contains only active project-internal working documents.
+`spec/` stores the active internal truth layer for planning, architecture rules, ADRs, and
+acceptance.
 
-## Active Files
+## Active Entry Points
 
-- `IMPLEMENTATION_TODO.md`: short active backlog and next tasks.
-- `ADR_DERIVED_BACKLOG.md`: expanded ADR-driven task inventory and rationale.
-- `REAL_ENV_TEST_PLAN.md`: current real-environment validation plan.
+- `IMPLEMENTATION_TODO.md`: open implementation tasks only.
+- `ADR_DERIVED_BACKLOG.md`: open ADR-derived gaps that still need planning or execution.
+- `decisions/README.md`: accepted architecture decisions and their owning ADR files.
+- `architecture/invariants.md`: non-negotiable rules that changes must preserve.
+- `architecture/change-checklist.md`: required sync/checklist for contract and boundary changes.
+- `architecture/arc42/`: detailed architecture and risk set for maintainers.
+- `acceptance/real-environment-validation.md`: active real-environment acceptance and smoke plan.
 
-## Not In This Directory Anymore
+## Archive
 
-- Historical and superseded planning docs live in `spec/archive/`.
-- Raw 1C command references live in `references/1c/`.
+- Historical snapshots and closed delivery records live in `spec/archive/`.
+- Raw external 1C references live in `references/1c/`.
 
 ## Usage Rule
 

@@ -87,7 +87,6 @@ fn launch_json_returns_pid_and_selected_binary() {
             &config_path.display().to_string(),
             "--json-message",
             "launch",
-            "--mode",
             "thin",
         ])
         .output()
@@ -120,7 +119,6 @@ fn launch_text_includes_binary_pid_and_cleans_platform_logs() {
             "--no-color",
             "--clean-before-execution",
             "launch",
-            "--mode",
             "designer",
         ])
         .output()
@@ -174,7 +172,6 @@ fn launch_thick_uses_v8_binary() {
             &config_path.display().to_string(),
             "--json-message",
             "launch",
-            "--mode",
             "thick",
         ])
         .output()
@@ -197,7 +194,6 @@ fn launch_uses_versioned_root_hint() {
             &config_path.display().to_string(),
             "--json-message",
             "launch",
-            "--mode",
             "thin",
         ])
         .output()
@@ -222,7 +218,6 @@ fn launch_fails_when_process_exits_during_startup_probe() {
             "--config",
             &config_path.display().to_string(),
             "launch",
-            "--mode",
             "thin",
         ])
         .output()
@@ -245,7 +240,6 @@ fn launch_json_failure_returns_error_envelope_and_exit_code() {
             &config_path.display().to_string(),
             "--json-message",
             "launch",
-            "--mode",
             "thin",
         ])
         .output()
@@ -277,7 +271,6 @@ fn launch_ordinary_supports_typed_keys_and_filters_reserved_raw_duplicates() {
             &config_path.display().to_string(),
             "--json-message",
             "launch",
-            "--mode",
             "ordinary",
             "--c",
             "DoWork",

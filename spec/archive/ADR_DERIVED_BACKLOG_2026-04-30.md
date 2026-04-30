@@ -1,6 +1,6 @@
 # Backlog задач по ADR
 
-Документ сформирован 2026-04-21 по принятым ADR из `docs/decisions` с `ADR-0001` по `ADR-0020`, индексу `docs/decisions/README.md`, архитектурным инвариантам и разделу рисков arc42.
+Документ сформирован 2026-04-21 по принятым ADR из `docs/decisions` с `ADR-0001` по `ADR-0020`, индексу `spec/decisions/README.md`, архитектурным инвариантам и разделу рисков arc42.
 
 Результат ниже фиксирует не сами решения, а реализационные задачи и guardrail-задачи, которые должны попасть в активный backlog.
 
@@ -13,13 +13,13 @@
 
 ## Сверка ADR с реализацией от 2026-04-22
 
-Проверены принятые ADR `0001`-`0018`, `docs/architecture/invariants.md`, активный TODO и текущий код в `src`, `tests`, `examples`, `README.md`.
+Проверены принятые ADR `0001`-`0018`, `spec/architecture/invariants.md`, активный TODO и текущий код в `src`, `tests`, `examples`, `README.md`.
 
 Подтвержденные gaps:
 
 - `ADR-0012`: `SourceSetsService` уже создает два context-а для EDT (`edt-*` и `designer-*`), но `run_build_edt` принимает load-решение по EDT-анализу до export. Generated Designer context после успешного EDT export не анализируется, partial load для EDT flow не используется, а `designer-*` snapshot коммитится через EDT `StepCommit`.
 - `ADR-0014`: общего command-level `execution_timeout`/deadline/cancellation context нет. `ExecutionContext` несет только EDT subprocess timeout, а MCP `server.rs` имеет отдельную bounded-модель и ранний running cancel/timeout response.
-- `ADR-0018`: `docs/architecture/invariants.md` уже описывает `infobase.*` как supported contract, но `AppConfig`, `config init`, примеры и тестовые YAML продолжают использовать top-level `connection`/`credentials`; `IbcmdConnection` по-прежнему отклоняет server connection.
+- `ADR-0018`: `spec/architecture/invariants.md` уже описывает `infobase.*` как supported contract, но `AppConfig`, `config init`, примеры и тестовые YAML продолжают использовать top-level `connection`/`credentials`; `IbcmdConnection` по-прежнему отклоняет server connection.
 - `ADR-0017`: `config init` определяет source-set кандидаты частично по structure/path heuristics, а не только по marker filenames и содержимому; autodiscovery external aggregate source-set для `EXTERNAL_DATA_PROCESSORS` и `EXTERNAL_REPORTS` как часть supported config contract явно не реализован.
 - `ADR-0016`: `ExecutionOutcome<T>` есть, но `ExecutionStatus::Cancelled` отсутствует, `StepResult` остается минимальным, а MCP/CLI mapping всё еще опирается на command-specific top-level поля.
 - `ADR-0020`: repo-aware `convert [--source-set <name>] [--output <dir>]` уже реализован как CLI-only сценарий поверх `v8project.yaml`, а `dump format=EDT` реализован отдельным reverse-sync flow; `convert` не подменяет `dump`, `--output` является только target root с mirror layout относительно `basePath`, а public surface не принимает path-based direction/target flags.
@@ -31,9 +31,11 @@
 
 1. `ADR-TASK-001`: Актуализировать активный backlog в `spec/IMPLEMENTATION_TODO.md`.
 
-   Статус: выполнено 2026-04-21. Исторический TODO перенесен в `spec/archive/IMPLEMENTATION_TODO_2026-04-21.md`, активный `spec/IMPLEMENTATION_TODO.md` сокращен до открытых задач.
+   Статус: выполнено 2026-04-21. Активный `spec/IMPLEMENTATION_TODO.md` был сокращен до
+   открытых задач; более поздний закрытый ledger сохранен в
+   `spec/archive/IMPLEMENTATION_TODO_2026-04-30.md`.
 
-   Источники: `ADR-0002`, `ADR-0007`, `ADR-0012`, `ADR-0014`, `ADR-0016`, `docs/architecture/arc42/11-risks-and-technical-debt.md`.
+   Источники: `ADR-0002`, `ADR-0007`, `ADR-0012`, `ADR-0014`, `ADR-0016`, `spec/architecture/arc42/11-risks-and-technical-debt.md`.
 
    Объем: сверить старые открытые пункты EDT/MCP/runner-разделов с текущим кодом, закрытые пункты отметить `[x]`, реально открытые перенести в новый backlog по ADR, убрать двусмысленность между историческим планом и активным источником статуса.
 
@@ -79,11 +81,11 @@
 
    Статус: выполнено 2026-04-22.
 
-   Источники: `ADR-0010`, `docs/architecture/invariants.md`, `ADR-TASK-007`.
+   Источники: `ADR-0010`, `spec/architecture/invariants.md`, `ADR-TASK-007`.
 
    Решение: зафиксировать единый high-signal CLI output contract без audience/profile-оси; structured output выбирается булевым `--json-message`, а `--output` резервируется для user-facing output path flags; JSON contract не менять без отдельного решения.
 
-   Готово, когда: `ADR-0010`, `docs/architecture/invariants.md`, `spec/ADR_DERIVED_BACKLOG.md`, `spec/IMPLEMENTATION_TODO.md` и CLI docs описывают одну модель output policy; tests для rendering cases привязаны к этой модели.
+   Готово, когда: `ADR-0010`, `spec/architecture/invariants.md`, `spec/ADR_DERIVED_BACKLOG.md`, `spec/IMPLEMENTATION_TODO.md` и CLI docs описывают одну модель output policy; tests для rendering cases привязаны к этой модели.
 
 6. `ADR-TASK-008`: Реализовать `infobase` config contract и IBCMD server support.
 
@@ -93,11 +95,11 @@
 
    Готово, когда: старые top-level `connection`/`credentials` отклоняются; file connection для `IBCMD` использует `--db-path`; server connection для `IBCMD` использует `--dbms`, `--database-server`, `--database-name`, optional DBMS auth и отдельные `--user/--password` пользователя ИБ; Designer/Enterprise используют `infobase.connection` и `infobase.user/password`; docs и examples перешли на новый формат.
 
-   Сверка 2026-04-22: gap подтвержден: `AppConfig` содержит top-level `connection`/`credentials`, `config init`, `README.md`, `examples/v8project.yaml`, `config::loader` fixtures и CLI tests продолжают использовать старый формат, `IbcmdConnection::from_v8_connection` возвращает `ServerConnectionNotSupported` для server connection. По критерию этого документа это уже P0, потому что код и public docs расходятся с accepted `ADR-0018` и `docs/architecture/invariants.md`.
+   Сверка 2026-04-22: gap подтвержден: `AppConfig` содержит top-level `connection`/`credentials`, `config init`, `README.md`, `examples/v8project.yaml`, `config::loader` fixtures и CLI tests продолжают использовать старый формат, `IbcmdConnection::from_v8_connection` возвращает `ServerConnectionNotSupported` для server connection. По критерию этого документа это уже P0, потому что код и public docs расходятся с accepted `ADR-0018` и `spec/architecture/invariants.md`.
 
 7. `ADR-TASK-012`: Привести autodiscovery `config init` к content-based config contract.
 
-   Источники: `ADR-0017`, `docs/architecture/invariants.md`, `docs/architecture/change-checklist.md`.
+   Источники: `ADR-0017`, `spec/architecture/invariants.md`, `spec/architecture/change-checklist.md`.
 
    Объем: убрать зависимость autodiscovery от имен каталогов и structure/layout heuristics. `CONFIGURATION` и `EXTENSION` должны определяться по marker filenames и содержимому marker-файлов; для `DESIGNER` и `EDT` это разные content formats. Для external types сохранить aggregate-root contract: один `source-set` на каталог внешних обработок и один `source-set` на каталог внешних отчетов. Для `DESIGNER` aggregate root определяется по однородным top-level XML descriptors, для `EDT` — по direct child projects одного external-kind, определяемого по содержимому проектных файлов. Mixed/ambiguous roots не должны autodetect-иться и остаются manual config case.
 
@@ -159,7 +161,7 @@
 
    Затронутые области: `src/use_cases/staged_publication.rs`,
    `src/use_cases/dump_config.rs`, `src/use_cases/artifacts.rs`,
-   `src/support/fs.rs`, `docs/decisions/0015-*`, active TODO.
+   `src/support/fs.rs`, `spec/decisions/0015-*`, active TODO.
 
    Готово, когда: orphan cleanup удаляет только stale paths с matching target identity; external artifact staging directory не остается недоступным для безопасной cleanup-логики; tests покрывают stale/foreign/malformed/recent metadata.
 
@@ -268,7 +270,7 @@
 
     Объем: добавить легковесные проверки или review checklist для запрета зависимостей `src/use_cases` от CLI/MCP/output, запрета `std::process` вне `src/platform`, обязательного workspace lock на public command boundary, typed model/defaults/validation/docs для новых config fields, и явного ADR/update при изменении MCP surface.
 
-    Готово, когда: новые public commands и config fields имеют понятный checklist; tests или статические проверки ловят самые частые нарушения; `docs/architecture/invariants.md` остается синхронизированным с ADR.
+    Готово, когда: новые public commands и config fields имеют понятный checklist; tests или статические проверки ловят самые частые нарушения; `spec/architecture/invariants.md` остается синхронизированным с ADR.
 
     Сверка 2026-04-22: guardrails частичные. `tests/use_case_boundaries.rs` проверяет только несколько файлов и не сканирует весь production `src/use_cases`; `src/use_cases/result.rs` импортирует `crate::output::exit_codes`, что противоречит инварианту о независимости use-case слоя от output.
 

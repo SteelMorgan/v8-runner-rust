@@ -257,12 +257,8 @@ pub enum SyntaxTarget {
 #[command(next_help_heading = "Command options")]
 pub struct LaunchArgs {
     /// Launch mode
-    #[arg(value_name = "MODE", value_parser = ["designer", "thin", "thick", "ordinary"], conflicts_with = "mode", required_unless_present = "mode")]
-    pub target: Option<String>,
-
-    /// Launch mode. Kept for compatibility; prefer positional MODE.
-    #[arg(long, value_parser = ["designer", "thin", "thick", "ordinary"], conflicts_with = "target")]
-    pub mode: Option<String>,
+    #[arg(value_name = "MODE", value_parser = ["designer", "thin", "thick", "ordinary"])]
+    pub target: String,
 
     #[command(flatten)]
     pub launch: LaunchOptionsArgs,
@@ -581,7 +577,6 @@ mod tests {
         let cli = Cli::try_parse_from([
             "v8-runner",
             "launch",
-            "--mode",
             "ordinary",
             "--c",
             "DoWork",
@@ -598,13 +593,8 @@ mod tests {
         .expect("parse launch");
 
         match cli.command {
-            Command::Launch(LaunchArgs {
-                target,
-                mode,
-                launch,
-            }) => {
-                assert_eq!(target, None);
-                assert_eq!(mode.as_deref(), Some("ordinary"));
+            Command::Launch(LaunchArgs { target, launch }) => {
+                assert_eq!(target, "ordinary");
                 assert_eq!(launch.c.as_deref(), Some("DoWork"));
                 assert_eq!(launch.execute.as_deref(), Some("tool.epf"));
                 assert!(launch.use_privileged_mode);
@@ -641,13 +631,8 @@ mod tests {
         let cli = Cli::try_parse_from(["v8-runner", "launch", "designer"]).expect("parse launch");
 
         match cli.command {
-            Command::Launch(LaunchArgs {
-                target,
-                mode,
-                launch,
-            }) => {
-                assert_eq!(target.as_deref(), Some("designer"));
-                assert_eq!(mode, None);
+            Command::Launch(LaunchArgs { target, launch }) => {
+                assert_eq!(target, "designer");
                 assert_eq!(launch, LaunchOptionsArgs::default());
             }
             _ => panic!("unexpected command"),

@@ -1,6 +1,6 @@
 > Archived on `2026-04-23` during doc cleanup. This file preserves a legacy JVM/Spring-oriented
 > component map and must not be used as the current architecture source of truth. Use
-> `ARCHITECTURE.md`, `docs/architecture/*`, and `spec/README.md` instead.
+> `ARCHITECTURE.md`, `spec/architecture/*`, and `spec/README.md` instead.
 
 # Ключевые компоненты и их функциональность
 

@@ -1,280 +1,138 @@
-# Глубокое погружение
+# Deep Dive
 
-Подробное руководство по тому, как `v8-runner` работает после этапа быстрого старта.
+Этот документ описывает execution semantics и operational nuances `v8-runner` без дублирования
+полного каталога команд. За точным пользовательским surface обращайтесь к
+[CAPABILITIES.md](CAPABILITIES.md), за YAML-контрактом к [CONFIGURATION.md](CONFIGURATION.md).
 
-Это пользовательский документ по эксплуатационным деталям. Карта модулей для контрибьюторов находится в [../ARCHITECTURE.md](../ARCHITECTURE.md). Матрица команд и конфигурации находится в [CAPABILITIES.md](CAPABILITIES.md).
+## Навигация
 
-Формальная граница поддержки `IBCMD` описана в [ADR-0001](decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md): сейчас это ограниченный backend для `init`, `build`, `dump`, `extensions`, уже поддерживающий file и server ИБ для реализованных сценариев. Для server connection нужен полный `infobase.dbms` contract, а `partial` для `dump` по-прежнему деградирует в incremental export. Целевой контракт [ADR-0003](decisions/0003-podderzhivat-servernye-ib-dlya-vseh-instrumentov.md) требует поддержки серверных ИБ для всех инструментов; оставшиеся file-only ограничения считаются gaps.
+- [Модель выполнения](#модель-выполнения)
+- [source-set и change detection](#source-set-и-change-detection)
+- [Пайплайн build](#пайплайн-build)
+- [Проверка и тесты](#проверка-и-тесты)
+- [Файловые сценарии и публикация](#файловые-сценарии-и-публикация)
+- [Shared EDT](#shared-edt)
+- [workPath, lock и interruption policy](#workpath-lock-и-interruption-policy)
+- [MCP runtime semantics](#mcp-runtime-semantics)
 
-## 1. Модель выполнения
+## Модель выполнения
 
-У проекта есть две публичные формы:
+`v8-runner` разделяет public surface и execution model:
 
-- CLI для прямой работы из терминала;
-- MCP-сервер для автоматизации через ассистента по stdio или HTTP.
+- CLI и MCP являются разными публичными поверхностями.
+- Use case слой остаётся transport-neutral orchestration boundary.
+- Platform DSL и process execution остаются ниже use case слоя.
+- Text output и machine-readable envelope проектируются отдельно от доменного результата.
 
-Оба пути сходятся в транспортно-нейтральном слое сценариев. На практике это означает:
+Это позволяет держать один orchestration model для CLI и MCP, не смешивая `clap`, `Presenter` и
+MCP DTO в одном слое.
 
-- CLI и MCP разделяют одну и ту же базовую логику для `build`, `test`, `dump`, `syntax` и `launch`;
-- `init` пока существует только в CLI и не публикуется как MCP-инструмент;
-- для server connection `init` с `builder=IBCMD` выполняет `ensure` через `ibcmd infobase create --create-database`; при `builder=DESIGNER` server create step по-прежнему считается ручным prerequisite, но EDT workspace при `format=EDT` всё равно должен быть создан/import-нут;
-- `extensions` пока существует только в CLI и не публикуется как MCP-инструмент;
-- `convert` существует только в CLI и не публикуется как MCP-инструмент;
-- MCP добавляет в основном нормализацию запросов, обработку транспортных ошибок и контроль сессий и ограничений выполнения;
-- публичное поведение стоит описывать через семантику команд и инструментов, а не через внутренние детали адаптеров.
+## `source-set` и change detection
 
-## 2. `source-set` и отслеживание изменений
+`source-set` — минимальная единица оркестрации.
 
-Элементы `source-set` являются единицей оркестрации.
+- Для `format=DESIGNER` используется один runtime context `designer-<sourceSetName>`.
+- Для `format=EDT` используются два context-а:
+  - `edt-<sourceSetName>` для решения, нужен ли export;
+  - `designer-<sourceSetName>` для решения, что именно грузить в ИБ.
+- Persisted state живёт в `workPath/hash-storages/`.
+- Generated Designer output для EDT flow живёт под `workPath/designer/<sourceSetName>`.
 
-Система обрабатывает их в стабильном порядке:
+Change detection выполняется on-demand во время build/export/load decision и не требует
+background watcher.
 
-- сначала главную `CONFIGURATION`;
-- затем расширения в порядке из конфига.
+## Пайплайн `build`
 
-Механизм отслеживания изменений устроен так, чтобы избегать лишних пересборок:
+Для `DESIGNER`:
 
-- файлы сканируются рекурсивно со списком игнорирования для служебного шума;
-- неизменённые `source-set` могут быть полностью пропущены;
-- изменённые элементы могут обрабатываться частично или полностью в зависимости от набора файлов и порогов;
-- состояние хранится в `workPath/hash-storages/*.redb`.
+1. Анализ изменений по выбранным `source-set`.
+2. Выбор partial/full path по изменённым файлам.
+3. Загрузка через выбранный backend.
+4. Commit runtime snapshot только после успешного шага.
 
-Важные следствия:
+Для `EDT`:
 
-- `--full-rebuild` принудительно включает полный путь выполнения для текущего запуска и не требует ручной очистки файлов состояния;
-- команда `build` остаётся неатомарной между несколькими `source-set`;
-- восстановимые проблемы хранения или сканирования могут перевести команду в безопасный полный режим.
+1. Анализ EDT source-set.
+2. Export затронутых EDT source-set в generated Designer representation.
+3. Повторный анализ generated Designer files.
+4. Load/apply generated files через `DESIGNER` или `IBCMD`.
 
-## 3. Как работает `build`
+Пайплайн намеренно не является атомарным across many `source-set`: поздний failure не откатывает
+уже успешные ранние шаги.
 
-### Designer-исходники с бэкендом Designer
+## Проверка и тесты
 
-Это самый прямой путь:
+`test` и `syntax` проектируются как часть того же локального цикла, а не как отдельная
+эксплуатационная подсистема.
 
-- определить изменённые Designer-файлы;
-- выбрать частичную или полную загрузку;
-- загрузить конфигурацию первой, затем расширения;
-- зафиксировать обновлённое состояние отслеживания изменений только после успешного выполнения.
+- `test` всегда сначала делает `build`, затем запускает YaXUnit или Vanessa Automation.
+- `syntax designer-*` работает только для `DESIGNER` source format.
+- `syntax edt` использует EDT `validate` и привязан к `format=EDT`.
+- Таймауты и interruption metadata должны проходить через общий command-level contract, а не
+  жить как ad hoc special case конкретной команды.
 
-Частичная загрузка намеренно консервативна. Если набор изменений становится слишком большим или затрагивает файлы, которые принудительно требуют полной загрузки, команда переключается обратно на полный режим.
+## Файловые сценарии и публикация
 
-### Designer-исходники с бэкендом IBCMD
+Важно различать три разных класса файловых операций:
 
-Этот путь рассчитан на окружения, где для операций `import/apply` предпочтителен `ibcmd`.
+### `dump`
 
-Операционные отличия:
+Это reverse sync из ИБ обратно в файловые исходники.
 
-- входом по-прежнему служат файлы в Designer-формате;
-- подключение к ИБ может быть файловым или серверным через `infobase` / `infobase.dbms`;
-- сборка идёт через сценарий IBCMD, а не через пакетный интерфейс Designer.
+- Для `DESIGNER` может быть full, incremental или partial.
+- Для `IBCMD` object-scoped partial деградирует в incremental.
+- Для `format=EDT` использует internal Designer snapshot, затем EDT import.
 
-### EDT-исходники с бэкендом Designer
+### `convert`
 
-Сборка EDT — это двухступенчатый поток:
+Это repo-aware файловая конвертация текущих project files между `DESIGNER` и `EDT`.
 
-1. определить, какие EDT `source-set` изменились;
-2. экспортировать затронутые EDT-проекты во временные файлы в формате Designer под `workPath/designer`;
-3. запустить конвейер сборки Designer по этим сгенерированным файлам.
+- Не использует ИБ.
+- Не является alias для `dump`.
+- Работает только в модели `v8project.yaml` + `source-set`.
 
-Именно поэтому `format=EDT` в `build` нужно описывать как отдельную матрицу:
+### `load`, `make`, `artifacts`
 
-- EDT export stage использует EDT CLI;
-- generated Designer output пишется под `workPath/designer`;
-- load stage затем выполняется выбранным backend: `DESIGNER` или `IBCMD`.
+Это materialization сценарии поверх готовых артефактов или publish targets.
 
-<details>
-<summary>Почему это важно на практике</summary>
+- `load` работает с готовыми `.cf` / `.cfe`.
+- `make` / `artifacts` публикуют final `.cf`, `.cfe`, `.epf`, `.erf`.
+- Full replacement target publication идёт через staged publication model.
 
-Поддержка EDT — это не просто "сборка Designer с другой входной папкой". Фаза экспорта и фаза загрузки являются независимыми шагами. Поэтому поддержку формата и бэкенда нужно описывать как матрицу, а не одной общей фразой.
+## Shared EDT
 
-</details>
+`tools.edt_cli.interactive_mode` включает shared interactive EDT execution model.
 
-## 4. Как работает `test`
+- `false` означает one-shot `1cedtcli`.
+- `true` означает shared actor/manager и одну interactive session для поддержанных EDT-сценариев.
+- Для CLI shared EDT стартует лениво при первом EDT-вызове.
+- `tools.edt_cli.auto-start` относится только к long-lived host process, сейчас это MCP server.
 
-`test yaxunit all`, `test yaxunit module <NAME>` и `test va` — это оркестрационные команды, а не отдельные команды запуска тестов.
+Shared EDT нужен не ради отдельного public режима, а ради повторного использования одного
+execution model для CLI и MCP.
 
-Они всегда:
+## `workPath`, lock и interruption policy
 
-1. запускают `build`;
-2. генерируют временный конфиг YaXUnit в JSON;
-3. запускают Enterprise;
-4. разбирают JUnit XML и runner-log в структурированный вывод.
+`workPath` является корнем runtime state.
 
-Поведение вывода:
+- Логи, temp files, generated outputs и persisted snapshots не должны расползаться по `basePath`.
+- Public CLI/MCP команды, работающие с runtime state под `workPath`, должны брать workspace lock.
+- Workspace lock сериализует доступ к конкретному runtime root, но не заменяет admission limits и
+  не делает multi-step orchestration fully atomic.
 
-- компактный режим скрывает успешно прошедшие кейсы и сокращает трассы стека;
-- `--full` сохраняет полный отчёт;
-- при падениях остаётся достаточно файловых артефактов для разбора после сбоя.
+Interruption policy:
 
-Для Vanessa Automation:
+- timeout/cancellation являются общим CLI/MCP contract;
+- terminal cancellation и deferred interruption должны различаться;
+- critical publish/apply phases не hard-kill by default.
 
-- профиль выбирается из `tests.va.profile`;
-- `tests.va.fail_fast` управляет `stoponerror` в runtime params;
-- `tests.va.profiles.<name>` может передавать `feature_path`, `features_to_run`, `filter_tags`, `ignore_tags` и `scenario_filter`;
-- `/Out` enterprise-клиента материализуется в `runner.log` перед парсингом, чтобы унифицированный отчёт использовал один и тот же путь к логам.
+## MCP runtime semantics
 
-Механика сохранения артефактов намеренно устроена именно так. Если выполнение упало или разбор отчёта сломался, система сохраняет папку запуска под `workPath/temp/<runner-id>/runs/<run-id>/` для отладки, а CLI/MCP-диагностика при этом санитизируется перед показом наружу. Для YaXUnit `runner-id` равен `yaxunit`, для Vanessa Automation он соответствует выбранному profile id из `tests.va.profile`.
+MCP deliberately narrower than CLI.
 
-## 5. Как работает `dump`
-
-`dump` — это путь обратной синхронизации из информационной базы обратно в файлы.
-
-Команда поддерживает:
-
-- `FULL`
-- `INCREMENTAL`
-- `PARTIAL`
-
-Но смысл `PARTIAL` зависит от бэкенда:
-
-- бэкенд Designer поддерживает настоящую точечную частичную выгрузку по объектам;
-- бэкенд IBCMD этого не умеет, поэтому запрос `partial` деградирует в инкрементальную выгрузку и возвращает предупреждение.
-
-Это различие важно для более высокоуровневой автоматизации. Запрос может сохранять логический режим, но использовать разную механику бэкенда под капотом.
-
-Текущее важное различие:
-
-- `dump format=EDT` теперь остаётся отдельным reverse-sync сценарием: команда сначала обновляет internal Designer snapshot под `workPath/designer/<source-set>`, затем импортирует его в EDT и атомарно публикует target-каталог;
-- `convert` по-прежнему не использует ИБ и работает только как файловая конвертация текущих project files в generated output другого формата.
-
-### Repo-aware конвертация EDT и Designer
-
-Если нужен не reverse sync из ИБ, а файловая конвертация текущих исходников проекта, используйте `convert`.
-
-Сценарии:
-
-- `convert` без аргументов конвертирует все `source-set` текущего проекта в конфигурационном порядке;
-- `convert --source-set <name>` ограничивает выполнение одним `source-set`;
-- `convert --output <dir>` публикует результат под user-facing target root, зеркаля `source-set.path` относительно `basePath`;
-- направление определяется только из `format`, а output без `--output` публикуется под `workPath/convert/out/<source-set>/<designer|edt>/`.
-
-Практически это означает, что `dump` и `convert` нельзя считать синонимами:
-
-- `dump` — это "ИБ -> файлы";
-- `convert` — это "текущие project files -> generated files другого формата".
-
-## 6. Как работает `syntax`
-
-Поддержка `syntax` специально разбита на два семейства.
-
-### Проверки через Designer
-
-`syntax designer-config` и `syntax designer-modules` валидны только для:
-
-- `builder=DESIGNER`
-- `format=DESIGNER`
-
-Заметные особенности:
-
-- `designer-modules` требует хотя бы один флаг режима;
-- флаги области применения по расширениям нормализуются до запуска;
-- результаты парсятся обратно в структурированные списки проблем, а не остаются сырыми логами.
-
-### Проверка через EDT
-
-`syntax edt` валиден только для:
-
-- `builder=DESIGNER`
-- `format=EDT`
-
-Если имена проектов не переданы, система использует дефолтный набор EDT-проектов из конфига.
-
-## 7. Как работает `launch`
-
-`launch` намеренно остаётся тонкой командой:
-
-- разрешает нужную локальную утилиту;
-- строит аргументы подключения к 1С;
-- запускает выбранный режим (`designer`, `thin`, `thick`);
-- возвращает метаданные запуска, например PID и определённый путь к бинарю.
-
-Это полезно, потому что позволяет ассистентам и скриптам переходить от сценариев "проверить/исправить" к интерактивному инструменту 1С без переизобретения логики подключения.
-
-## 8. Как работает `extensions`
-
-`extensions` остаётся отдельной CLI-командой, потому что её задача уже и проще, чем у `build`.
-
-Команда:
-
-- выбирает extension `source-set` из конфига;
-- при необходимости фильтрует их по `--name`;
-- разрешает фактическое имя расширения для каждой цели;
-- обновляет свойства расширения в информационной базе и возвращает пошаговый результат.
-
-На практике это полезно как подготовительный или восстановительный шаг, когда нужно синхронизировать свойства расширений без полного orchestration-пайплайна `build`.
-
-## 9. Модель выполнения MCP
-
-Оба транспорта публикуют один и тот же набор из восьми инструментов, но MCP добавляет собственные правила выполнения поверх общих сценариев.
-
-Базовое поведение MCP:
-
-- запросы используют `camelCase`;
-- бизнес-ошибки остаются в контракте ответа инструмента;
-- ошибки неправильного использования транспорта и ошибки времени выполнения остаются на транспортном уровне;
-- все вызовы инструментов проходят через общий семафор выполнения.
-
-### Общая EDT-сессия
-
-Самый специализированный путь выполнения в MCP — это `check_syntax_edt`.
-
-Вместо запуска нового EDT-процесса на каждый MCP-запрос сервер использует общий менеджер интерактивной EDT-сессии. Это улучшает повторные проверки из ассистента, но создаёт несколько важных особенностей:
-
-- время ожидания в очереди и время исполнения расходуют один и тот же ограниченный лимит времени;
-- отмена может рано вернуть ответ клиенту, пока уже начатая работа всё ещё завершается на сервере;
-- shared interactive EDT теперь является общим execution path и для MCP, и для CLI-сценариев вроде `init`, EDT export в `build`, `convert` и `syntax edt`, если включён `tools.edt_cli.interactive_mode`.
-
-### HTTP-сессии
-
-HTTP MCP работает поверх протокола `streamable HTTP` с настраиваемым режимом с состоянием или без состояния.
-
-В режиме с состоянием:
-
-- `initialize` создаёт отслеживаемую сессию;
-- число сессий ограничено `mcp.http.max_sessions`;
-- неактивные сессии истекают по `mcp.http.idle_ttl_secs`.
-
-В режиме без состояния:
-
-- транспорт становится только POST-овым;
-- вызовы жизненного цикла сессии недоступны.
-
-<details>
-<summary>Расширенная нормализация MCP-запросов</summary>
-
-- `dump_config(mode=null|blank)` нормализуется в `INCREMENTAL`.
-- `launch_app.utilityType` принимает алиасы вроде `designer`, `1cv8`, `thin`, `thin_client`, `1cv8c`, `thick`, `thick_client` и поддерживаемые русские названия.
-- `allExtensions` имеет три состояния на границе MCP, а значение по умолчанию выводится из того, передан ли `extension`.
-- `checkUseSynchronousCalls` и `checkUseModality` отклоняются, когда `extendedModulesCheck=false`.
-
-</details>
-
-## 10. Рабочие директории и логи
-
-Система использует `workPath` как корень для сгенерированного состояния и диагностики.
-
-Важные директории:
-
-- `workPath/hash-storages/`: постоянное состояние отслеживания изменений
-- `workPath/edt-workspace/`: рабочая EDT-area для `init`
-- `workPath/convert/edt-workspace/`: отдельная рабочая EDT-area для `convert`
-- `workPath/logs/platform/`: логи платформенных команд
-- `workPath/logs/mcp/actions.log`: трассировка MCP
-- `workPath/designer/<source-set>/`: generated Designer output для EDT build
-- `workPath/temp/partial-lists/`: сгенерированные списки частичной загрузки
-- `workPath/temp/<runner-id>/runs/<run-id>/`: временные и сохранённые тестовые артефакты тестового запуска
-
-Для EDT-сценариев сборки и экспорта временный Designer-вывод генерируется внутри рабочей области, а не смешивается с исходным деревом исходников.
-
-## 11. Важные ограничения
-
-Некоторые ограничения — это часть формы продукта, а не случайные пробелы:
-
-- матрица команд намеренно явная: не каждый сценарий поддерживает каждую комбинацию формата и бэкенда;
-- builder-слой должен развиваться как взаимозаменяемый: возможности, реализованные для Designer builder, должны быть доступны для IBCMD builder либо явно фиксироваться как временный gap;
-- все инструменты должны развиваться с поддержкой серверных ИБ; ограничения на файловую ИБ допустимы только как явно описанные текущие gaps;
-- будущий Designer в режиме агента должен подключаться за тем же use-case contract, без расхождения публичного поведения;
-- команда `build` может оставить ранее успешные шаги по `source-set` применёнными, даже если более поздний шаг упал;
-- в старых внутренних документах могут оставаться исторические заметки, полезные для сопровождающих разработчиков, но их не стоит считать публичным контрактом.
-
-Если вам нужна точная публичная поверхность, используйте [CAPABILITIES.md](CAPABILITIES.md). Если нужен полный справочник по `v8project.yaml`, используйте [CONFIGURATION.md](CONFIGURATION.md). Если нужна внутренняя карта модулей, используйте [../ARCHITECTURE.md](../ARCHITECTURE.md).
+- Опубликованы только 8 tool-операций.
+- `CallToolResult` / `isError` остаются MCP-native protocol behavior.
+- Business failure payload uses the shared command envelope.
+- HTTP session capacity и execution admission являются разными guardrails.
+- Shared EDT under MCP reuses the same execution model instead of inventing a separate MCP-only
+  runtime path.

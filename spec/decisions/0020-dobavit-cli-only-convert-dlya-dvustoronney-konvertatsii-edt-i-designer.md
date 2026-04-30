@@ -131,7 +131,7 @@
    - `docs/DEEP_DIVE.md`;
    - `ARCHITECTURE.md`;
    - arc42 decisions / risks / building blocks;
-   - `docs/decisions/README.md`;
+   - `spec/decisions/README.md`;
    - backlog с фактическим статусом `convert` и отдельного `dump format=EDT`.
 
 ## Верификация

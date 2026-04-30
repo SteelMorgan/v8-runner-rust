@@ -2,7 +2,7 @@
 
 Этот документ фиксирует правила, которые должны оставаться верными при развитии `v8-runner`.
 Если изменение нарушает инвариант, сначала нужен новый ADR, который явно заменяет или уточняет текущее решение.
-Практический checklist для изменений MCP surface, public command boundary и config contract вынесен в [docs/architecture/change-checklist.md](change-checklist.md).
+Практический checklist для изменений MCP surface, public command boundary и config contract вынесен в [spec/architecture/change-checklist.md](change-checklist.md).
 
 ## Цель продукта
 
@@ -18,7 +18,7 @@
 2. MCP не зеркалит CLI автоматически.
 3. Текущая MCP-поверхность состоит из 8 tool-операций: `run_all_tests`, `run_module_tests`, `build_project`, `dump_config`, `launch_app`, `check_syntax_edt`, `check_syntax_designer_config`, `check_syntax_designer_modules`.
 4. Добавление, удаление или переименование MCP tool-операций является изменением публичного контракта и требует отдельного ADR или явного обновления действующего ADR.
-5. Любое изменение MCP surface должно проходить по checklist из `docs/architecture/change-checklist.md` и синхронизировать docs/source/tests, перечисленные в `ADR-0005`.
+5. Любое изменение MCP surface должно проходить по checklist из `spec/architecture/change-checklist.md` и синхронизировать docs/source/tests, перечисленные в `ADR-0005`.
 6. CLI-only команды являются допустимой частью public surface; наличие CLI-команды не должно использоваться как аргумент для неявной публикации MCP tool.
 
 См. [ADR-0005](../decisions/0005-razdelit-cli-i-mcp-publichnye-poverhnosti.md) и [ADR-0020](../decisions/0020-dobavit-cli-only-convert-dlya-dvustoronney-konvertatsii-edt-i-designer.md).
@@ -37,7 +37,7 @@
 10. `source-set.name` должен быть уникальным и безопасным path segment; resolved paths должны быть уникальны после normalization.
 11. EDT/external source-set paths и generated work targets не должны пересекаться; reserved work directory names нельзя использовать как EDT source-set names.
 12. Unsupported или unsafe config combinations должны отклоняться на validation boundary до вызова platform DSL.
-13. Новый public config field, `source-set` type или `infobase` subtree требует typed model, validation, `config init`/examples/docs sync и regression tests по checklist из `docs/architecture/change-checklist.md`.
+13. Новый public config field, `source-set` type или `infobase` subtree требует typed model, validation, `config init`/examples/docs sync и regression tests по checklist из `spec/architecture/change-checklist.md`.
 
 См. [ADR-0017](../decisions/0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md), [ADR-0018](../decisions/0018-perenesti-kontrakt-informatsionnoy-bazy-v-infobase.md) и [ADR-0019](../decisions/0019-sozdavat-servernuyu-infobazu-cherez-ibcmd-pri-init-pri-otsutstvii.md).
 
@@ -127,11 +127,11 @@
 ## Shared EDT
 
 1. EDT execution имеет два целевых режима: one-shot и shared interactive.
-2. `tools.edt_cli.interactive_mode=false` означает one-shot `1cedtcli` execution.
-3. `tools.edt_cli.interactive_mode=true` означает shared interactive EDT execution через общий actor/manager и общую interactive session.
+2. `tools.edt_cli.interactive_mode=false` (YAML alias `interactive-mode`) означает one-shot `1cedtcli` execution.
+3. `tools.edt_cli.interactive_mode=true` (YAML alias `interactive-mode`) означает shared interactive EDT execution через общий actor/manager и общую interactive session.
 4. Non-shared interactive EDT не является долгосрочным публичным режимом; если он встречается в коде, это implementation gap.
 5. Shared interactive EDT должен сохранять baseline reset/probe, restart, shutdown/restart drain, typed errors and telemetry contract.
-6. `tools.edt_cli.auto_start` является eager prewarm-флагом только для long-lived shared EDT host process; на текущем этапе это MCP server.
+6. `tools.edt_cli.auto_start` (YAML alias `auto-start`) является eager prewarm-флагом только для long-lived shared EDT host process; на текущем этапе это MCP server.
 7. CLI при `tools.edt_cli.interactive_mode=true` стартует EDT лениво при первом EDT-вызове и не должен eagerly prewarm interactive session на старте процесса команды.
 8. Если shared interactive временно покрывает не все EDT-сценарии, gap должен быть зафиксирован в документации или ADR.
 

@@ -7,8 +7,8 @@
 
 1. Подтвердить, что изменение разрешено текущим ADR; если нет, сначала добавить новый ADR или обновить `ADR-0005`.
 2. Синхронизировать список tools и их публичную семантику минимум в:
-   - `docs/decisions/0005-razdelit-cli-i-mcp-publichnye-poverhnosti.md`
-   - `docs/architecture/invariants.md`
+   - `spec/decisions/0005-razdelit-cli-i-mcp-publichnye-poverhnosti.md`
+   - `spec/architecture/invariants.md`
    - `ARCHITECTURE.md`
    - `README.md`
    - `docs/CAPABILITIES.md`
@@ -34,5 +34,5 @@
 1. Добавить typed field и нужные `serde` defaults/aliases в `src/config/model.rs`.
 2. Добавить validation boundary в `src/config/validate.rs`, чтобы unsafe/unsupported combinations отклонялись до platform DSL.
 3. Обновить `config init`, round-trip fixtures и публичные примеры (`README.md`, `examples/*`), если поле входит в supported contract.
-4. Синхронизировать `docs/architecture/invariants.md`, `ARCHITECTURE.md` и соответствующий ADR, если поле меняет публичный контракт.
+4. Синхронизировать `spec/architecture/invariants.md`, `ARCHITECTURE.md` и соответствующий ADR, если поле меняет публичный контракт.
 5. Добавить regression tests на parse/validation/round-trip и на целевое поведение для новых `source-set`/`infobase` веток.

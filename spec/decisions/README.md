@@ -28,5 +28,5 @@
 ## Правила обновления
 
 - Для изменений архитектурных ограничений добавляйте новый ADR или обновляйте существующий с явным указанием статуса.
-- При обновлении публичного контракта синхронизируйте связанные документы (`README.md`, `docs/CAPABILITIES.md`, `docs/DEEP_DIVE.md`, `docs/GIT_WORKFLOW.md`, `ARCHITECTURE.md`).
-- Архитектурные инварианты, которые должны соблюдаться агентами и контрибьюторами, перечислены в [docs/architecture/invariants.md](../architecture/invariants.md).
+- При обновлении публичного контракта синхронизируйте связанные документы (`README.md`, `docs/CAPABILITIES.md`, `docs/DEEP_DIVE.md`, `ARCHITECTURE.md`).
+- Архитектурные инварианты, которые должны соблюдаться агентами и контрибьюторами, перечислены в [spec/architecture/invariants.md](../architecture/invariants.md).

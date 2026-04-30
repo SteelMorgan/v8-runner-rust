@@ -11,12 +11,13 @@ to guess which Markdown file is authoritative.
    - `docs/CAPABILITIES.md`
    - `docs/CONFIGURATION.md`
    - `docs/DEEP_DIVE.md`
-3. Contributor and architecture docs:
+3. Contributor module map:
    - `ARCHITECTURE.md`
-   - `docs/architecture/*`
-   - `docs/decisions/*`
-4. Active internal planning docs:
+4. Active internal spec and architecture docs:
    - `spec/README.md`
+   - `spec/decisions/*`
+   - `spec/architecture/*`
+   - `spec/acceptance/*`
 5. Historical notes and closed plans:
    - `spec/archive/*`
 6. Raw external 1C references:

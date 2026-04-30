@@ -25,7 +25,7 @@
 | [ADR-0019: Обеспечивать наличие серверной ИБ через `ibcmd` в `init`](../../decisions/0019-sozdavat-servernuyu-infobazu-cherez-ibcmd-pri-init-pri-otsutstvii.md) | `accepted`, `2026-04-22` | Для `builder=IBCMD` + server connection `init` использует `ibcmd infobase create --create-database` как ensure-step; отдельный pre-check наличия не обязателен, а benign `already exists` нормализуется как non-error outcome. |
 | [ADR-0020: Упростить CLI-only `convert` до repo-aware конвертации текущих исходников проекта](../../decisions/0020-dobavit-cli-only-convert-dlya-dvustoronney-konvertatsii-edt-i-designer.md) | `accepted`, `2026-04-22` | Фиксирует и уже реализует repo-aware `convert [--source-set <name>] [--output <dir>]`, который работает от `v8project.yaml`, выводит направление из `format`, публикует output под default `workPath/convert/out` или explicit mirror-layout root и не выносит low-level EDT flags в public surface. |
 
-Архитектурные инварианты для агентов и контрибьюторов зафиксированы в [docs/architecture/invariants.md](../invariants.md).
+Архитектурные инварианты для агентов и контрибьюторов зафиксированы в [spec/architecture/invariants.md](../invariants.md).
 
 ### Сквозные выводы из ADR
 

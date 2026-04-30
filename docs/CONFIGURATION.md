@@ -1,59 +1,70 @@
-# Конфигурация
+# Конфигурационный контракт
 
-Этот документ описывает все поддержанные ключи `v8project.yaml`, их текущий статус и ограничения реализации.
+Этот документ описывает поддержанный `v8project.yaml`: literal YAML keys, допустимые значения,
+aliases и validation rules.
 
-Цель документа:
+Каталог команд находится в [CAPABILITIES.md](CAPABILITIES.md), а runtime semantics и operational
+nuances вынесены в [DEEP_DIVE.md](DEEP_DIVE.md).
 
-- дать единое место со всеми настройками;
-- отделить реально работающие настройки от задела на будущее;
-- явно ответить на вопросы про интерактивный EDT и дополнительные параметры запуска клиента 1С.
+## Навигация
 
-## Автонастройка
+- [Как получить стартовый конфиг](#как-получить-стартовый-конфиг)
+- [Именование ключей](#именование-ключей)
+- [Канонический пример](#канонический-пример)
+- [Обязательный контракт](#обязательный-контракт)
+- [Опциональные секции](#опциональные-секции)
+- [`tools.platform`](#toolsplatform)
+- [`tools.enterprise`](#toolsenterprise)
+- [`tools.edt_cli`](#toolsedt_cli)
+- [Неподдержанные ключи](#неподдержанные-ключи)
 
-Создать стартовый конфиг можно командой:
+## Как получить стартовый конфиг
+
+Базовый файл можно сгенерировать командой:
 
 ```bash
 v8-runner config init
 ```
 
-Команда работает без существующего `v8project.yaml`, создаёт файл в текущем каталоге и заполняет `source-set` найденными исходниками:
+Что делает `config init`:
 
-- автопоиск опирается на имена файлов-маркеров и их содержимое, а не на имена каталогов;
-- Designer-исходники находятся по файлу `Configuration.xml`, а тип определяется по содержимому этого XML;
-- для `EXTENSION` имя generated `source-set` извлекается из имени конфигурации расширения в `Configuration.xml` / `src/Configuration/Configuration.mdo`, а не из имени каталога;
-- Designer external aggregate root autodetect-ится как один `source-set`, только если top-level XML descriptors каталога однородно классифицируются по содержимому как `ExternalDataProcessor` или `ExternalReport`;
-- ordinary EDT-проекты находятся по файлу `.project`: `CONFIGURATION`/`EXTENSION` определяются по `V8ConfigurationNature` / `V8ExtensionNature`, runtime version читается из `DT-INF/PROJECT.PMF`, а наличие native EDT layout подтверждается `src/Configuration/Configuration.mdo`; runtime version EDT `CONFIGURATION` записывается в `tools.platform.version`; отсутствие `Base-Project` у `EXTENSION` не блокирует autodiscovery/validation, но `config init` выводит warning;
-- EDT external aggregate root autodetect-ится как один `source-set`, только если direct child projects каталога однородно классифицируются как внешние обработки или внешние отчёты по canonical `src/root.xml` и имеют валидные `.project` / `DT-INF/PROJECT.PMF` / `Base-Project`;
-- mixed или ambiguous external roots не autodetect-ятся и остаются manual config case;
-- команда не пишет synthetic `CONFIGURATION`: если autodiscovery не нашёл ни одного `CONFIGURATION`, `config init` завершается validation error;
-- external `source-set` требуют `builder=DESIGNER`, поэтому при `--builder IBCMD` и найденных external root команда завершается validation error;
-- существующий файл не перезаписывается без `--force`.
+- создаёт `v8project.yaml` в текущем каталоге или по `--output <FILE>`;
+- заполняет `source-set` по найденным исходникам;
+- не перезаписывает существующий файл без `--force`;
+- не пишет synthetic `CONFIGURATION`: если конфигурационный `source-set` не найден,
+  завершается validation error;
+- для `--builder IBCMD` отклоняет autodetected external roots как unsupported config combination.
 
-После чтения конфига относительные `basePath`, `workPath`, пути Vanessa Automation и файловая строка подключения `File=...` / `/F ...` приводятся к абсолютным путям относительно каталога, где находится `v8project.yaml`. Серверная строка подключения должна сохраняться как строка подключения, а не трактоваться как путь.
+Автообнаружение опирается на содержимое marker files, а не на имена каталогов:
 
-Полезные параметры:
+- Designer ordinary sources находятся по `Configuration.xml`, а их тип определяется по XML;
+- Designer external aggregate root создаётся как один `source-set` только при однородных
+  top-level XML descriptors;
+- EDT ordinary projects находятся по `.project`, `DT-INF/PROJECT.PMF` и native markers под `src`;
+- EDT external root создаётся только если direct child projects однородно классифицируются как
+  один external kind.
 
-```bash
-v8-runner config init --connection "File=/path/to/ib"
-v8-runner config init --output custom.yaml --force
-v8-runner config init --format edt
-```
+После загрузки конфига относительные пути резолвятся относительно каталога, где лежит
+`v8project.yaml`.
 
-`config init` не использует глобальный `--config` как shortcut output path: если нужно выбрать путь для сгенерированного файла, используйте `config init --output <FILE>`.
+## Именование ключей
 
-## Конвертация исходников
+`v8project.yaml` использует не один стиль на весь документ. Это текущий loader contract, и docs
+ниже повторяют именно literal YAML keys.
 
-`convert` читает текущий `v8project.yaml`, выбирает все `source-set` или один `--source-set <NAME>` и выводит направление из `format`: `EDT -> Designer` для `format=EDT`, `Designer -> EDT` для `format=DESIGNER`.
+- top-level app keys: `basePath`, `workPath`, `source-set`;
+- `build` использует `partialLoadThreshold`;
+- `mcp.*` и `tests.*` используют `snake_case`;
+- canonical key для EDT tool section: `tools.edt_cli`;
+- у `tools.edt_cli` literal child keys смешанные:
+  - `interactive-mode`
+  - `auto-start`
+  - `startup_timeout_ms`
+  - `command_timeout_ms`
 
-```bash
-v8-runner convert
-v8-runner convert --source-set main
-v8-runner convert --output tests/fixtures/edt
-```
+Если для поля поддержан alias, ниже он указан явно. Примеры используют canonical key, а не alias.
 
-Без `--output` результат публикуется под `workPath/convert/out/<sourceSetName>/<designer|edt>/`. С `--output <DIR>` команда публикует результат под заданный target root, зеркаля `source-set.path` относительно `basePath`; например `configuration`, `extension`, `external/processor`. Публикация выполняется через staging/full replacement, а пересечение output target с исходными каталогами или другими target paths отклоняется validation error.
-
-## Полный пример
+## Канонический пример
 
 ```yaml
 basePath: /path/to/project
@@ -61,9 +72,9 @@ workPath: build
 execution_timeout: 300000
 format: EDT
 builder: DESIGNER
+
 infobase:
   connection: "File=build/ib"
-
   user: Admin
   password: secret
 
@@ -85,13 +96,13 @@ tools:
   enterprise:
     additional-launch-keys:
       - /TESTMANAGER
-  edt-cli:
+  edt_cli:
     path: 2025.2.3
     version: 2025.2.3
     interactive-mode: false
     auto-start: false
-    startup-timeout-ms: 300000
-    command-timeout-ms: 300000
+    startup_timeout_ms: 300000
+    command_timeout_ms: 300000
 
 mcp:
   http:
@@ -121,115 +132,46 @@ tests:
         feature_path: /path/to/features
 ```
 
-## Обязательные ключи
+## Обязательный контракт
 
 ### `basePath`
 
 - Тип: путь
 - Обязателен: да
-- Значение: корень исходников проекта
 
-Поведение:
-
-- должен существовать и быть каталогом.
+Корень исходников проекта. Должен существовать и быть каталогом.
 
 ### `workPath`
 
 - Тип: путь
 - Обязателен: да
-- Значение: рабочий каталог для временных файлов, логов, hash storage и EDT workspace
+
+Корень runtime state:
+
+- `workPath/hash-storages`
+- `workPath/logs`
+- `workPath/temp`
+- `workPath/edt-workspace`
+- `workPath/designer`
+
+Если каталога нет, он создаётся автоматически.
 
 ### `execution_timeout`
 
 - Тип: integer
 - Обязателен: нет
 - По умолчанию: `300000`
-- Допустимый диапазон: `1..=86400000`
-- Единица измерения: миллисекунды
-- Общий публичный budget для CLI и MCP команд
+- Диапазон: `1..=86400000`
+- Единица: миллисекунды
 
-Поведение:
+Общий public budget для CLI и MCP команд. Не заменяет EDT-specific timeout для interactive
+команд, а ограничивает весь command budget.
 
-- покрывает queue wait, use case orchestration и platform execution;
-- используется как transport-neutral deadline в `ExecutionContext`;
-- для EDT не заменяет `tools.edt_cli.command_timeout_ms`, а ограничивает общий command budget.
+Поддержанные aliases:
 
-Поведение:
-
-- будет создан автоматически, если отсутствует;
-- используется как корень для:
-  - `workPath/hash-storages`
-  - `workPath/logs`
-  - `workPath/temp`
-  - `workPath/edt-workspace`
-  - `workPath/designer`
-
-### `infobase.connection`
-
-- Тип: строка
-- Обязателен: да
-
-Поведение:
-
-- передаётся в платформенные утилиты как строка подключения;
-- для `builder=DESIGNER` используется как обычная строка подключения 1С;
-- для `builder=IBCMD` file connection маппится в `--db-path`, а server connection использует `infobase.dbms`;
-- для `init` server connection с `builder=IBCMD` выполняет `ensure` через `ibcmd infobase create --create-database`; при `builder=DESIGNER` server create step по-прежнему пропускается.
-
-### `infobase.user` / `infobase.password`
-
-- Тип: строка
-- Обязательны: нет
-
-Поведение:
-
-- используются как логин/пароль подключения к информационной базе;
-- передаются в `1cv8`, `1cv8c` и `ibcmd` как credentials самой ИБ;
-- пароль редактируется в логах и диагностике команд.
-
-### `infobase.dbms`
-
-- Тип: объект
-- Обязателен: нет
-
-Используется только для server connection с `builder=IBCMD`.
-
-Поддержанные поля:
-
-- `infobase.dbms.kind`
-- `infobase.dbms.server`
-- `infobase.dbms.name`
-- `infobase.dbms.user`
-- `infobase.dbms.password`
-
-Поведение:
-
-- `kind/server/name` обязательны для server connection с `builder=IBCMD`;
-- `user/password` опциональны и передаются как credentials физической БД;
-- для file connection секция `infobase.dbms` запрещена;
-- legacy top-level `connection` и `credentials` loader отклоняет до валидации use case.
-
-### `source-set`
-
-- Тип: список
-- Обязателен: да
-
-Каждый элемент:
-
-- `name`: логическое имя набора исходников
-- `type`: `CONFIGURATION`, `EXTENSION`, `EXTERNAL_DATA_PROCESSORS` или `EXTERNAL_REPORTS`
-- `path`: путь к исходникам
-
-Поведение:
-
-- `EXTENSION` требует хотя бы один `CONFIGURATION`, но external-only конфиг допустим;
-- `name` должен быть уникальным;
-- для `format=EDT` ordinary `CONFIGURATION`/`EXTENSION` path должен быть valid EDT project root: каталог с `.project`, правильным `V8ConfigurationNature` / `V8ExtensionNature`, `DT-INF/PROJECT.PMF` c `Runtime-Version` и project-local native markers под `src` (`*.mdo`, `*.bsl`, `*.form`);
-- для `format=EDT` external path должен быть каталогом и содержать хотя бы один child project с `.project`, а все найденные child projects должны совпадать с объявленным external `type`;
-- для `format=DESIGNER` external path должен быть aggregate root с top-level XML descriptors, совпадающими с объявленным `type`;
-- для `format=EDT` generated Designer copy идёт в `workPath/designer/<name>`.
-
-## Базовые режимы
+- `executionTimeout`
+- `execution_timeout_ms`
+- `execution_timeout_seconds`
 
 ### `format`
 
@@ -245,51 +187,140 @@ tests:
 
 Ограничения:
 
-- `builder=IBCMD` поддерживает file и server ИБ для сценариев `init`, `build`, `dump`, `extensions`, но для server connection требует полный `infobase.dbms.kind/server/name`.
-- Для `format=EDT` команда `build` сначала экспортирует EDT-проект в Designer-файлы под `workPath/designer/<name>`, затем загружает результат выбранным backend.
+- `builder=IBCMD` поддерживает `init`, `build`, `dump`, `extensions`;
+- для server connection с `builder=IBCMD` обязательны `infobase.dbms.kind`,
+  `infobase.dbms.server`, `infobase.dbms.name`;
+- для file connection секция `infobase.dbms` запрещена.
+
+### `infobase`
+
+Секция обязательна целиком.
+
+#### `infobase.connection`
+
+- Тип: строка
+- Обязателен: да
+
+Строка подключения к ИБ. Для file-based ИБ относительный `File=...` резолвится относительно
+каталога конфига.
+
+#### `infobase.user` / `infobase.password`
+
+- Тип: строка
+- Обязательны: нет
+
+Credentials самой информационной базы.
+
+#### `infobase.dbms`
+
+- Тип: объект
+- Обязателен: нет
+
+Используется только для `builder=IBCMD` + server connection.
+
+Поддержанные поля:
+
+- `kind`
+- `server`
+- `name`
+- `user`
+- `password`
+
+### `source-set`
+
+- Тип: список
+- Обязателен: да
+
+Каждый элемент содержит:
+
+- `name`
+- `type`
+- `path`
+
+`type` поддерживает только:
+
+- `CONFIGURATION`
+- `EXTENSION`
+- `EXTERNAL_DATA_PROCESSORS`
+- `EXTERNAL_REPORTS`
+
+Validation rules:
+
+- `name` должен быть уникальным и безопасным path segment;
+- `EXTENSION` требует хотя бы один `CONFIGURATION`, но external-only config допустим;
+- для `format=DESIGNER` ordinary source-set должен указывать на корректный Designer root;
+- для `format=DESIGNER` external source-set должен быть aggregate root с top-level XML
+  descriptors matching declared `type`;
+- для `format=EDT` ordinary `CONFIGURATION`/`EXTENSION` path должен быть valid EDT project root:
+  каталог с `.project`, правильным nature, `DT-INF/PROJECT.PMF` и project-local native markers;
+- для `format=EDT` external path должен быть каталогом direct child projects, и все найденные
+  child projects должны совпадать с declared external `type`.
 
 ## Опциональные секции
 
 ### `build`
 
-- `build.partialLoadThreshold`
+#### `build.partialLoadThreshold`
+
 - Тип: integer
 - По умолчанию: `20`
 - Минимум: `1`
 
-Используется для решения между partial и full load.
+Порог между partial и full load.
 
 ### `tests`
 
-- `tests.execution_timeout_seconds`
+#### `tests.execution_timeout_seconds`
+
 - Тип: integer
 - По умолчанию: `300`
-- Допустимый диапазон: `1..=86400`
-- `tests.yaxunit.timeouts.total_ms` и `tests.va.timeouts.total_ms`
+- Диапазон: `1..=86400`
+
+#### `tests.yaxunit.timeouts.total_ms`
+
 - Тип: integer
-- Используется как активный пользовательский таймаут для `test yaxunit` и `test va`
-- `startup_ms` и `run_ms` в `tests.*.timeouts` зарезервированы и не влияют на запуск
-- `tests.va.epf_path`, `tests.va.params_path`, `tests.va.profile`
-- Обязательны для Vanessa Automation
-- `tests.va.fail_fast`
-- Передаётся в runtime params как `stoponerror`
+
+#### `tests.va`
+
+Поддержанные поля:
+
+- `epf_path`
+- `params_path`
+- `profile`
+- `fail_fast`
+- `timeouts.total_ms`
+- `profiles.<name>.feature_path`
+- `profiles.<name>.features_to_run`
+- `profiles.<name>.filter_tags`
+- `profiles.<name>.ignore_tags`
+- `profiles.<name>.scenario_filter`
+
+Для Vanessa Automation обязательны:
+
+- `tests.va.epf_path`
+- `tests.va.params_path`
+- `tests.va.profile`
 - `tests.va.profiles.<name>.feature_path`
-- Обязателен для каждого профиля Vanessa
-- `tests.va.profiles.<name>.features_to_run`, `filter_tags`, `ignore_tags`, `scenario_filter`
-- Дополнительные фильтры VA, передаваемые в runtime params
+
+Поля `startup_ms` и `run_ms` внутри `tests.*.timeouts` зарезервированы и сейчас не влияют на
+запуск.
 
 ### `mcp.http`
 
-- `bind_address`: адрес HTTP listener, по умолчанию `127.0.0.1:3000`
-- `path`: HTTP path, по умолчанию `/mcp`
-- `stateful_sessions`: `true` по умолчанию
-- `max_sessions`: `64` по умолчанию
-- `idle_ttl_secs`: `900` по умолчанию
+Поддержанные поля:
+
+- `bind_address`, по умолчанию `127.0.0.1:3000`
+- `path`, по умолчанию `/mcp`
+- `stateful_sessions`, по умолчанию `true`
+- `max_sessions`, по умолчанию `64`
+- `idle_ttl_secs`, по умолчанию `900`
 
 ### `mcp.execution`
 
-- `max_concurrent_calls`: по умолчанию `1`
-- `shutdown_grace_period_secs`: по умолчанию `30`
+Поддержанные поля:
+
+- `max_concurrent_calls`, по умолчанию `1`
+- `shutdown_grace_period_secs`, по умолчанию `30`
 
 ## `tools.platform`
 
@@ -310,24 +341,39 @@ tests:
 - Обязателен: нет
 - Формат: `major.minor`, `major.minor.patch` или `major.minor.patch.build`
 
-Пример:
+Поведение:
 
-```yaml
-tools:
-  platform:
-    version: 8.3
-```
+- `8.3.27.1859`: требуется точное совпадение;
+- `8.3.20`: выбирается максимальная найденная сборка `8.3.20.*`;
+- `8.3`: выбирается максимальная найденная версия `8.3.*.*`.
 
-По [ADR-0004](decisions/0004-avtoobnaruzhivat-komponenty-platformy-1s-po-versii-maske.md) `v8-runner` должен сам искать установленные компоненты платформы 1С по версии или версии-маске:
+## `tools.enterprise`
 
-- `8.3.27.1789`: точное совпадение;
-- `8.3.20`: выбрать максимальную найденную сборку `8.3.20.*`;
-- `8.3`: выбрать максимальную найденную версию `8.3.*.*`.
+### `tools.enterprise.additional-launch-keys`
 
-Если указаны четыре части, например `8.3.27.1859`, автопоиск требует точное совпадение.
-Если `path` не указан, будет идти автопоиск по стандартным корням установки.
+- Тип: список строк
+- Обязателен: нет
+
+Canonical key:
+
+- `additional-launch-keys`
+
+Поддержанные aliases:
+
+- `additional_launch_keys`
+- `additionalLaunchKeys`
+
+Ключи добавляются к enterprise client launch.
 
 ## `tools.edt_cli`
+
+Canonical section key:
+
+- `tools.edt_cli`
+
+Поддержанный alias:
+
+- `tools.edt-cli`
 
 ### `tools.edt_cli.path`
 
@@ -340,156 +386,53 @@ tools:
 - путь к каталогу установки EDT;
 - version-like hint, например `2025.2.3`.
 
-Пример:
-
-```yaml
-tools:
-  edt-cli:
-    path: 2025.2.3
-```
-
-Это находит установленный EDT вида `1c-edt-2025.2.3+30-x86_64`.
-
 ### `tools.edt_cli.version`
 
 - Тип: строка
 - Обязателен: нет
 
-Отдельная version-like подсказка для автопоиска EDT.
+Отдельная подсказка для автопоиска EDT.
 
-Пример:
-
-```yaml
-tools:
-  edt-cli:
-    version: 2025.2.3
-```
-
-### `tools.edt_cli.startup_timeout_ms`
-
-- Тип: integer
-- По умолчанию: `300000`
-- Также принимает: `startup-timeout-ms`
-
-Используется при старте интерактивной EDT session и ожидании prompt.
-
-### `tools.edt_cli.command_timeout_ms`
-
-- Тип: integer
-- По умолчанию: `300000`
-- Также принимает: `command-timeout-ms`
-
-Используется как timeout для интерактивных EDT-команд.
-
-### `tools.edt_cli.interactive_mode`
+### `tools.edt_cli.interactive-mode`
 
 - Тип: boolean
 - По умолчанию: `false`
-- Также принимает: `interactive-mode`
 
-Если включён:
-
-- поддержанные EDT-сценарии используют общий shared actor/manager и interactive `1cedtcli` вместо one-shot вызовов;
-- для CLI shared EDT session стартует лениво при первом EDT-вызове и живёт только в рамках текущего процесса команды;
-- для MCP long-lived host process тот же shared component может переиспользовать одну interactive session между вызовами;
-- `auto-start` влияет только на long-lived host process с shared EDT session.
-
-Если выключен:
-
-- все EDT-операции идут через обычные one-shot вызовы `1cedtcli -command ...`;
-- `auto-start` игнорируется.
+Переключает EDT execution между one-shot и shared interactive model.
 
 ### `tools.edt_cli.auto-start`
 
 - Тип: boolean
 - По умолчанию: `false`
 
-Работает только вместе с `tools.edt_cli.interactive_mode=true` и только для long-lived host process с shared EDT session. На текущем этапе это MCP server.
+Имеет эффект только вместе с `interactive-mode=true` и только для long-lived host process. На
+текущем этапе это MCP server. CLI не делает eager prewarm и стартует EDT лениво при первом
+EDT-вызове.
 
-Поведение:
+### `tools.edt_cli.startup_timeout_ms`
 
-- для shared MCP EDT session выполняет eager prewarm на старте сервера;
-- для CLI не выполняет eager prewarm: даже при `interactive_mode=true` EDT стартует лениво при первом EDT-вызове;
-- при `interactive_mode=false` не оказывает эффекта.
+- Тип: integer
+- По умолчанию: `300000`
+
+Поддержанный alias:
+
+- `startup-timeout-ms`
+
+### `tools.edt_cli.command_timeout_ms`
+
+- Тип: integer
+- По умолчанию: `300000`
+
+Поддержанный alias:
+
+- `command-timeout-ms`
+
+## Неподдержанные ключи
 
 ### `tools.edt_cli.working-directory`
 
 Текущий статус:
 
-- не поддержан моделью конфигурации;
-- будет проигнорирован как неизвестный ключ YAML;
+- не входит в supported config contract;
+- игнорируется как неизвестный YAML key;
 - рабочий каталог EDT session сейчас фиксирован: `workPath/edt-workspace`.
-
-## Интерактивный EDT: что реально работает
-
-Реально поддержано:
-
-- автопоиск `1cedtcli`;
-- отдельное переключение через `tools.edt_cli.interactive_mode`;
-- shared interactive backend для поддержанных CLI/MCP EDT-сценариев;
-- ленивый старт shared CLI session при первом EDT-вызове;
-- eager prewarm shared MCP session через `auto-start`, если включён interactive-mode;
-- timeout старта через `tools.edt_cli.startup_timeout_ms`;
-- timeout команды через `tools.edt_cli.command_timeout_ms`;
-- workspace в `workPath/edt-workspace`.
-
-Пока не поддержано как отдельная настраиваемая функция:
-
-- произвольный `working-directory`;
-- дополнительные аргументы для старта `1cedtcli` сверх `-data <workPath/edt-workspace>`.
-
-## Запуск клиента 1С: что реально поддержано
-
-Команда `launch` поддерживает выбор режима позиционным аргументом:
-
-- `designer`
-- `thin`
-- `thick`
-- `ordinary`
-
-Старый вариант `--mode <designer|thin|thick|ordinary>` сохранён для совместимости.
-
-Внутри формируется запуск:
-
-- `designer` -> `1cv8 DESIGNER`
-- `thin` -> `1cv8c ENTERPRISE`
-- `thick` -> `1cv8 ENTERPRISE`
-
-Дополнительно автоматически передаются только:
-
-- аргументы из `infobase.connection`;
-- `infobase.user/password`, если они заданы.
-
-### Дополнительные параметры клиента 1С
-
-Поддержано:
-
-- `tools.enterprise.additional-launch-keys` как список строк;
-- ключи дописываются только к `thin`/`thick` запуску клиента (`ENTERPRISE`);
-- `designer`-запуск эти ключи не получает;
-- MCP `launch_app` использует те же настройки, потому что опирается на тот же use case.
-
-Пример:
-
-```yaml
-tools:
-  enterprise:
-    additional-launch-keys:
-      - /TESTMANAGER
-      - /RunModeOrdinaryApplication
-```
-
-Если нужен запуск с чем-то вроде:
-
-- `/RunModeOrdinaryApplication`
-- `/UsePrivilegedMode`
-- `/C <payload>`
-- `/Execute <epf>`
-- `/DisableStartupDialogs`
-
-то это сейчас потребует доработки use case и конфигурационной модели.
-
-## Что стоит помнить
-
-- `docs/CAPABILITIES.md` описывает пользовательские возможности и матрицу сценариев.
-- Этот файл описывает именно конфигурацию и её текущие runtime-ограничения.

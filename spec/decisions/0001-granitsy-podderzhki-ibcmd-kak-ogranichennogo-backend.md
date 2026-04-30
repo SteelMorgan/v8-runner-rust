@@ -47,7 +47,6 @@
 - `README.md`
 - `docs/CAPABILITIES.md`
 - `docs/DEEP_DIVE.md`
-- `docs/GIT_WORKFLOW.md`
 - `ARCHITECTURE.md`
 - `spec/IMPLEMENTATION_TODO.md`
 

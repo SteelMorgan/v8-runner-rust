@@ -64,8 +64,8 @@ CLI `v8-runner` будет потребляться двумя разными р
 ## План реализации
 
 1. Зафиксировать этот ADR в `docs/decisions`.
-2. Добавить invariant в `docs/architecture/invariants.md`.
-3. Синхронизировать `ADR-0010`, `docs/architecture/invariants.md`, arc42 и backlog с единой моделью output policy и naming policy для output paths.
+2. Добавить invariant в `spec/architecture/invariants.md`.
+3. Синхронизировать `ADR-0010`, `spec/architecture/invariants.md`, arc42 и backlog с единой моделью output policy и naming policy для output paths.
 4. При реализации unified output policy обновить:
 - `src/output/presenter.rs`
 - `src/output/text.rs`

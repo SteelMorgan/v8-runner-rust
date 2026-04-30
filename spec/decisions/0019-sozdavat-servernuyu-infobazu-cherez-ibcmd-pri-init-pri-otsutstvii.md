@@ -88,8 +88,8 @@
    - не трактовать auth/network/permission errors как "базы нет";
    - сохранить EDT workspace step независимым от infobase step.
 4. Обновить документацию:
-   - `docs/decisions/README.md`;
-   - `docs/architecture/invariants.md`;
+   - `spec/decisions/README.md`;
+   - `spec/architecture/invariants.md`;
    - arc42 decisions / risks;
    - пользовательские docs после фактической реализации behavior.
 5. Обновить tests:

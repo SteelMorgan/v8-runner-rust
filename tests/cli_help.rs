@@ -48,6 +48,7 @@ fn launch_help_uses_output_path_name_and_global_json_selector() {
     assert!(stdout.contains("Global options:"));
     assert!(stdout.contains("--output <OUTPUT>"));
     assert!(!stdout.contains("--out <OUT>"));
+    assert!(!stdout.contains("--mode <MODE>"));
     assert!(stdout.contains("--json-message"));
 }
 
