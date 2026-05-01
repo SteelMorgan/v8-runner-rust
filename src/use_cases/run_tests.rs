@@ -5,10 +5,9 @@ use std::time::Instant;
 
 use regex::Regex;
 use serde::Serialize;
-use serde_json::{Map, Value};
 use uuid::Uuid;
 
-use crate::config::model::{AppConfig, VanessaProfileConfig};
+use crate::config::model::AppConfig;
 use crate::domain::artifact::ArtifactSet;
 use crate::domain::execution::{
     ExecutionMetrics, ExecutionOutcome, ExecutionStatus, ExecutionStepKind, StepResult,
@@ -22,11 +21,11 @@ use crate::parsers::junit;
 use crate::parsers::vanessa_log;
 use crate::parsers::yaxunit_log;
 use crate::support::error::AppError;
-use crate::support::path::is_safe_path_segment;
 use crate::use_cases::build_project;
 use crate::use_cases::context::ExecutionContext;
 use crate::use_cases::request::{BuildRequest as BuildArgs, TestRequest as TestArgs};
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
+use crate::use_cases::vanessa::{self, VanessaTestArtifacts};
 use tracing::debug;
 
 const STACK_TRACE_LIMIT: usize = 500;
@@ -173,101 +172,37 @@ fn prepare_vanessa_run(
     args: &TestArgs,
     artifacts: &mut RunArtifacts,
 ) -> Result<PreparedRun, AppError> {
-    let va = &config.tests.va;
-    let epf_path =
-        config.tools.va.epf_path.clone().ok_or_else(|| {
-            AppError::Validation("tools.va.epf_path is not configured".to_owned())
-        })?;
-    let params_path = va
-        .params_path
-        .as_ref()
-        .ok_or_else(|| AppError::Validation("tests.va.params_path is not configured".to_owned()))?;
     let profile_name = args.execution.profile.id.as_str();
-    if !is_safe_path_segment(profile_name) {
-        return Err(AppError::Validation(format!(
-            "tests.va.profile contains unsafe path characters: {profile_name}"
-        )));
-    }
-    let profile = va.profiles.get(profile_name).ok_or_else(|| {
-        AppError::Validation(format!(
-            "unknown Vanessa Automation profile '{profile_name}'"
-        ))
-    })?;
-
-    fs::create_dir_all(&artifacts.junit_dir)
-        .map_err(|error| AppError::Runtime(format!("failed to create JUnit directory: {error}")))?;
-
-    let runtime_params_path = artifacts.run_dir.join("va-params.json");
-    let runtime_params_payload_path =
-        crate::platform::enterprise::normalize_launch_payload_path(&runtime_params_path);
-    if runtime_params_payload_path.contains(';') {
-        return Err(AppError::Validation(
-            "generated Vanessa params path for test va must not contain ';' because the /C payload is semicolon-delimited".to_owned(),
-        ));
-    }
-    let base = fs::read_to_string(params_path).map_err(|error| {
-        AppError::Runtime(format!("failed to read Vanessa params template: {error}"))
-    })?;
-    let mut payload: Value = serde_json::from_str(&base).map_err(|error| {
-        AppError::Runtime(format!("failed to parse Vanessa params JSON: {error}"))
-    })?;
-    let object = payload
-        .as_object_mut()
-        .ok_or_else(|| AppError::Runtime("Vanessa params JSON must be an object".to_owned()))?;
-    apply_vanessa_overlay(object, profile, va.fail_fast, artifacts);
-    write_json_file(&runtime_params_path, &payload)
-        .map_err(|error| AppError::Runtime(format!("failed to write Vanessa params: {error}")))?;
-    artifacts.config_json = runtime_params_path.clone();
+    let launch = vanessa::prepare_test_launch(
+        config,
+        profile_name,
+        VanessaTestArtifacts {
+            run_dir: &artifacts.run_dir,
+            junit_dir: &artifacts.junit_dir,
+            runner_log: &artifacts.runner_log,
+        },
+    )?;
+    artifacts.config_json = launch.params_path.clone();
 
     Ok(PreparedRun::Vanessa {
-        epf_path,
-        params_path: runtime_params_path,
+        epf_path: launch.epf_path,
+        params_path: launch.params_path,
     })
 }
 
 fn materialize_vanessa_runner_log(artifacts: &RunArtifacts) -> Result<(), String> {
+    if artifacts
+        .runner_log
+        .metadata()
+        .is_ok_and(|metadata| metadata.len() > 0)
+    {
+        return Ok(());
+    }
     fs::copy(&artifacts.platform_log, &artifacts.runner_log).map_err(|error| {
         format!("failed to materialize Vanessa runner log from enterprise output: {error}")
     })?;
     set_file_permissions(&artifacts.runner_log)
         .map_err(|error| format!("failed to chmod Vanessa runner log: {error}"))
-}
-
-fn apply_vanessa_overlay(
-    object: &mut Map<String, Value>,
-    profile: &VanessaProfileConfig,
-    fail_fast: bool,
-    artifacts: &RunArtifacts,
-) {
-    object.insert("stoponerror".to_owned(), Value::Bool(fail_fast));
-    object.insert("junitcreatereport".to_owned(), Value::Bool(true));
-    object.insert(
-        "junitpath".to_owned(),
-        Value::String(artifacts.junit_dir.display().to_string()),
-    );
-
-    if let Some(feature_path) = profile.feature_path.as_ref() {
-        object.insert(
-            "featurepath".to_owned(),
-            Value::String(feature_path.display().to_string()),
-        );
-    }
-    insert_string_array_if_non_empty(object, "FeaturesToRun", &profile.features_to_run);
-    insert_string_array_if_non_empty(object, "filtertags", &profile.filter_tags);
-    insert_string_array_if_non_empty(object, "ignoretags", &profile.ignore_tags);
-    insert_string_array_if_non_empty(object, "scenariofilter", &profile.scenario_filter);
-}
-
-fn insert_string_array_if_non_empty(object: &mut Map<String, Value>, key: &str, values: &[String]) {
-    if values.is_empty() {
-        object.remove(key);
-        return;
-    }
-
-    object.insert(
-        key.to_owned(),
-        Value::Array(values.iter().cloned().map(Value::String).collect()),
-    );
 }
 
 fn parse_runner_log(
@@ -709,6 +644,20 @@ mod tests {
 
         let copied = std::fs::read(&artifacts.runner_log).expect("read runner log");
         assert_eq!(copied, payload);
+    }
+
+    #[test]
+    fn materialize_vanessa_runner_log_falls_back_when_runner_log_is_empty() {
+        let dir = tempdir().expect("tempdir");
+        let artifacts = create_artifacts(dir.path());
+        std::fs::create_dir_all(&artifacts.run_dir).expect("run dir");
+        std::fs::write(&artifacts.platform_log, b"enterprise /Out").expect("write platform log");
+        std::fs::write(&artifacts.runner_log, b"").expect("write empty runner log");
+
+        materialize_vanessa_runner_log(&artifacts).expect("materialize log");
+
+        let copied = std::fs::read(&artifacts.runner_log).expect("read runner log");
+        assert_eq!(copied, b"enterprise /Out");
     }
 
     #[test]

@@ -403,13 +403,13 @@ pub(super) fn build_platform_launch(
             epf_path,
             params_path,
         } => {
-            launch.execute = Some(crate::platform::enterprise::normalize_launch_payload_path(
-                epf_path,
-            ));
-            launch.c = Some(format!(
-                "StartFeaturePlayer;VAParams={}",
-                crate::platform::enterprise::normalize_launch_payload_path(params_path)
-            ));
+            launch = crate::use_cases::vanessa::apply_test_player_launch(
+                base,
+                &crate::use_cases::vanessa::VanessaLaunch {
+                    epf_path: epf_path.clone(),
+                    params_path: params_path.clone(),
+                },
+            );
         }
     }
     launch

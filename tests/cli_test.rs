@@ -122,7 +122,7 @@ fn write_va_test_script(
     exit_code: i32,
 ) {
     let body = format!(
-        "printf '%s\\n' \"$*\" >> '{}'\npayload=\"\"\nout=\"\"\nexecute=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/C\" ]; then payload=\"$arg\"; fi\n  case \"$arg\" in /C*) payload=\"${{arg#/C}}\" ;; esac\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  if [ \"$prev\" = \"/Execute\" ]; then execute=\"$arg\"; fi\n  prev=\"$arg\"\ndone\ncfg=$(printf '%s' \"$payload\" | sed 's/^\"//; s/\"$//; s/^StartFeaturePlayer;VAParams=//')\ncp \"$cfg\" '{}'\nreport_dir=$(python3 - <<'PY' \"$cfg\"\nimport json, sys\nwith open(sys.argv[1], 'r', encoding='utf-8') as fh:\n    data = json.load(fh)\nprint(data['junitpath'])\nPY\n)\nmkdir -p \"$report_dir\" \"$(dirname \"$out\")\"\ncat <<'XML' > \"$report_dir/result.xml\"\n{}\nXML\nprintf 'va execute=%s\\n' \"$execute\" > \"$out\"\nexit {}",
+        "printf '%s\\n' \"$*\" >> '{}'\npayload=\"\"\nout=\"\"\nexecute=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/C\" ]; then payload=\"$arg\"; fi\n  case \"$arg\" in /C*) payload=\"${{arg#/C}}\" ;; esac\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  if [ \"$prev\" = \"/Execute\" ]; then execute=\"$arg\"; fi\n  prev=\"$arg\"\ndone\ncfg=$(printf '%s' \"$payload\" | sed 's/^\"//; s/\"$//; s/^StartFeaturePlayer;VAParams=//')\ncp \"$cfg\" '{}'\nreport_dir=$(python3 - <<'PY' \"$cfg\"\nimport json, sys\nwith open(sys.argv[1], 'r', encoding='utf-8') as fh:\n    data = json.load(fh)\nprint(data['КаталогВыгрузкиJUnit'])\nPY\n)\ntext_log=$(python3 - <<'PY' \"$cfg\"\nimport json, sys\nwith open(sys.argv[1], 'r', encoding='utf-8') as fh:\n    data = json.load(fh)\nprint(data['ИмяФайлаЛогВыполненияСценариев'])\nPY\n)\nmkdir -p \"$report_dir\" \"$(dirname \"$out\")\" \"$(dirname \"$text_log\")\"\ncat <<'XML' > \"$report_dir/result.xml\"\n{}\nXML\nprintf 'va execute=%s\\n' \"$execute\" > \"$out\"\nprintf 'INFO ok\\nОшибка VA из текстового лога\\n' > \"$text_log\"\nexit {}",
         calls_log.display(),
         captured_params.display(),
         report_xml,
@@ -755,24 +755,42 @@ fn test_va_builds_vanessa_command_and_overlay() {
     let params: Value =
         serde_json::from_slice(&fs::read(captured_params).expect("params")).expect("params json");
     assert_eq!(params["existing"], true);
-    assert_eq!(params["stoponerror"], true);
-    assert_eq!(params["junitcreatereport"], true);
-    assert!(params["junitpath"]
+    assert_eq!(params["ОстановкаПриВозникновенииОшибки"], true);
+    assert_eq!(params["ВыполнитьСценарии"], true);
+    assert_eq!(params["ЗавершитьРаботуСистемы"], true);
+    assert_eq!(params["ДелатьОтчетВФорматеjUnit"], true);
+    assert!(params["КаталогВыгрузкиJUnit"]
         .as_str()
-        .expect("junitpath")
+        .expect("КаталогВыгрузкиJUnit")
         .contains("/junit"));
-    assert!(params["featurepath"]
+    assert_eq!(params["ДелатьЛогВыполненияСценариевВТекстовыйФайл"], true);
+    assert_eq!(params["ВыводитьВЛогВыполнениеШагов"], true);
+    assert_eq!(params["ПодробныйЛогВыполненияСценариев"], 1);
+    assert_eq!(params["ВыгружатьСтатусВыполненияСценариевВФайл"], true);
+    assert!(params["ПутьКФайлуДляВыгрузкиСтатусаВыполненияСценариев"]
         .as_str()
-        .expect("featurepath")
+        .expect("status path")
+        .ends_with("/va-status.log"));
+    assert!(params["ИмяФайлаЛогВыполненияСценариев"]
+        .as_str()
+        .expect("text log path")
+        .ends_with("/runner.log"));
+    assert!(params["КаталогФич"]
+        .as_str()
+        .expect("КаталогФич")
         .contains("/features/smoke"));
-    assert_eq!(params["FeaturesToRun"][0], "login");
-    assert_eq!(params["filtertags"][0], "@smoke");
-    assert_eq!(params["ignoretags"][0], "@draft");
-    assert_eq!(params["scenariofilter"][0], "Проверка логина");
+    assert_eq!(params["СписокФичДляВыполнения"][0], "login");
+    assert_eq!(params["СписокТеговОтбор"][0], "@smoke");
+    assert_eq!(params["СписокТеговИсключение"][0], "@draft");
+    assert_eq!(params["СписокСценариевДляВыполнения"][0], "Проверка логина");
 
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["data"]["report"]["summary"]["total"], 1);
+    assert_eq!(
+        payload["data"]["report"]["extracted_errors"][0],
+        "Ошибка VA из текстового лога"
+    );
 }
 
 #[test]

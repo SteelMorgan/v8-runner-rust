@@ -44,5 +44,7 @@ pub(crate) mod source_inventory;
 mod staged_publication;
 /// Shared transport-neutral adapter helpers used by CLI and MCP boundaries.
 pub mod transport;
+/// Shared Vanessa Automation launch and runtime params helpers.
+pub(crate) mod vanessa;
 /// Shared locking for commands that mutate the same workspace.
 pub mod workspace_lock;

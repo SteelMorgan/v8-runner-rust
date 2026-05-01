@@ -425,9 +425,26 @@ fn launch_mcp_va_builds_payload_from_configured_port_and_ordinary_mode() {
     let params = fs::read_to_string(params_path).expect("runtime params");
     let params_json: Value = serde_json::from_str(&params).expect("runtime params JSON");
     assert_eq!(params_json["existing"], true);
-    assert_eq!(params_json["stoponerror"], true);
-    assert_eq!(params_json["FeaturesToRun"][0], "login");
-    assert_eq!(params_json["filtertags"][0], "@smoke");
+    assert_eq!(params_json["ОстановкаПриВозникновенииОшибки"], true);
+    assert_eq!(params_json["СписокФичДляВыполнения"][0], "login");
+    assert_eq!(params_json["СписокТеговОтбор"][0], "@smoke");
+    assert_eq!(
+        params_json["ДелатьЛогВыполненияСценариевВТекстовыйФайл"],
+        true
+    );
+    assert_eq!(params_json["ВыводитьВЛогВыполнениеШагов"], true);
+    assert_eq!(params_json["ПодробныйЛогВыполненияСценариев"], 1);
+    assert_eq!(params_json["ВыгружатьСтатусВыполненияСценариевВФайл"], true);
+    assert!(
+        params_json["ПутьКФайлуДляВыгрузкиСтатусаВыполненияСценариев"]
+            .as_str()
+            .expect("status path")
+            .ends_with("/va-status.log")
+    );
+    assert!(params_json["ИмяФайлаЛогВыполненияСценариев"]
+        .as_str()
+        .expect("text log path")
+        .ends_with("/va-text.log"));
     assert_eq!(
         fs::metadata(params_path)
             .expect("params metadata")
