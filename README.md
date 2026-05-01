@@ -20,6 +20,8 @@ AI-агентам безопасную, уже ограниченную MCP-по
 - Изолированный `workPath` для hash storages (хранилищ хэшей), логов, временных файлов и
   промежуточных артефактов.
 
+![test-yaxunit](docs/assets/test-yaxunit.png)
+
 ## Быстрый старт
 
 Соберите release binary (релизный бинарный файл):
@@ -30,7 +32,7 @@ cargo build --release
 
 Команда компилирует `v8-runner` в `target/release/v8-runner`.
 
-Создайте стартовый config (конфиг) в текущем репозитории:
+### Создайте стартовый config (конфиг) в текущем репозитории:
 
 ```bash
 v8-runner config init
@@ -39,7 +41,7 @@ v8-runner config init
 Команда анализирует структуру проекта, находит поддержанные `source-set` (наборы исходников) и
 создает `v8project.yaml`.
 
-Подготовьте рабочую информационную базу:
+### Подготовьте рабочую информационную базу:
 
 ```bash
 v8-runner init
@@ -47,7 +49,7 @@ v8-runner init
 
 Команда создает или подготавливает ИБ и, для `EDT`, импортирует workspace (рабочую область).
 
-Загрузите исходники в ИБ:
+### Загрузите исходники в ИБ:
 
 ```bash
 v8-runner build
@@ -56,7 +58,7 @@ v8-runner build
 Команда выполняет incremental build (инкрементальную сборку) или full path (полную сборку) по
 текущим изменениям и настройкам проекта.
 
-Проверьте синтаксис серверных модулей:
+### Проверьте синтаксис серверных модулей:
 
 ```bash
 v8-runner syntax designer-modules --server
@@ -65,13 +67,13 @@ v8-runner syntax designer-modules --server
 Команда запускает Designer syntax check (проверку синтаксиса Конфигуратором) для серверного
 контекста.
 
-Запустите YAxUnit-тесты:
+### Запустите YAxUnit-тесты:
 
 ```bash
 v8-runner test yaxunit all
 ```
 
-Или тесты Vanessa Automation:
+### Или тесты Vanessa Automation:
 
 ```bash
 v8-runner test va
@@ -85,7 +87,7 @@ v8-runner test va
 v8-runner launch mcp va
 ```
 
-Поднимите MCP transport (MCP-транспорт) для AI-агентов:
+### Поднимите MCP transport (MCP-транспорт) для AI-агентов:
 
 ```bash
 v8-runner mcp serve stdio
