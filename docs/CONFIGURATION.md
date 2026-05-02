@@ -451,6 +451,9 @@ runtime identity и не добавляет отдельное поле конф
 `tools.client_mcp.extension` не добавляется в `source-set` и не выбирается через `--source-set`.
 `init` импортирует EDT `source` в workspace, `build` подготавливает расширение после project
 source-set build, а `launch mcp` и `launch mcp va` расширение не устанавливают и не обновляют.
+Для `source` build хранит отдельный snapshot под `workPath/hash-storages`: повторный запуск с
+неизменёнными исходниками пропускает export/load, а `build --full-rebuild` принудительно
+обновляет расширение.
 
 ### `tools.va`
 

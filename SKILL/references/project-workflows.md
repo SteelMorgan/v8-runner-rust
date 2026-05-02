@@ -42,7 +42,7 @@ v8-runner build --full-rebuild
 
 `build` is a common workflow. For EDT projects it may export EDT sources to Designer files before applying them through the configured backend. For Designer projects it applies Designer sources directly through the configured backend.
 
-If `tools.client_mcp.extension` is configured, `build` also prepares that tool extension after the project source-set stage, including scoped `--source-set` builds. Do not add it as a project `source-set` or select it with `--source-set`.
+If `tools.client_mcp.extension` is configured, `build` also prepares that tool extension after the project source-set stage, including scoped `--source-set` builds. Source-backed tool extensions use their own change-detection state and are skipped when unchanged; use `build --full-rebuild` to force refresh. Do not add a tool extension as a project `source-set` or select it with `--source-set`.
 
 ## Syntax
 

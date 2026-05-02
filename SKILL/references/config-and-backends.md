@@ -30,7 +30,7 @@ settings before CLI overrides.
 - `dump --mode partial` with IBCMD degrades to incremental dump and must be called out in user-facing summaries.
 - `convert` is CLI-only, repo-aware, uses configured `source-set`, does not use `builder`, and does not require an infobase.
 - `load` supports `.cf` and `.cfe` only for `format=DESIGNER`, `builder=DESIGNER`.
-- `tools.client_mcp.extension.source` is prepared during `build`; `.artifact.path` must point to `.cfe` and currently requires `builder=DESIGNER`.
+- `tools.client_mcp.extension.source` is prepared during `build`, skipped when unchanged, and refreshed by `build --full-rebuild`; `.artifact.path` must point to `.cfe` and currently requires `builder=DESIGNER`.
 - `make` / `artifacts` require `builder=DESIGNER` and publish `.cf`, `.cfe`, `.epf`, or `.erf` depending on target/source-set.
 
 ## Source-Set Notes

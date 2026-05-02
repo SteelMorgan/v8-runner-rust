@@ -2,11 +2,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::change_detection::analyzer::{self, AnalysisOutcome};
+use crate::change_detection::hash_storage::{HashStorage, StorageError};
 use crate::config::model::{
     AppConfig, BuilderBackend, SourceFormat, ToolExtensionConfig, ToolExtensionInput,
     ToolExtensionSourceConfig,
 };
 use crate::domain::build::{BuildMode, BuildStep};
+use crate::domain::source_set::SourceSetContext;
 use crate::platform::designer::DesignerDsl;
 use crate::platform::edt::EdtDsl;
 use crate::platform::edt_session::{EdtSessionHostOptions, EdtSessionManager};
@@ -48,11 +51,12 @@ pub(crate) fn client_mcp_edt_source_path(config: &AppConfig) -> Option<PathBuf> 
 pub(crate) fn prepare_client_mcp_extension(
     context: &ExecutionContext,
     config: &AppConfig,
+    full_rebuild: bool,
 ) -> Result<Option<BuildStep>, ToolExtensionFailure> {
     let Some(extension) = client_mcp_extension(config) else {
         return Ok(None);
     };
-    prepare_extension(context, config, extension)
+    prepare_extension(context, config, extension, full_rebuild)
         .map(Some)
         .map_err(|error| {
             let message = error.to_string();
@@ -67,6 +71,7 @@ fn prepare_extension(
     context: &ExecutionContext,
     config: &AppConfig,
     extension: &ToolExtensionConfig,
+    full_rebuild: bool,
 ) -> Result<BuildStep, AppError> {
     let started = Instant::now();
 
@@ -76,9 +81,15 @@ fn prepare_extension(
 
     let mut utilities = PlatformUtilities::from_config(config);
     match &extension.input {
-        ToolExtensionInput::Source(source) => {
-            prepare_source_extension(context, config, extension, source, &mut utilities, started)
-        }
+        ToolExtensionInput::Source(source) => prepare_source_extension(
+            context,
+            config,
+            extension,
+            source,
+            &mut utilities,
+            started,
+            full_rebuild,
+        ),
         ToolExtensionInput::Artifact(artifact) => {
             prepare_artifact_extension(context, config, extension, &artifact.path, &mut utilities)?;
             Ok(successful_build_step(
@@ -100,23 +111,152 @@ fn prepare_source_extension(
     source: &ToolExtensionSourceConfig,
     utilities: &mut PlatformUtilities,
     started: Instant,
+    full_rebuild: bool,
 ) -> Result<BuildStep, AppError> {
+    let source_context = tool_extension_source_context(config, extension, source)?;
+    if full_rebuild {
+        prepare_source_extension_full(context, config, extension, source, utilities)?;
+        commit_tool_extension_full_rescan(&source_context, &config.work_path, true)?;
+        return Ok(successful_build_step(
+            extension,
+            format!("prepared tool extension '{}' from sources", extension.name),
+            started.elapsed().as_millis() as u64,
+        ));
+    }
+
+    let outcome = match analyzer::analyze_context(&source_context, &config.work_path).outcome {
+        Ok(outcome) => outcome,
+        Err(error) if storage_needs_recovery(&source_context, &config.work_path) => {
+            prepare_source_extension_full(context, config, extension, source, utilities)?;
+            commit_tool_extension_full_rescan(&source_context, &config.work_path, true)?;
+            return Ok(successful_build_step(
+                extension,
+                format!("prepared tool extension '{}' from sources", extension.name),
+                started.elapsed().as_millis() as u64,
+            ));
+        }
+        Err(error) => return Err(AppError::Runtime(error.to_string())),
+    };
+
+    match outcome {
+        AnalysisOutcome::NoChanges => Ok(skipped_build_step(
+            extension,
+            "no changes".to_owned(),
+            started.elapsed().as_millis() as u64,
+        )),
+        AnalysisOutcome::Fallback => {
+            prepare_source_extension_full(context, config, extension, source, utilities)?;
+            commit_tool_extension_full_rescan(&source_context, &config.work_path, false)?;
+            Ok(successful_build_step(
+                extension,
+                format!("prepared tool extension '{}' from sources", extension.name),
+                started.elapsed().as_millis() as u64,
+            ))
+        }
+        AnalysisOutcome::Changes { prepared, .. } => {
+            prepare_source_extension_full(context, config, extension, source, utilities)?;
+            analyzer::commit_success(&source_context, &config.work_path, &prepared)
+                .map_err(|error| AppError::Runtime(error.to_string()))?;
+            Ok(successful_build_step(
+                extension,
+                format!("prepared tool extension '{}' from sources", extension.name),
+                started.elapsed().as_millis() as u64,
+            ))
+        }
+    }
+}
+
+fn prepare_source_extension_full(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    extension: &ToolExtensionConfig,
+    source: &ToolExtensionSourceConfig,
+    utilities: &mut PlatformUtilities,
+) -> Result<(), AppError> {
     match source.format.unwrap_or(config.format) {
         SourceFormat::Designer => {
-            prepare_designer_source_extension(context, config, extension, &source.path, utilities)?
+            prepare_designer_source_extension(context, config, extension, &source.path, utilities)
         }
         SourceFormat::Edt => {
             let exported =
                 export_edt_source_extension(context, config, extension, &source.path, utilities)?;
-            prepare_designer_source_extension(context, config, extension, &exported, utilities)?;
+            prepare_designer_source_extension(context, config, extension, &exported, utilities)
         }
     }
+}
 
-    Ok(successful_build_step(
-        extension,
-        format!("prepared tool extension '{}' from sources", extension.name),
-        started.elapsed().as_millis() as u64,
+fn tool_extension_source_context(
+    config: &AppConfig,
+    extension: &ToolExtensionConfig,
+    source: &ToolExtensionSourceConfig,
+) -> Result<SourceSetContext, AppError> {
+    let base_path = absolutize_path(&config.base_path)?;
+    let source_path = if source.path.is_absolute() {
+        source.path.clone()
+    } else {
+        base_path.join(&source.path)
+    };
+    Ok(SourceSetContext::new(
+        format!("tool:{}", extension.name),
+        source_path,
+        format!("tool-{}-source", extension.name),
     ))
+}
+
+fn absolutize_path(path: &Path) -> Result<PathBuf, AppError> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+
+    std::env::current_dir()
+        .map(|current_dir| current_dir.join(path))
+        .map_err(|error| AppError::Runtime(format!("failed to resolve current directory: {error}")))
+}
+
+fn commit_tool_extension_full_rescan(
+    context: &SourceSetContext,
+    work_path: &Path,
+    recover_storage: bool,
+) -> Result<(), AppError> {
+    match analyzer::rescan_and_commit_full(context, work_path) {
+        Ok(()) => Ok(()),
+        Err(_error) if recover_storage && storage_needs_recovery(context, work_path) => {
+            let storage_path = context.storage_path(work_path);
+            remove_storage_path(&storage_path).map_err(|remove_error| {
+                AppError::Runtime(format!(
+                    "failed to remove corrupt storage '{}': {remove_error}",
+                    storage_path.display()
+                ))
+            })?;
+            analyzer::rescan_and_commit_full(context, work_path)
+                .map_err(|retry_error| AppError::Runtime(retry_error.to_string()))
+        }
+        Err(error) => Err(AppError::Runtime(error.to_string())),
+    }
+}
+
+fn storage_needs_recovery(context: &SourceSetContext, work_path: &Path) -> bool {
+    match HashStorage::new(context.storage_path(work_path)).current_generation() {
+        Err(StorageError::Recoverable { .. }) => true,
+        Err(StorageError::Hard { reason, .. }) => {
+            let reason = reason.to_ascii_lowercase();
+            reason.contains("invalid data") || reason.contains("corrupt")
+        }
+        Err(StorageError::ConcurrentStateModified { .. }) | Ok(_) => false,
+    }
+}
+
+fn remove_storage_path(path: &Path) -> std::io::Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    }
 }
 
 fn prepare_designer_source_extension(
@@ -474,6 +614,20 @@ fn successful_build_step(
     BuildStep {
         source_set: format!("tool:{}", extension.name),
         mode: BuildMode::Full,
+        ok: true,
+        message: Some(message),
+        duration_ms,
+    }
+}
+
+fn skipped_build_step(
+    extension: &ToolExtensionConfig,
+    message: String,
+    duration_ms: u64,
+) -> BuildStep {
+    BuildStep {
+        source_set: format!("tool:{}", extension.name),
+        mode: BuildMode::Skipped,
         ok: true,
         message: Some(message),
         duration_ms,

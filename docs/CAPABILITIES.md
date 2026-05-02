@@ -119,6 +119,9 @@ v8-runner build [--source-set <NAME>] [--full-rebuild]
   `tools.client_mcp.extension`, если оно настроено: `source` загружается как extension из
   исходников, `.cfe` `artifact` загружается как extension с именем
   `tools.client_mcp.extension.name`.
+- Для source-backed `tools.client_mcp.extension` использует отдельное состояние change detection
+  под `workPath/hash-storages`: неизменённый source пропускает export/load, `--full-rebuild`
+  принудительно обновляет расширение.
 - `tools.client_mcp.extension` не является project `source-set`; `--source-set` выбирает только
   project source-set.
 - Не является атомарной multi-source-set операцией: ранние успешные шаги не откатываются, если

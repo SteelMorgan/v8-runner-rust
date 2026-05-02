@@ -63,7 +63,7 @@ v8-runner init
 
 - Source files changed and infobase may be stale: run `v8-runner build`.
 - Only one source-set changed: use commands that accept `--source-set <NAME>` instead of rebuilding or materializing everything.
-- Branch switch, rebase, large object moves, or suspicious incremental state: run `v8-runner build --full-rebuild`.
+- Branch switch, rebase, large object moves, stale source-backed tool extension state, or suspicious incremental state: run `v8-runner build --full-rebuild`.
 - Syntax check: inspect `format` and `builder`, then choose `syntax designer-modules`, `syntax designer-config`, or `syntax edt`.
 - Behavior validation: run the relevant `v8-runner test ...` command; tests build first.
 - Vanessa Automation debugging or scenario authoring: use `v8-runner launch mcp va ...` to start the client MCP server with VA loaded.

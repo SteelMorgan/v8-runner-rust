@@ -3,7 +3,7 @@
 mod support;
 
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::mpsc;
@@ -73,6 +73,14 @@ fn write_edt_script(path: &Path, calls_log: &Path) {
         calls_log.display()
     );
     write_script(path, &body);
+}
+
+fn remove_file_if_exists(path: &Path) {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => panic!("failed to remove '{}': {error}", path.display()),
+    }
 }
 
 fn write_native_edt_project(
@@ -1097,6 +1105,117 @@ fn test_module_edt_extension_build_uses_full_load_before_enterprise_launch() {
         payload["data"]["target"]["module"]["name"],
         "ClientMcpSmoke"
     );
+}
+
+#[test]
+fn repeated_test_skips_unchanged_source_backed_tool_extension_build() {
+    let dir = temp_workspace();
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    let install_dir = dir.path().join("platform");
+    let edt_cli_path = dir.path().join("edt").join("1cedtcli");
+    let config_path = dir.path().join("v8project.yaml");
+    let build_calls = dir.path().join("build.calls.log");
+    let test_calls = dir.path().join("test.calls.log");
+    let edt_calls = dir.path().join("edt.calls.log");
+    let captured_config = dir.path().join("captured-config.json");
+    let tool_source = base_path.join("tools").join("client-mcp");
+
+    fs::create_dir_all(&work_path).expect("work");
+    write_native_edt_project(
+        &base_path.join("configuration"),
+        "configuration",
+        V8_CONFIGURATION_NATURE,
+        None,
+    );
+    write_native_edt_project(
+        &tool_source,
+        "client-mcp-project",
+        V8_EXTENSION_NATURE,
+        Some("configuration"),
+    );
+
+    write_build_script(&install_dir.join("bin").join("1cv8"), &build_calls, false);
+    write_test_script(
+        &install_dir.join("bin").join("1cv8c"),
+        &test_calls,
+        &captured_config,
+        JUNIT_SMOKE_REPORT_FIXTURE,
+        YAXUNIT_LOG_FIXTURE,
+        0,
+        None,
+    );
+    write_edt_script(&edt_cli_path, &edt_calls);
+
+    let config = format!(
+        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\ntests:\n  execution_timeout_seconds: 5\nsource-set:\n  - name: configuration\n    type: CONFIGURATION\n    path: configuration\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n  client_mcp:\n    extension:\n      name: client_mcp\n      source:\n        path: '{}'\n        format: EDT\n",
+        base_path.display(),
+        work_path.display(),
+        install_dir.display(),
+        edt_cli_path.display(),
+        tool_source.display(),
+    );
+    fs::write(&config_path, config).expect("config");
+
+    let first = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--json-message",
+            "test",
+            "yaxunit",
+            "all",
+        ])
+        .output()
+        .expect("first test");
+    assert!(
+        first.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        first.status.code(),
+        String::from_utf8_lossy(&first.stdout),
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(fs::read_to_string(&edt_calls)
+        .expect("first edt calls")
+        .contains("export --project-name client-mcp-project"));
+    assert!(fs::read_to_string(&build_calls)
+        .expect("first build calls")
+        .contains("-Extension client_mcp"));
+
+    remove_file_if_exists(&build_calls);
+    remove_file_if_exists(&edt_calls);
+    remove_file_if_exists(&test_calls);
+
+    let second = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--json-message",
+            "test",
+            "yaxunit",
+            "all",
+        ])
+        .output()
+        .expect("second test");
+
+    assert!(
+        second.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        second.status.code(),
+        String::from_utf8_lossy(&second.stdout),
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(
+        !edt_calls.exists(),
+        "unchanged nested test build must not run EDT export"
+    );
+    assert!(
+        !build_calls.exists(),
+        "unchanged nested test build must not load/apply tool extension"
+    );
+    assert!(fs::read_to_string(&test_calls)
+        .expect("second test calls")
+        .contains("RunUnitTests="));
 }
 
 #[test]

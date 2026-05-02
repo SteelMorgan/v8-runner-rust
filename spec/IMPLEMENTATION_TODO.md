@@ -4,44 +4,9 @@ This file tracks open implementation work only.
 
 ## Current Status
 
-- Open tasks as of `2026-05-02`: 2.
+- Open tasks as of `2026-05-03`: 1.
 
 ## Open Tasks
-
-### T24: Skip unchanged source-backed tool extension preparation
-
-Status: open.
-
-Trigger: in `/home/alko/develop/open-source/rat`, `v8project.local.yaml` configures
-`tools.client_mcp.extension.source.path` as an external EDT source directory. Each `test` command
-performs the nested `build` and currently reaches `build: tool extension edt export` on every run,
-even when that source directory is unchanged.
-
-Scope:
-
-- Apply the same on-demand change detection behavior to `tools.client_mcp.extension.source` that
-  project `source-set` paths already use for EDT export decisions.
-- Keep `tools.client_mcp.extension` outside project `source-set`; do not make it selectable by
-  `--source-set`.
-- Add a stable tool-extension change-detection context under `workPath/hash-storages` so unchanged
-  source-backed tool extensions skip EDT export and load during `build` and nested `test -> build`.
-- Preserve conservative behavior for `--full-rebuild`, missing/corrupt state, and recoverable scan
-  errors: full export/load is allowed, but successful state must be committed only after successful
-  platform steps.
-- Leave artifact-backed `.cfe` handling out of this task unless implementation evidence shows the
-  same change-detection helper can cover it without changing the public contract.
-- Update docs and `SKILL/SKILL.md` only after implementation, so external guidance describes the
-  shipped behavior rather than this planned target.
-
-Acceptance:
-
-- Repeated `v8-runner test ...` in a project like `rat` with unchanged
-  `tools.client_mcp.extension.source.path` does not run `build: tool extension edt export`.
-- Changing a file under the tool-extension source path triggers EDT export and extension load on the
-  next `build` or nested `test -> build`.
-- `v8-runner build --full-rebuild` bypasses the tool-extension analysis and refreshes the extension.
-- Tests cover no-change skip, changed-source export, full-rebuild refresh, and failed export not
-  committing the prepared tool-extension snapshot.
 
 ### T25: Generate JSON Schema field descriptions and remove config aliases
 
@@ -98,3 +63,5 @@ Acceptance:
   closed local config overlay task.
 - [spec/archive/completed-tasks-t23.md](archive/completed-tasks-t23.md):
   closed YAML schema support for config editing.
+- [spec/archive/completed-tasks-t24.md](archive/completed-tasks-t24.md):
+  closed source-backed tool extension change-detection task.

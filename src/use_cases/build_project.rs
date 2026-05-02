@@ -124,7 +124,7 @@ fn run_build_designer(
 ) -> Result<BuildResult, BuildExecutionFailure> {
     let started = Instant::now();
     let mut result = coordinator::run_build_designer(context, config, args)?;
-    append_client_mcp_extension_step(context, config, started, &mut result)?;
+    append_client_mcp_extension_step(context, config, args, started, &mut result)?;
     Ok(result)
 }
 
@@ -135,7 +135,7 @@ fn run_build_ibcmd(
 ) -> Result<BuildResult, BuildExecutionFailure> {
     let started = Instant::now();
     let mut result = coordinator::run_build_ibcmd(context, config, args)?;
-    append_client_mcp_extension_step(context, config, started, &mut result)?;
+    append_client_mcp_extension_step(context, config, args, started, &mut result)?;
     Ok(result)
 }
 
@@ -174,17 +174,18 @@ fn run_build_edt(
 ) -> Result<BuildResult, BuildExecutionFailure> {
     let started = Instant::now();
     let mut result = coordinator::run_build_edt(context, config, args)?;
-    append_client_mcp_extension_step(context, config, started, &mut result)?;
+    append_client_mcp_extension_step(context, config, args, started, &mut result)?;
     Ok(result)
 }
 
 fn append_client_mcp_extension_step(
     context: &ExecutionContext,
     config: &AppConfig,
+    args: &BuildArgs,
     started: Instant,
     result: &mut BuildResult,
 ) -> Result<(), BuildExecutionFailure> {
-    match tool_extension::prepare_client_mcp_extension(context, config) {
+    match tool_extension::prepare_client_mcp_extension(context, config, args.full_rebuild) {
         Ok(Some(step)) => {
             result.steps.push(step);
             result.duration_ms = started.elapsed().as_millis() as u64;
@@ -653,7 +654,7 @@ fn execute_source_set_step_ibcmd(
 #[cfg(test)]
 mod tests {
     use super::{run_build, BUILD_COMMAND};
-    use crate::change_detection::hash_storage::HashStorage;
+    use crate::change_detection::hash_storage::{HashStorage, FILES_MTIME};
     use crate::change_detection::source_sets::SourceSetsService;
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, PlatformToolConfig, SourceFormat, SourceSetConfig,
@@ -661,10 +662,12 @@ mod tests {
         ToolExtensionInput, ToolExtensionSourceConfig, ToolsConfig,
     };
     use crate::domain::build::BuildMode;
+    use crate::domain::source_set::SourceSetContext;
     use crate::use_cases::context::{CommandName, ExecutionContext};
     use crate::use_cases::request::BuildRequest as BuildArgs;
     use crate::use_cases::result::UseCaseErrorKind;
     use std::fs;
+    use std::io::ErrorKind;
     use std::path::{Path, PathBuf};
     use std::thread;
     use std::time::Duration;
@@ -1105,6 +1108,41 @@ mod tests {
         .expect("ext bsl");
     }
 
+    fn create_edt_tool_extension_source(path: &Path) {
+        fs::create_dir_all(path.join("DT-INF")).expect("tool dt-inf");
+        fs::create_dir_all(path.join("src").join("Configuration")).expect("tool src");
+        fs::write(
+            path.join(".project"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>client-mcp-project</name>\n  <natures>\n    <nature>com._1c.g5.v8.dt.core.V8ExtensionNature</nature>\n  </natures>\n</projectDescription>\n",
+        )
+        .expect("tool project");
+        fs::write(
+            path.join("DT-INF").join("PROJECT.PMF"),
+            "Base-Project: main\nManifest-Version: 1.0\nRuntime-Version: 8.3.27\n",
+        )
+        .expect("tool manifest");
+        fs::write(
+            path.join("src")
+                .join("Configuration")
+                .join("Configuration.mdo"),
+            "<Configuration />\n",
+        )
+        .expect("tool mdo");
+        fs::write(
+            path.join("src").join("Configuration").join("Module.bsl"),
+            "Procedure Test()\nEndProcedure\n",
+        )
+        .expect("tool module");
+    }
+
+    fn remove_file_if_exists(path: &Path) {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => panic!("failed to remove '{}': {error}", path.display()),
+        }
+    }
+
     #[test]
     fn edt_export_configuration_xml_check_applies_only_to_configuration_and_extension() {
         let source_set = |purpose| SourceSetConfig {
@@ -1213,6 +1251,42 @@ mod tests {
             .load_snapshot()
             .expect("snapshot")
             .generation
+    }
+
+    fn tool_extension_storage_generation(
+        config: &AppConfig,
+        source_path: &Path,
+        extension_name: &str,
+    ) -> u64 {
+        let storage_path = tool_extension_storage_path(config, source_path, extension_name);
+        HashStorage::new(storage_path)
+            .load_snapshot()
+            .expect("tool extension snapshot")
+            .generation
+    }
+
+    fn tool_extension_storage_path(
+        config: &AppConfig,
+        source_path: &Path,
+        extension_name: &str,
+    ) -> PathBuf {
+        let context = SourceSetContext::new(
+            format!("tool:{extension_name}"),
+            source_path.to_path_buf(),
+            format!("tool-{extension_name}-source"),
+        );
+        context.storage_path(&config.work_path)
+    }
+
+    fn write_recoverable_tool_extension_storage(path: &Path) {
+        remove_file_if_exists(path);
+        let db = redb::Database::create(path).expect("create recoverable storage");
+        let tx = db.begin_write().expect("begin recoverable storage write");
+        {
+            let mut table = tx.open_table(FILES_MTIME).expect("open mtime table");
+            table.insert("orphan.bsl", 1).expect("insert orphan mtime");
+        }
+        tx.commit().expect("commit recoverable storage");
     }
 
     fn edt_storage_generation(config: &AppConfig, source_set_name: &str) -> u64 {
@@ -1359,6 +1433,376 @@ mod tests {
         assert!(edt_calls_text.contains("tool-extensions/client_mcp"));
         assert!(designer_calls_text.contains("tool-extensions/client_mcp"));
         assert!(designer_calls_text.contains("-Extension client_mcp"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_skips_unchanged_edt_client_mcp_source_tool_extension() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let platform = dir.path().join("platform").join("bin").join("1cv8");
+        let edt = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer.calls.log");
+        let edt_calls = dir.path().join("edt.calls.log");
+        let tool_source = base.join("tool-client-mcp");
+        create_source_tree(&base);
+        create_edt_tool_extension_source(&tool_source);
+        write_designer_script(&platform, &designer_calls, None);
+        write_edt_script(&edt, &edt_calls, None);
+        let mut config = build_edt_config(&base, &work, &dir.path().join("platform"), &edt);
+        config.source_sets = vec![SourceSetConfig {
+            name: "main".to_owned(),
+            purpose: SourceSetPurpose::Configuration,
+            path: PathBuf::from("main"),
+        }];
+        config.tools.client_mcp.extension = Some(ToolExtensionConfig {
+            name: "client_mcp".to_owned(),
+            input: ToolExtensionInput::Source(ToolExtensionSourceConfig {
+                path: tool_source.clone(),
+                format: Some(SourceFormat::Edt),
+            }),
+        });
+
+        let first = run_build(&config, &build_args(false)).expect("first build");
+        assert!(first.ok);
+        assert_eq!(
+            tool_extension_storage_generation(&config, &tool_source, "client_mcp"),
+            1
+        );
+        remove_file_if_exists(&designer_calls);
+        remove_file_if_exists(&edt_calls);
+
+        let second = run_build(&config, &build_args(false)).expect("second build");
+
+        assert!(second.ok);
+        assert!(second.steps.iter().any(|step| {
+            step.source_set == "tool:client_mcp"
+                && matches!(step.mode, BuildMode::Skipped)
+                && step.ok
+                && step.message.as_deref() == Some("no changes")
+        }));
+        assert!(
+            !edt_calls.exists(),
+            "unchanged source must not invoke EDT export"
+        );
+        assert!(
+            !designer_calls.exists(),
+            "unchanged tool extension must not invoke load/apply"
+        );
+        assert_eq!(
+            tool_extension_storage_generation(&config, &tool_source, "client_mcp"),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_refreshes_changed_edt_client_mcp_source_tool_extension_and_commits_state() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let platform = dir.path().join("platform").join("bin").join("1cv8");
+        let edt = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer.calls.log");
+        let edt_calls = dir.path().join("edt.calls.log");
+        let tool_source = base.join("tool-client-mcp");
+        create_source_tree(&base);
+        create_edt_tool_extension_source(&tool_source);
+        write_designer_script(&platform, &designer_calls, None);
+        write_edt_script(&edt, &edt_calls, None);
+        let mut config = build_edt_config(&base, &work, &dir.path().join("platform"), &edt);
+        config.source_sets = vec![SourceSetConfig {
+            name: "main".to_owned(),
+            purpose: SourceSetPurpose::Configuration,
+            path: PathBuf::from("main"),
+        }];
+        config.tools.client_mcp.extension = Some(ToolExtensionConfig {
+            name: "client_mcp".to_owned(),
+            input: ToolExtensionInput::Source(ToolExtensionSourceConfig {
+                path: tool_source.clone(),
+                format: Some(SourceFormat::Edt),
+            }),
+        });
+        run_build(&config, &build_args(false)).expect("first build");
+        remove_file_if_exists(&designer_calls);
+        remove_file_if_exists(&edt_calls);
+
+        fs::write(
+            tool_source
+                .join("src")
+                .join("Configuration")
+                .join("Module.bsl"),
+            "Procedure Test()\n    // changed\nEndProcedure\n",
+        )
+        .expect("change tool module");
+
+        let second = run_build(&config, &build_args(false)).expect("second build");
+        let edt_calls_text = fs::read_to_string(&edt_calls).expect("edt calls");
+        let designer_calls_text = fs::read_to_string(&designer_calls).expect("designer calls");
+
+        assert!(second.ok);
+        assert!(second.steps.iter().any(|step| {
+            step.source_set == "tool:client_mcp" && matches!(step.mode, BuildMode::Full) && step.ok
+        }));
+        assert!(edt_calls_text.contains("--project-name client-mcp-project"));
+        assert!(edt_calls_text.contains("tool-extensions/client_mcp"));
+        assert!(designer_calls_text.contains("tool-extensions/client_mcp"));
+        assert!(designer_calls_text.contains("-Extension client_mcp"));
+        assert_eq!(
+            tool_extension_storage_generation(&config, &tool_source, "client_mcp"),
+            2
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn full_rebuild_refreshes_edt_client_mcp_source_tool_extension() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let platform = dir.path().join("platform").join("bin").join("1cv8");
+        let edt = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer.calls.log");
+        let edt_calls = dir.path().join("edt.calls.log");
+        let tool_source = base.join("tool-client-mcp");
+        create_source_tree(&base);
+        create_edt_tool_extension_source(&tool_source);
+        write_designer_script(&platform, &designer_calls, None);
+        write_edt_script(&edt, &edt_calls, None);
+        let mut config = build_edt_config(&base, &work, &dir.path().join("platform"), &edt);
+        config.source_sets = vec![SourceSetConfig {
+            name: "main".to_owned(),
+            purpose: SourceSetPurpose::Configuration,
+            path: PathBuf::from("main"),
+        }];
+        config.tools.client_mcp.extension = Some(ToolExtensionConfig {
+            name: "client_mcp".to_owned(),
+            input: ToolExtensionInput::Source(ToolExtensionSourceConfig {
+                path: tool_source.clone(),
+                format: Some(SourceFormat::Edt),
+            }),
+        });
+        run_build(&config, &build_args(false)).expect("first build");
+        remove_file_if_exists(&designer_calls);
+        remove_file_if_exists(&edt_calls);
+
+        let rebuild = run_build(&config, &build_args(true)).expect("full rebuild");
+        let edt_calls_text = fs::read_to_string(&edt_calls).expect("edt calls");
+        let designer_calls_text = fs::read_to_string(&designer_calls).expect("designer calls");
+
+        assert!(rebuild.ok);
+        assert!(edt_calls_text.contains("--project-name client-mcp-project"));
+        assert!(edt_calls_text.contains("tool-extensions/client_mcp"));
+        assert!(designer_calls_text.contains("tool-extensions/client_mcp"));
+        assert!(designer_calls_text.contains("-Extension client_mcp"));
+        assert_eq!(
+            tool_extension_storage_generation(&config, &tool_source, "client_mcp"),
+            2
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_edt_client_mcp_source_export_does_not_commit_tool_extension_state() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let platform = dir.path().join("platform").join("bin").join("1cv8");
+        let edt = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer.calls.log");
+        let edt_calls = dir.path().join("edt.calls.log");
+        let tool_source = base.join("tool-client-mcp");
+        create_source_tree(&base);
+        create_edt_tool_extension_source(&tool_source);
+        write_designer_script(&platform, &designer_calls, None);
+        write_edt_script(&edt, &edt_calls, None);
+        let mut config = build_edt_config(&base, &work, &dir.path().join("platform"), &edt);
+        config.source_sets = vec![SourceSetConfig {
+            name: "main".to_owned(),
+            purpose: SourceSetPurpose::Configuration,
+            path: PathBuf::from("main"),
+        }];
+        config.tools.client_mcp.extension = Some(ToolExtensionConfig {
+            name: "client_mcp".to_owned(),
+            input: ToolExtensionInput::Source(ToolExtensionSourceConfig {
+                path: tool_source.clone(),
+                format: Some(SourceFormat::Edt),
+            }),
+        });
+        run_build(&config, &build_args(false)).expect("first build");
+        assert_eq!(
+            tool_extension_storage_generation(&config, &tool_source, "client_mcp"),
+            1
+        );
+        write_edt_script(
+            &edt,
+            &edt_calls,
+            Some("export --project-name client-mcp-project"),
+        );
+
+        fs::write(
+            tool_source
+                .join("src")
+                .join("Configuration")
+                .join("Module.bsl"),
+            "Procedure Test()\n    // changed\nEndProcedure\n",
+        )
+        .expect("change tool module");
+
+        let failure = run_build(&config, &build_args(false)).expect_err("failed export");
+
+        assert!(failure.error.message().contains("tool extension"));
+        assert_eq!(
+            tool_extension_storage_generation(&config, &tool_source, "client_mcp"),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recoverable_tool_extension_storage_fallback_refreshes_and_commits_after_success() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let platform = dir.path().join("platform").join("bin").join("1cv8");
+        let edt = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer.calls.log");
+        let edt_calls = dir.path().join("edt.calls.log");
+        let tool_source = base.join("tool-client-mcp");
+        create_source_tree(&base);
+        create_edt_tool_extension_source(&tool_source);
+        write_designer_script(&platform, &designer_calls, None);
+        write_edt_script(&edt, &edt_calls, None);
+        let mut config = build_edt_config(&base, &work, &dir.path().join("platform"), &edt);
+        config.source_sets = vec![SourceSetConfig {
+            name: "main".to_owned(),
+            purpose: SourceSetPurpose::Configuration,
+            path: PathBuf::from("main"),
+        }];
+        config.tools.client_mcp.extension = Some(ToolExtensionConfig {
+            name: "client_mcp".to_owned(),
+            input: ToolExtensionInput::Source(ToolExtensionSourceConfig {
+                path: tool_source.clone(),
+                format: Some(SourceFormat::Edt),
+            }),
+        });
+        run_build(&config, &build_args(false)).expect("first build");
+        let storage_path = tool_extension_storage_path(&config, &tool_source, "client_mcp");
+        write_recoverable_tool_extension_storage(&storage_path);
+        remove_file_if_exists(&designer_calls);
+        remove_file_if_exists(&edt_calls);
+
+        let fallback = run_build(&config, &build_args(false)).expect("fallback build");
+        let edt_calls_text = fs::read_to_string(&edt_calls).expect("edt calls");
+        let designer_calls_text = fs::read_to_string(&designer_calls).expect("designer calls");
+
+        assert!(fallback.ok);
+        assert!(fallback.steps.iter().any(|step| {
+            step.source_set == "tool:client_mcp" && matches!(step.mode, BuildMode::Full) && step.ok
+        }));
+        assert!(edt_calls_text.contains("--project-name client-mcp-project"));
+        assert!(designer_calls_text.contains("-Extension client_mcp"));
+        assert_eq!(
+            tool_extension_storage_generation(&config, &tool_source, "client_mcp"),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_edt_client_mcp_source_load_does_not_commit_tool_extension_state() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let platform = dir.path().join("platform").join("bin").join("1cv8");
+        let edt = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer.calls.log");
+        let edt_calls = dir.path().join("edt.calls.log");
+        let tool_source = base.join("tool-client-mcp");
+        create_source_tree(&base);
+        create_edt_tool_extension_source(&tool_source);
+        write_designer_script(&platform, &designer_calls, None);
+        write_edt_script(&edt, &edt_calls, None);
+        let mut config = build_edt_config(&base, &work, &dir.path().join("platform"), &edt);
+        config.source_sets = vec![SourceSetConfig {
+            name: "main".to_owned(),
+            purpose: SourceSetPurpose::Configuration,
+            path: PathBuf::from("main"),
+        }];
+        config.tools.client_mcp.extension = Some(ToolExtensionConfig {
+            name: "client_mcp".to_owned(),
+            input: ToolExtensionInput::Source(ToolExtensionSourceConfig {
+                path: tool_source.clone(),
+                format: Some(SourceFormat::Edt),
+            }),
+        });
+        run_build(&config, &build_args(false)).expect("first build");
+        write_designer_script(&platform, &designer_calls, Some("/LoadConfigFromFiles"));
+        fs::write(
+            tool_source
+                .join("src")
+                .join("Configuration")
+                .join("Module.bsl"),
+            "Procedure Test()\n    // changed\nEndProcedure\n",
+        )
+        .expect("change tool module");
+
+        let failure = run_build(&config, &build_args(false)).expect_err("failed load");
+
+        assert!(failure.error.message().contains("tool extension"));
+        assert_eq!(
+            tool_extension_storage_generation(&config, &tool_source, "client_mcp"),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_edt_client_mcp_source_update_does_not_commit_tool_extension_state() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let platform = dir.path().join("platform").join("bin").join("1cv8");
+        let edt = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer.calls.log");
+        let edt_calls = dir.path().join("edt.calls.log");
+        let tool_source = base.join("tool-client-mcp");
+        create_source_tree(&base);
+        create_edt_tool_extension_source(&tool_source);
+        write_designer_script(&platform, &designer_calls, None);
+        write_edt_script(&edt, &edt_calls, None);
+        let mut config = build_edt_config(&base, &work, &dir.path().join("platform"), &edt);
+        config.source_sets = vec![SourceSetConfig {
+            name: "main".to_owned(),
+            purpose: SourceSetPurpose::Configuration,
+            path: PathBuf::from("main"),
+        }];
+        config.tools.client_mcp.extension = Some(ToolExtensionConfig {
+            name: "client_mcp".to_owned(),
+            input: ToolExtensionInput::Source(ToolExtensionSourceConfig {
+                path: tool_source.clone(),
+                format: Some(SourceFormat::Edt),
+            }),
+        });
+        run_build(&config, &build_args(false)).expect("first build");
+        write_designer_script(&platform, &designer_calls, Some("/UpdateDBCfg"));
+        fs::write(
+            tool_source
+                .join("src")
+                .join("Configuration")
+                .join("Module.bsl"),
+            "Procedure Test()\n    // changed\nEndProcedure\n",
+        )
+        .expect("change tool module");
+
+        let failure = run_build(&config, &build_args(false)).expect_err("failed update");
+
+        assert!(failure.error.message().contains("tool extension"));
+        assert_eq!(
+            tool_extension_storage_generation(&config, &tool_source, "client_mcp"),
+            1
+        );
     }
 
     #[cfg(unix)]
