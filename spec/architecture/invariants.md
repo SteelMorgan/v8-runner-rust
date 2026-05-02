@@ -170,5 +170,6 @@
 8. CLI `--json-message` и MCP `structured_content` используют общий machine-readable command envelope с core fields `ok`, `command`, `duration_ms`, `data`, `warnings`, `steps`; business failures may include optional structured `error`.
 9. MCP `CallToolResult`/`isError` и transport/internal `ErrorData` остаются protocol-level behavior и не заменяются command envelope.
 10. Envelope `command` использует canonical CLI command identity; MCP tool/scope identity сохраняется внутри `data`, если она нужна клиенту.
+11. Live text progress для long-running stages остаётся human-readable: может включать локальное время `HH:MM:SS` как краткий префикс строки, но не печатает structured field names вроде `started_at` и не вводит JSON/progress contract.
 
 См. [ADR-0010](../decisions/0010-razdelit-cli-output-dlya-cheloveka-i-ai-agenta.md).

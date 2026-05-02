@@ -3,7 +3,7 @@ use std::io::{self, Write as IoWrite};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use chrono::{SecondsFormat, Utc};
+use chrono::{Local, Utc};
 use thiserror::Error;
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::fmt::format::{FormatEvent, FormatFields, Writer};
@@ -239,20 +239,24 @@ impl CliEventFormatter {
             writeln!(writer)?;
         }
 
-        if status == "running" {
-            write_timeline_pipe(writer)?;
-            write!(writer, "   ")?;
-            write_timeline_detail(writer, &running_started_at_detail())?;
-            writeln!(writer)?;
-        }
+        let running_started_at = (status == "running").then(running_started_at_detail);
 
         if let Some(detail) = detail.filter(|value| !value.trim().is_empty()) {
             for line in detail.lines() {
                 write_timeline_pipe(writer)?;
                 write!(writer, "   ")?;
+                if let Some(started_at) = running_started_at.as_deref() {
+                    write_timeline_timestamp(writer, started_at)?;
+                    write!(writer, "  ")?;
+                }
                 write_timeline_detail(writer, line.trim())?;
                 writeln!(writer)?;
             }
+        } else if let Some(started_at) = running_started_at.as_deref() {
+            write_timeline_pipe(writer)?;
+            write!(writer, "   ")?;
+            write_timeline_timestamp(writer, started_at)?;
+            writeln!(writer)?;
         }
 
         Ok(())
@@ -260,10 +264,7 @@ impl CliEventFormatter {
 }
 
 fn running_started_at_detail() -> String {
-    format!(
-        "started_at: {}",
-        Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
-    )
+    Local::now().format("%H:%M:%S").to_string()
 }
 
 fn write_timeline_pipe(writer: &mut Writer<'_>) -> std::fmt::Result {
@@ -336,6 +337,14 @@ fn write_timeline_detail(writer: &mut Writer<'_>, detail: &str) -> std::fmt::Res
     }
 
     write!(writer, "{detail}")
+}
+
+fn write_timeline_timestamp(writer: &mut Writer<'_>, timestamp: &str) -> std::fmt::Result {
+    if writer.has_ansi_escapes() {
+        return write!(writer, "\x1b[90m{timestamp}\x1b[0m");
+    }
+
+    write!(writer, "{timestamp}")
 }
 
 fn bracketed_prefix(value: &str) -> Option<(&str, &str)> {
@@ -570,13 +579,20 @@ mod tests {
     }
 
     #[test]
-    fn running_timeline_event_adds_start_timestamp_before_detail() {
+    fn running_timeline_event_adds_start_time_before_detail() {
         let output = render_event("running", "[Enterprise] enterprise run");
 
-        let started_at = output.find("started_at: ").expect("started_at");
         let detail = output.find("[Enterprise] enterprise run").expect("detail");
-        assert!(started_at < detail);
-        assert!(output.contains("Z"));
+        let line = output
+            .lines()
+            .find(|line| line.contains("[Enterprise] enterprise run"))
+            .expect("detail line");
+        let time = line
+            .split_whitespace()
+            .find(|part| is_hh_mm_ss(part))
+            .expect("start time");
+        assert!(output.find(time).expect("start time") < detail);
+        assert!(!output.contains("started_at: "));
     }
 
     #[test]
@@ -585,5 +601,18 @@ mod tests {
 
         assert!(!output.contains("started_at: "));
         assert!(output.contains("✓ completed"));
+    }
+
+    fn is_hh_mm_ss(value: &str) -> bool {
+        let bytes = value.as_bytes();
+        bytes.len() == 8
+            && bytes[0].is_ascii_digit()
+            && bytes[1].is_ascii_digit()
+            && bytes[2] == b':'
+            && bytes[3].is_ascii_digit()
+            && bytes[4].is_ascii_digit()
+            && bytes[5] == b':'
+            && bytes[6].is_ascii_digit()
+            && bytes[7].is_ascii_digit()
     }
 }

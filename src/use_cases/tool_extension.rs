@@ -94,10 +94,7 @@ fn prepare_extension(
             prepare_artifact_extension(context, config, extension, &artifact.path, &mut utilities)?;
             Ok(successful_build_step(
                 extension,
-                format!(
-                    "prepared tool extension '{}' from .cfe artifact",
-                    extension.name
-                ),
+                format!("prepared extension '{}' from .cfe artifact", extension.name),
                 started.elapsed().as_millis() as u64,
             ))
         }
@@ -119,7 +116,7 @@ fn prepare_source_extension(
         commit_tool_extension_full_rescan(&source_context, &config.work_path, true)?;
         return Ok(successful_build_step(
             extension,
-            format!("prepared tool extension '{}' from sources", extension.name),
+            format!("prepared extension '{}' from sources", extension.name),
             started.elapsed().as_millis() as u64,
         ));
     }
@@ -131,7 +128,7 @@ fn prepare_source_extension(
             commit_tool_extension_full_rescan(&source_context, &config.work_path, true)?;
             return Ok(successful_build_step(
                 extension,
-                format!("prepared tool extension '{}' from sources", extension.name),
+                format!("prepared extension '{}' from sources", extension.name),
                 started.elapsed().as_millis() as u64,
             ));
         }
@@ -149,7 +146,7 @@ fn prepare_source_extension(
             commit_tool_extension_full_rescan(&source_context, &config.work_path, false)?;
             Ok(successful_build_step(
                 extension,
-                format!("prepared tool extension '{}' from sources", extension.name),
+                format!("prepared extension '{}' from sources", extension.name),
                 started.elapsed().as_millis() as u64,
             ))
         }
@@ -159,7 +156,7 @@ fn prepare_source_extension(
                 .map_err(|error| AppError::Runtime(error.to_string()))?;
             Ok(successful_build_step(
                 extension,
-                format!("prepared tool extension '{}' from sources", extension.name),
+                format!("prepared extension '{}' from sources", extension.name),
                 started.elapsed().as_millis() as u64,
             ))
         }
@@ -220,6 +217,10 @@ fn log_tool_extension_stage(extension: &ToolExtensionConfig, stage: &str, detail
         detail,
         TimelineStageStatus::Running,
     );
+}
+
+fn extension_stage_detail(executor: &str, action: &str, extension: &ToolExtensionConfig) -> String {
+    format!("[{executor}] {action} расширения {}", extension.name)
 }
 
 fn commit_tool_extension_full_rescan(
@@ -289,7 +290,11 @@ fn prepare_designer_source_extension(
                 extension,
                 "load",
             )?;
-            log_tool_extension_stage(extension, "load", "[Конфигуратор] Загрузка tool extension");
+            log_tool_extension_stage(
+                extension,
+                "load",
+                &extension_stage_detail("Конфигуратор", "Загрузка", extension),
+            );
             let load = dsl
                 .load_config_from_files_full(source_path, Some(&extension.name))
                 .map_err(AppError::from)?;
@@ -311,7 +316,7 @@ fn prepare_designer_source_extension(
             log_tool_extension_stage(
                 extension,
                 "update",
-                "[Конфигуратор] Применение tool extension",
+                &extension_stage_detail("Конфигуратор", "Применение", extension),
             );
             let update = dsl
                 .update_db_cfg(Some(&extension.name))
@@ -329,7 +334,11 @@ fn prepare_designer_source_extension(
                 &binary,
                 utilities.runner_for(UtilityType::Ibcmd),
             )?;
-            log_tool_extension_stage(extension, "ibcmd_import", "[ibcmd] Загрузка tool extension");
+            log_tool_extension_stage(
+                extension,
+                "ibcmd_import",
+                &extension_stage_detail("ibcmd", "Загрузка", extension),
+            );
             let import = dsl
                 .config_import_full(source_path, Some(&extension.name))
                 .map_err(AppError::from)?;
@@ -349,7 +358,7 @@ fn prepare_designer_source_extension(
             log_tool_extension_stage(
                 extension,
                 "ibcmd_apply",
-                "[ibcmd] Применение tool extension",
+                &extension_stage_detail("ibcmd", "Применение", extension),
             );
             let apply = dsl
                 .config_apply(Some(&extension.name), DynamicUpdateMode::Auto)
@@ -381,7 +390,7 @@ fn prepare_artifact_extension(
     log_tool_extension_stage(
         extension,
         "load_artifact",
-        "[Конфигуратор] Загрузка .cfe tool extension",
+        &extension_stage_detail("Конфигуратор", "Загрузка .cfe", extension),
     );
     let load = dsl
         .load_cfg(artifact_path, Some(&extension.name))
@@ -437,7 +446,11 @@ fn export_edt_source_extension(
         .path;
     let dsl = build_edt_dsl(context, config, &binary, utilities)?;
     let project_name = resolve_edt_project_name(extension, source_path)?;
-    log_tool_extension_stage(extension, "edt_export", "[EDT] Экспорт tool extension");
+    log_tool_extension_stage(
+        extension,
+        "edt_export",
+        &extension_stage_detail("EDT", "Экспорт", extension),
+    );
     let result = dsl
         .export_project(&project_name, &target)
         .map_err(AppError::from)?;

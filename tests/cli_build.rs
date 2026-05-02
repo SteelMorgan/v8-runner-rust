@@ -481,7 +481,7 @@ fn build_text_stdout_includes_action_logs() {
     assert!(stdout.contains("● main:"));
     assert!(stdout.contains("│   Изменения: найдено"));
     assert!(stdout.contains("изменено"));
-    assert!(stdout.contains("│   [Конфигуратор] Загрузка изменений в базу"));
+    assert!(stdout.contains("[Конфигуратор] Загрузка изменений в базу"));
     assert!(stdout.contains("│   ✓ partial load"));
     assert_eq!(stdout.matches("● main").count(), 1);
     assert!(stdout.contains("main"));
@@ -670,10 +670,10 @@ fn build_edt_text_interleaves_export_stage_after_edt_log() {
     assert!(lines
         .iter()
         .skip(source_set_stage_index + 1)
-        .any(|line| *line == "│   [EDT] Конвертация в файлы конфигуратора"));
+        .any(|line| line.contains("[EDT] Конвертация в файлы конфигуратора")));
     assert!(stdout.contains("│   ✓ completed"));
-    assert!(stdout.contains("│   [ibcmd] Загрузка в базу"));
-    assert!(stdout.contains("│   [ibcmd] Применение изменений"));
+    assert!(stdout.contains("[ibcmd] Загрузка в базу"));
+    assert!(stdout.contains("[ibcmd] Применение изменений"));
     assert!(stdout.contains("│   ✓ full load selected by partial-load rules"));
     assert_eq!(stdout.matches("● configuration").count(), 1);
 
@@ -741,10 +741,11 @@ fn build_text_groups_tool_extension_stages_under_single_build_node() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(stdout.matches("● tool:client_mcp:").count(), 1);
-    assert!(stdout.contains("│   [EDT] Экспорт tool extension"));
-    assert!(stdout.contains("│   [Конфигуратор] Загрузка tool extension"));
-    assert!(stdout.contains("│   [Конфигуратор] Применение tool extension"));
-    assert!(stdout.contains("│   ✓ prepared tool extension 'client_mcp' from sources"));
+    assert!(stdout.contains("[EDT] Экспорт расширения client_mcp"));
+    assert!(stdout.contains("[Конфигуратор] Загрузка расширения client_mcp"));
+    assert!(stdout.contains("[Конфигуратор] Применение расширения client_mcp"));
+    assert!(stdout.contains("│   ✓ prepared extension 'client_mcp' from sources"));
+    assert!(!stdout.contains("tool extension"));
     assert!(!stdout.contains("build: tool extension"));
 }
 
@@ -844,8 +845,8 @@ fn build_ibcmd_full_rebuild_invokes_import_and_apply() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("● main:"));
-    assert!(stdout.contains("│   [ibcmd] Загрузка в базу"));
-    assert!(stdout.contains("│   [ibcmd] Применение изменений"));
+    assert!(stdout.contains("[ibcmd] Загрузка в базу"));
+    assert!(stdout.contains("[ibcmd] Применение изменений"));
     assert_eq!(stdout.matches("● main").count(), 1);
     let calls = fs::read_to_string(calls_log).expect("calls");
     assert!(calls.contains("config import"));

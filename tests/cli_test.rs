@@ -484,7 +484,7 @@ fn test_text_output_splits_pipeline_into_timeline_stages() {
     assert!(stdout.contains("● Tests completed successfully"));
     assert!(stdout.contains("● test: build prerequisite"));
     assert!(stdout.contains("● test: enterprise run"));
-    assert!(stdout.contains("│   started_at: "));
+    assert!(!stdout.contains("started_at: "));
     assert!(stdout.contains("│   target: all"));
     assert!(stdout.contains("│   summary: total=1, passed=1, failed=0, skipped=0, errors=0"));
     assert!(!stdout.contains("prepare artifacts"));

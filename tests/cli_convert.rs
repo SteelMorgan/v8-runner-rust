@@ -652,8 +652,8 @@ fn convert_single_extension_source_set_infers_base_project_name_from_configurati
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("● convert: base project import"));
-    assert!(stdout.contains("│   started_at: "));
-    assert!(stdout.contains("│   [EDT] importing Designer files for base project name"));
+    assert!(!stdout.contains("started_at: "));
+    assert!(stdout.contains("[EDT] importing Designer files for base project name"));
     assert!(
         stdout
             .find("convert: base project import")
