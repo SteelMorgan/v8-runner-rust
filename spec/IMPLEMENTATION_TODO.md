@@ -6,6 +6,7 @@ This file tracks open implementation work only.
 
 - Open tasks as of `2026-05-02`:
   - `T21`: implement local config overlay from [ADR-0021](decisions/0021-lokalnyy-overlay-config.md).
+  - `T23`: add YAML schema support for VS Code config editing.
 
 ## Open Tasks
 
@@ -24,6 +25,26 @@ Acceptance:
 
 - `cargo test --locked config` covers overlay merge, forbidden local keys and `basePath` default.
 - `docs/CONFIGURATION.md`, examples and architecture invariants are synchronized with ADR-0021.
+
+### T23: Add YAML schemas for config editing
+
+Status: planned
+
+Scope:
+
+- Add generated JSON Schema artifacts for `v8project.yaml` and `v8project.local.yaml`.
+- Generate or verify schemas from the typed Rust config model during code changes, so schema drift is caught by tests or CI.
+- Add `yaml-language-server` modeline to generated configs, pointing `v8project.yaml` to the main schema.
+- Keep local overlay schema separate from the main schema: it must allow local-only sections and reject project identity keys forbidden by ADR-0021 (`source-set`, `format`, `builder`).
+- Decide and document schema versioning; default direction: schema version equals application version.
+
+Acceptance:
+
+- `v8-runner config init` emits a `v8project.yaml` with a schema modeline.
+- Repository contains two schema artifacts: main config and local overlay config.
+- Tests fail when schema artifacts are stale relative to the Rust config model or documented schema generation path.
+- `docs/CONFIGURATION.md` explains VS Code setup with `redhat.vscode-yaml`, modeline behavior, local overlay schema, and versioning policy.
+- Versioning policy states how release tags, raw schema URLs and application versions map to schema versions.
 
 ## Rules
 
