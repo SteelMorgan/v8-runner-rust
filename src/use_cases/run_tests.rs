@@ -34,8 +34,8 @@ mod coordinator;
 mod helpers;
 
 use self::helpers::{
-    build_enterprise_dsl, build_platform_launch, build_summary, capped_timeout_ms,
-    collect_diagnostics, degraded_step, enterprise_error_kind, failed_step,
+    apply_test_mcp_ws_payload, build_enterprise_dsl, build_platform_launch, build_summary,
+    capped_timeout_ms, collect_diagnostics, degraded_step, enterprise_error_kind, failed_step,
     interrupted_test_failure, make_test_result, prepare_runner_artifacts, prepared_run_summary,
     succeeded_step, validate_runner_profile_id, validate_target, with_retained_artifacts,
 };
