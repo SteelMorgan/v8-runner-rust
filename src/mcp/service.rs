@@ -87,6 +87,7 @@ where
             execution: TestRequest::default_execution(),
             full: request.full.unwrap_or(false),
             scope: TestScopeRequest::All,
+            mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
         };
 
         match self
@@ -131,6 +132,7 @@ where
             execution: TestRequest::default_execution(),
             full: request.full.unwrap_or(false),
             scope: TestScopeRequest::Module { name: module_name },
+            mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
         };
 
         match self
@@ -237,6 +239,7 @@ where
             })?,
             launch: LaunchOptions::default(),
             client_mcp: None,
+            mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
         };
         let started = Instant::now();
 

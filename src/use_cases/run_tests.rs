@@ -730,6 +730,7 @@ mod tests {
                 policy: ExecutionPolicy::default(),
                 launch: LaunchOptions::default(),
             },
+            mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
         };
 
         let context = ExecutionContext::cli(CommandName::Test);
@@ -761,6 +762,7 @@ mod tests {
                 policy: ExecutionPolicy::default(),
                 launch: LaunchOptions::default(),
             },
+            mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
         };
 
         let failure = run_tests(&context, &config, &args).expect_err("cancelled");

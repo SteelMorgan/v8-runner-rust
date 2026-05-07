@@ -315,6 +315,7 @@ mod tests {
                 target: LaunchTargetRequest::thin_client(),
                 launch: Default::default(),
                 client_mcp: None,
+                mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
             },
         )
         .expect("launch succeeds");
@@ -346,6 +347,7 @@ mod tests {
                 target: LaunchTargetRequest::designer(),
                 launch: Default::default(),
                 client_mcp: None,
+                mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
             },
         )
         .expect("launch succeeds");
@@ -377,6 +379,7 @@ mod tests {
                 target: LaunchTargetRequest::ordinary_application(),
                 launch: Default::default(),
                 client_mcp: None,
+                mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
             },
         )
         .expect("launch succeeds");
@@ -415,6 +418,7 @@ mod tests {
                 target: LaunchTargetRequest::client_mcp_with_mode(ClientMcpMode::Thin),
                 launch: Default::default(),
                 client_mcp: Some(ClientMcpOptionsRequest::default()),
+                mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
             },
         )
         .expect("launch succeeds");
@@ -446,6 +450,7 @@ mod tests {
                 target: LaunchTargetRequest::client_mcp_with_mode(ClientMcpMode::Thin),
                 launch: Default::default(),
                 client_mcp: None,
+                mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
             },
         )
         .expect_err("client_mcp options are required");
@@ -464,6 +469,7 @@ mod tests {
                 target: LaunchTargetRequest::thin_client(),
                 launch: Default::default(),
                 client_mcp: Some(ClientMcpOptionsRequest::default()),
+                mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
             },
         )
         .expect_err("client_mcp options are rejected for non-mcp launch");
