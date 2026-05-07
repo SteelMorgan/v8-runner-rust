@@ -13,10 +13,10 @@ use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::use_cases::context::{ExecutionContext, ExecutionInterruption};
 use crate::use_cases::launch_keys::vanessa_enterprise_launch_keys;
-use crate::use_cases::progress::log_live_stage;
 use crate::use_cases::mcp_ws::{
     self, ClientKind, McpClientTransport, TransportDecision, WsLaunchParams, WsResolveInputs,
 };
+use crate::use_cases::progress::log_live_stage;
 use crate::use_cases::request::{
     ClientMcpAddonRequest, ClientMcpMode, ClientMcpOptionsRequest, EnterpriseLaunchTarget,
     LaunchRequest as LaunchArgs, LaunchTargetRequest, McpClientTransportRequest,
@@ -341,9 +341,7 @@ pub(crate) fn resolve_ws_launch_params(
             .log_level
             .clone()
             .or_else(|| config.tools.client_mcp.log_level.clone()),
-        ws_timeout_ms: cli
-            .ws_timeout_ms
-            .or(config.tools.client_mcp.ws_timeout_ms),
+        ws_timeout_ms: cli.ws_timeout_ms.or(config.tools.client_mcp.ws_timeout_ms),
     };
     mcp_ws::resolve_ws_params(kind, inputs)
 }
@@ -535,9 +533,7 @@ mod tests {
                 launch: Default::default(),
                 client_mcp: Some(ClientMcpOptionsRequest::default()),
                 mcp_ws: crate::use_cases::request::McpClientWsRequest {
-                    transport: Some(
-                        crate::use_cases::request::McpClientTransportRequest::Legacy,
-                    ),
+                    transport: Some(crate::use_cases::request::McpClientTransportRequest::Legacy),
                     ..Default::default()
                 },
             },

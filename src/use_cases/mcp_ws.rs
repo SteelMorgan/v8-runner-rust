@@ -29,20 +29,15 @@ pub const PROBE_TIMEOUT_MS: u64 = 200;
 
 /// Transport selector controlling how the MCP client connects to the
 /// session-manager.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum McpClientTransport {
     /// Force WS-only mode. Resolution fails if the manager is unreachable.
     Ws,
     /// Force the legacy local HTTP transport (`runMcp[=...][;mcpPort=...]`).
     Legacy,
     /// Probe the manager: WS when reachable, legacy otherwise.
+    #[default]
     Auto,
-}
-
-impl Default for McpClientTransport {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 impl McpClientTransport {
@@ -168,8 +163,6 @@ pub enum WsResolveError {
     InvalidManagerUrl { url: String, reason: String },
     #[error("session-manager unreachable at {url}")]
     Unreachable { url: String },
-    #[error("unsupported mcp_log_level '{0}'")]
-    UnsupportedLogLevel(String),
 }
 
 /// Decision returned by [`select_transport`].
@@ -216,16 +209,6 @@ where
 /// the resolved address.
 pub fn probe_tcp(addr: SocketAddr, timeout: Duration) -> bool {
     TcpStream::connect_timeout(&addr, timeout).is_ok()
-}
-
-/// Validates an `mcp_log_level` value if one is provided.
-pub fn validate_log_level(level: Option<&str>) -> Result<(), WsResolveError> {
-    if let Some(level) = level {
-        if !is_supported_log_level(level) {
-            return Err(WsResolveError::UnsupportedLogLevel(level.to_owned()));
-        }
-    }
-    Ok(())
 }
 
 /// Parses the `host:port` portion of a `ws://host:port/path` URL and resolves
@@ -419,23 +402,20 @@ mod tests {
     }
 
     #[test]
-    fn validate_log_level_accepts_supported_values() {
+    fn is_supported_log_level_accepts_known_values() {
         for level in ["off", "error", "warn", "info", "debug", "trace"] {
-            validate_log_level(Some(level)).expect("supported");
+            assert!(is_supported_log_level(level), "expected {level} supported");
         }
-        validate_log_level(None).expect("none ok");
-    }
-
-    #[test]
-    fn validate_log_level_rejects_unknown_values() {
-        let err = validate_log_level(Some("verbose")).expect_err("rejected");
-        assert!(matches!(err, WsResolveError::UnsupportedLogLevel(_)));
+        assert!(!is_supported_log_level("verbose"));
     }
 
     #[test]
     fn client_kind_strings_match_session_manager_contract() {
         assert_eq!(ClientKind::V8RunnerClient.as_str(), "v8_runner_client");
-        assert_eq!(ClientKind::VanessaTestClient.as_str(), "vanessa_test_client");
+        assert_eq!(
+            ClientKind::VanessaTestClient.as_str(),
+            "vanessa_test_client"
+        );
         assert_eq!(ClientKind::YaxunitRunner.as_str(), "yaxunit_runner");
     }
 }

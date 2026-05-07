@@ -1203,9 +1203,7 @@ fn map_mcp_ws_args(
             None => {
                 return Err(UseCaseError::new(
                     UseCaseErrorKind::Validation,
-                    format!(
-                        "--mcp-transport must be one of: ws, legacy, auto (got: {value})"
-                    ),
+                    format!("--mcp-transport must be one of: ws, legacy, auto (got: {value})"),
                 ));
             }
         },

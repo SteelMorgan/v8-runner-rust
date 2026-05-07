@@ -826,8 +826,7 @@ fn launch_mcp_ws_required_fails_when_manager_unreachable() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let combined = format!("{stderr}\n{stdout}");
     assert!(
-        combined.contains("session-manager unreachable")
-            || combined.contains("unreachable"),
+        combined.contains("session-manager unreachable") || combined.contains("unreachable"),
         "expected 'unreachable' diagnostic, got stderr={stderr}, stdout={stdout}"
     );
 }

@@ -30,10 +30,10 @@ mod interruption;
 pub mod launch_app;
 /// Shared launch key policy for Enterprise-backed use cases.
 mod launch_keys;
-/// Shared helpers for the WS-mode (`mcpMode=ws`) `/C` payload.
-pub mod mcp_ws;
 /// Load packaged artifacts into infobase.
 pub mod load_artifact;
+/// Shared helpers for the WS-mode (`mcpMode=ws`) `/C` payload.
+pub mod mcp_ws;
 /// Text-mode live progress events shared by CLI-facing use cases.
 mod progress;
 /// Transport-neutral request DTOs consumed by use cases.

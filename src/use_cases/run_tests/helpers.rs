@@ -452,10 +452,7 @@ pub(super) fn apply_test_mcp_ws_payload(
             return;
         }
     };
-    if !matches!(
-        decision,
-        crate::use_cases::mcp_ws::TransportDecision::Ws
-    ) {
+    if !matches!(decision, crate::use_cases::mcp_ws::TransportDecision::Ws) {
         return;
     }
     let params = crate::use_cases::launch_app::resolve_ws_launch_params(config, mcp_ws, kind);
