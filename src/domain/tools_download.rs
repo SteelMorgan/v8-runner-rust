@@ -8,9 +8,17 @@ pub enum ToolExtensionInstallMode {
     Artifacts,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolDownloadTarget {
+    Yaxunit,
+    VanessaAutomationSingle,
+    ClientMcp,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolsDownloadResult {
     pub ok: bool,
+    pub tool: String,
     pub mode: String,
     pub destinations: Vec<ToolDownloadDestination>,
     pub config_path: PathBuf,

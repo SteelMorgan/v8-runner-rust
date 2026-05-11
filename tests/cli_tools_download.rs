@@ -225,6 +225,8 @@ fn tools_download_sources_writes_source_set_and_local_tool_settings() {
             "--json-message",
             "tools",
             "download",
+            "yaxunit",
+            "--sources",
         ])
         .output()
         .expect("run command");
@@ -238,9 +240,40 @@ fn tools_download_sources_writes_source_set_and_local_tool_settings() {
             &config_path.display().to_string(),
             "tools",
             "download",
+            "yaxunit",
+            "--sources",
         ])
         .output()
         .expect("run command again");
+    let client_mcp = v8_runner_command()
+        .env(
+            "V8TR_GITHUB_API_BASE_URL",
+            format!("http://127.0.0.1:{port}"),
+        )
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "tools",
+            "download",
+            "client-mcp",
+            "--sources",
+        ])
+        .output()
+        .expect("run client-mcp command");
+    let vanessa = v8_runner_command()
+        .env(
+            "V8TR_GITHUB_API_BASE_URL",
+            format!("http://127.0.0.1:{port}"),
+        )
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "tools",
+            "download",
+            "vanessa",
+        ])
+        .output()
+        .expect("run vanessa command");
 
     assert!(
         output.status.success(),
@@ -256,8 +289,23 @@ fn tools_download_sources_writes_source_set_and_local_tool_settings() {
         String::from_utf8_lossy(&repeat.stdout),
         String::from_utf8_lossy(&repeat.stderr)
     );
+    assert!(
+        client_mcp.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        client_mcp.status.code(),
+        String::from_utf8_lossy(&client_mcp.stdout),
+        String::from_utf8_lossy(&client_mcp.stderr)
+    );
+    assert!(
+        vanessa.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        vanessa.status.code(),
+        String::from_utf8_lossy(&vanessa.stdout),
+        String::from_utf8_lossy(&vanessa.stderr)
+    );
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
     assert_eq!(payload["command"], "tools download");
+    assert_eq!(payload["data"]["tool"], "yaxunit");
     assert_eq!(payload["data"]["mode"], "sources");
 
     let config = fs::read_to_string(&config_path).expect("config");
@@ -269,6 +317,14 @@ fn tools_download_sources_writes_source_set_and_local_tool_settings() {
         .path()
         .join("tests/src/Configuration/Configuration.mdo")
         .exists());
+    assert!(!dir
+        .path()
+        .join("tests/.v8-runner-tools-download.json")
+        .exists());
+    assert!(dir
+        .path()
+        .join(".tests.v8-runner-tools-download.json")
+        .exists());
     assert!(dir
         .path()
         .join("build/tools/vanessa-automation-single.epf")
@@ -277,12 +333,23 @@ fn tools_download_sources_writes_source_set_and_local_tool_settings() {
         .path()
         .join("build/tools/onec-client-mcp-devkit/exts/client-mcp/src/Configuration/Configuration.mdo")
         .exists());
+    assert!(!dir
+        .path()
+        .join("build/tools/onec-client-mcp-devkit/exts/client-mcp/.v8-runner-tools-download.json")
+        .exists());
+    assert!(dir
+        .path()
+        .join("build/tools/onec-client-mcp-devkit/exts/.client-mcp.v8-runner-tools-download.json")
+        .exists());
 
     let local = fs::read_to_string(dir.path().join("v8project.local.yaml")).expect("local");
     assert!(local.contains("epf_path:"));
+    assert!(local.contains("epf_path: build/tools/vanessa-automation-single.epf"));
     assert!(local.contains("client_mcp:"));
     assert!(local.contains("source:"));
+    assert!(local.contains("path: build/tools/onec-client-mcp-devkit/exts/client-mcp"));
     assert!(local.contains("format: EDT"));
+    assert!(!local.contains(&dir.path().display().to_string()));
 }
 
 #[test]
@@ -309,8 +376,7 @@ fn tools_download_repairs_pending_vanessa_configuration() {
             &config_path.display().to_string(),
             "tools",
             "download",
-            "--extensions",
-            "artifacts",
+            "vanessa",
         ])
         .output()
         .expect("run command");
@@ -324,6 +390,8 @@ fn tools_download_repairs_pending_vanessa_configuration() {
     );
     let local = fs::read_to_string(dir.path().join("v8project.local.yaml")).expect("local");
     assert!(local.contains("epf_path:"));
+    assert!(local.contains("epf_path: build/tools/vanessa-automation-single.epf"));
+    assert!(!local.contains(&dir.path().display().to_string()));
 }
 
 #[test]
@@ -350,8 +418,7 @@ fn tools_download_follows_latest_release_and_asset_redirects() {
             &config_path.display().to_string(),
             "tools",
             "download",
-            "--extensions",
-            "artifacts",
+            "client-mcp",
         ])
         .output()
         .expect("run command");
@@ -363,11 +430,10 @@ fn tools_download_follows_latest_release_and_asset_redirects() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(dir.path().join("build/tools/YAxUnit-25.12.cfe").exists());
-    assert!(dir
-        .path()
-        .join("build/tools/vanessa-automation-single.epf")
-        .exists());
+    assert!(dir.path().join("build/tools/client_mcp.cfe").exists());
+    let local = fs::read_to_string(dir.path().join("v8project.local.yaml")).expect("local");
+    assert!(local.contains("artifact:"));
+    assert!(local.contains("client_mcp.cfe"));
 }
 
 #[test]
@@ -394,8 +460,7 @@ fn tools_download_follows_302_redirects() {
             &config_path.display().to_string(),
             "tools",
             "download",
-            "--extensions",
-            "artifacts",
+            "client-mcp",
         ])
         .output()
         .expect("run command");
@@ -434,8 +499,7 @@ fn tools_download_artifacts_keeps_yaxunit_out_of_source_sets() {
             &config_path.display().to_string(),
             "tools",
             "download",
-            "--extensions",
-            "artifacts",
+            "yaxunit",
         ])
         .output()
         .expect("run command");
@@ -450,10 +514,7 @@ fn tools_download_artifacts_keeps_yaxunit_out_of_source_sets() {
     let config = fs::read_to_string(&config_path).expect("config");
     assert!(!config.contains("name: tests"));
     assert!(dir.path().join("build/tools/YAxUnit-25.12.cfe").exists());
-    assert!(dir.path().join("build/tools/client_mcp.cfe").exists());
-    let local = fs::read_to_string(dir.path().join("v8project.local.yaml")).expect("local");
-    assert!(local.contains("artifact:"));
-    assert!(local.contains("client_mcp.cfe"));
+    assert!(!dir.path().join("v8project.local.yaml").exists());
 }
 
 #[test]
@@ -485,8 +546,7 @@ fn tools_download_artifacts_handles_large_assets_without_pipe_deadlock() {
             &config_path.display().to_string(),
             "tools",
             "download",
-            "--extensions",
-            "artifacts",
+            "yaxunit",
         ])
         .output()
         .expect("run command");
@@ -534,6 +594,8 @@ fn tools_download_sources_refuses_to_replace_unmanaged_tests_dir() {
             &config_path.display().to_string(),
             "tools",
             "download",
+            "yaxunit",
+            "--sources",
             "--force",
         ])
         .output()
@@ -562,8 +624,7 @@ fn tools_download_artifacts_requires_designer_builder() {
             &config_path.display().to_string(),
             "tools",
             "download",
-            "--extensions",
-            "artifacts",
+            "client-mcp",
         ])
         .output()
         .expect("run command");
@@ -610,8 +671,7 @@ fn tools_download_force_refuses_to_replace_unmanaged_tool_file() {
             &config_path.display().to_string(),
             "tools",
             "download",
-            "--extensions",
-            "artifacts",
+            "vanessa",
             "--force",
         ])
         .output()
@@ -652,6 +712,7 @@ fn tools_download_respects_execution_timeout_during_http_download() {
             &config_path.display().to_string(),
             "tools",
             "download",
+            "yaxunit",
         ])
         .output()
         .expect("run command");
@@ -694,6 +755,8 @@ fn tools_download_sources_rejects_conflicting_tests_source_set() {
             &config_path.display().to_string(),
             "tools",
             "download",
+            "yaxunit",
+            "--sources",
         ])
         .output()
         .expect("run command");

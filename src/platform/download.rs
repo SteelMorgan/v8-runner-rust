@@ -1,33 +1,35 @@
-use std::process::{Command, Stdio};
+use std::io::Read;
 use std::time::{Duration, Instant};
 
+use reqwest::blocking::Client;
+use reqwest::StatusCode;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const RETRY_ATTEMPTS: usize = 3;
+const RETRY_DELAY: Duration = Duration::from_secs(2);
+const READ_BUFFER_SIZE: usize = 64 * 1024;
 
 #[derive(Debug, Error)]
 pub enum DownloadError {
-    #[error("failed to spawn curl: {0}")]
-    Spawn(std::io::Error),
+    #[error("HTTP client setup failed: {0}")]
+    Client(reqwest::Error),
 
-    #[error("curl exited with {code}; stderr: {stderr}")]
-    Failed { code: i32, stderr: String },
+    #[error("HTTP GET {url} failed: {source}")]
+    Request { url: String, source: reqwest::Error },
 
-    #[error("curl timed out after {timeout_ms}ms")]
+    #[error("HTTP GET {url} returned status {status}")]
+    Status { url: String, status: StatusCode },
+
+    #[error("HTTP response read failed for {url}: {source}")]
+    Read { url: String, source: std::io::Error },
+
+    #[error("HTTP download timed out after {timeout_ms}ms")]
     TimedOut { timeout_ms: u64 },
 
-    #[error("curl was cancelled")]
+    #[error("HTTP download was cancelled")]
     Cancelled,
-
-    #[error("failed to wait for curl: {0}")]
-    Wait(std::io::Error),
-
-    #[error("failed to create curl capture file: {0}")]
-    CaptureFile(std::io::Error),
-
-    #[error("failed to read curl capture file: {0}")]
-    CaptureRead(std::io::Error),
 
     #[error("response is not UTF-8: {0}")]
     InvalidUtf8(#[from] std::string::FromUtf8Error),
@@ -50,61 +52,141 @@ pub fn get_bytes(
     if timeout.is_some_and(|value| value.is_zero()) {
         return Err(DownloadError::TimedOut { timeout_ms: 0 });
     }
-    let stdout = tempfile::NamedTempFile::new().map_err(DownloadError::CaptureFile)?;
-    let stderr = tempfile::NamedTempFile::new().map_err(DownloadError::CaptureFile)?;
+
     let started = Instant::now();
-    let mut child = Command::new("curl")
-        .args([
-            "-fsSL",
-            "-H",
-            "Accept: application/vnd.github+json",
-            "-H",
-            "User-Agent: v8-runner",
-            url,
-        ])
-        .stdout(Stdio::from(
-            stdout.reopen().map_err(DownloadError::CaptureFile)?,
-        ))
-        .stderr(Stdio::from(
-            stderr.reopen().map_err(DownloadError::CaptureFile)?,
-        ))
-        .spawn()
-        .map_err(DownloadError::Spawn)?;
+    let mut last_error = None;
+
+    for attempt in 1..=RETRY_ATTEMPTS {
+        ensure_not_cancelled(cancellation)?;
+        let request_timeout = remaining_budget(timeout, started)?;
+        let client = build_client(request_timeout)?;
+
+        match download_once(&client, url, timeout, started, cancellation) {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) if attempt < RETRY_ATTEMPTS && error.is_retryable() => {
+                last_error = Some(error);
+                sleep_before_retry(cancellation, timeout, started)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_error.unwrap_or(DownloadError::Cancelled))
+}
+
+fn build_client(timeout: Option<Duration>) -> Result<Client, DownloadError> {
+    let connect_timeout = timeout
+        .map(|value| value.min(CONNECT_TIMEOUT))
+        .unwrap_or(CONNECT_TIMEOUT);
+    let mut builder = Client::builder()
+        .connect_timeout(connect_timeout)
+        .user_agent("v8-runner");
+    if let Some(timeout) = timeout {
+        builder = builder.timeout(timeout);
+    }
+    builder.build().map_err(DownloadError::Client)
+}
+
+fn download_once(
+    client: &Client,
+    url: &str,
+    timeout: Option<Duration>,
+    started: Instant,
+    cancellation: &CancellationToken,
+) -> Result<Vec<u8>, DownloadError> {
+    ensure_not_cancelled(cancellation)?;
+    let url_text = url.to_owned();
+    let mut response = client
+        .get(url)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .map_err(|source| DownloadError::Request {
+            url: url_text.clone(),
+            source,
+        })?;
+
+    if !response.status().is_success() {
+        return Err(DownloadError::Status {
+            url: url_text,
+            status: response.status(),
+        });
+    }
+
+    let capacity = response
+        .content_length()
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or_default();
+    let mut bytes = Vec::with_capacity(capacity);
+    let mut buffer = vec![0_u8; READ_BUFFER_SIZE];
 
     loop {
-        if let Some(status) = child.try_wait().map_err(DownloadError::Wait)? {
-            if !status.success() {
-                return Err(DownloadError::Failed {
-                    code: status.code().unwrap_or(-1),
-                    stderr: read_capture_string(stderr.path())?,
-                });
-            }
-            return std::fs::read(stdout.path()).map_err(DownloadError::CaptureRead);
+        ensure_not_cancelled(cancellation)?;
+        let _ = remaining_budget(timeout, started)?;
+        let read = response
+            .read(&mut buffer)
+            .map_err(|source| DownloadError::Read {
+                url: url_text.clone(),
+                source,
+            })?;
+        if read == 0 {
+            return Ok(bytes);
         }
-
-        if cancellation.is_cancelled() {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(DownloadError::Cancelled);
-        }
-
-        if let Some(limit) = timeout {
-            let elapsed = started.elapsed();
-            if elapsed >= limit {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(DownloadError::TimedOut {
-                    timeout_ms: limit.as_millis() as u64,
-                });
-            }
-            std::thread::sleep(POLL_INTERVAL.min(limit.saturating_sub(elapsed)));
-        } else {
-            std::thread::sleep(POLL_INTERVAL);
-        }
+        bytes.extend_from_slice(&buffer[..read]);
     }
 }
 
-fn read_capture_string(path: &std::path::Path) -> Result<String, DownloadError> {
-    let bytes = std::fs::read(path).map_err(DownloadError::CaptureRead)?;
-    Ok(String::from_utf8_lossy(&bytes).trim().to_owned())
+fn remaining_budget(
+    timeout: Option<Duration>,
+    started: Instant,
+) -> Result<Option<Duration>, DownloadError> {
+    let Some(limit) = timeout else {
+        return Ok(None);
+    };
+    limit
+        .checked_sub(started.elapsed())
+        .filter(|remaining| !remaining.is_zero())
+        .map(Some)
+        .ok_or_else(|| DownloadError::TimedOut {
+            timeout_ms: limit.as_millis() as u64,
+        })
+}
+
+fn sleep_before_retry(
+    cancellation: &CancellationToken,
+    timeout: Option<Duration>,
+    started: Instant,
+) -> Result<(), DownloadError> {
+    let delay = remaining_budget(timeout, started)?
+        .map(|remaining| remaining.min(RETRY_DELAY))
+        .unwrap_or(RETRY_DELAY);
+    let until = Instant::now() + delay;
+    while Instant::now() < until {
+        ensure_not_cancelled(cancellation)?;
+        std::thread::sleep(
+            Duration::from_millis(25).min(until.saturating_duration_since(Instant::now())),
+        );
+    }
+    Ok(())
+}
+
+fn ensure_not_cancelled(cancellation: &CancellationToken) -> Result<(), DownloadError> {
+    if cancellation.is_cancelled() {
+        Err(DownloadError::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
+impl DownloadError {
+    fn is_retryable(&self) -> bool {
+        match self {
+            DownloadError::Request { source, .. } => source.is_timeout() || source.is_connect(),
+            DownloadError::Read { .. } => true,
+            DownloadError::Status { status, .. } => status.is_server_error(),
+            DownloadError::Client(_)
+            | DownloadError::TimedOut { .. }
+            | DownloadError::Cancelled
+            | DownloadError::InvalidUtf8(_) => false,
+        }
+    }
 }

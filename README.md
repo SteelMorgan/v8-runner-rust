@@ -48,13 +48,15 @@ Machine-local пути, credentials и настройки инструменто
 ### Загрузите тестовые и MCP-инструменты:
 
 ```bash
-v8-runner tools download
+v8-runner tools download yaxunit --sources
+v8-runner tools download vanessa
+v8-runner tools download client-mcp --sources
 ```
 
-По умолчанию команда берёт latest releases YAxUnit, Vanessa Automation single и
-onec-client-mcp-devkit, добавляет YAxUnit sources как `source-set` `tests`, кладёт tool artifacts в
-`build/tools` и обновляет `v8project.local.yaml`. Для `.cfe`-режима расширений используйте
-`v8-runner tools download --extensions artifacts` в проектах с `builder=DESIGNER`.
+Команды берут latest releases выбранного инструмента. Для YAxUnit и onec-client-mcp-devkit
+`--sources` выбирает source install; без него скачивается `.cfe` artifact в `build/tools`.
+Vanessa Automation single всегда скачивается как EPF в `build/tools` и прописывается в
+`v8project.local.yaml`.
 
 ### Подготовьте рабочую информационную базу:
 

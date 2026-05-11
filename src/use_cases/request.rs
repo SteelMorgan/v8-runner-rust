@@ -6,7 +6,7 @@ use crate::domain::runner::{
     RunnerProfile, ScenarioExecutionRequest,
 };
 use crate::domain::test::TEST_RUNNER_ID;
-use crate::domain::tools_download::ToolExtensionInstallMode;
+use crate::domain::tools_download::{ToolDownloadTarget, ToolExtensionInstallMode};
 use crate::use_cases::result::{UseCaseError, UseCaseErrorKind};
 
 /// Transport-neutral request for the `build` use case.
@@ -23,6 +23,8 @@ pub struct BuildRequest {
 pub struct ToolsDownloadRequest {
     /// Canonical path to the primary project config that may be updated.
     pub config_path: std::path::PathBuf,
+    /// Selected tool to download.
+    pub target: ToolDownloadTarget,
     /// Installation mode for extension tools.
     pub extensions: ToolExtensionInstallMode,
     /// Allows replacing existing downloaded paths.

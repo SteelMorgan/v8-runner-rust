@@ -46,7 +46,7 @@ flowchart TB
 - Предоставляет workspace lock helper и internal unlocked entrypoints для nested flows вроде `test -> build`; public lock boundary остаётся в CLI/MCP adapters.
 - Для runner-like сценариев собирает typed pipeline-like flow и заполняет `ExecutionOutcome<T>` вместо нового ad hoc result shape.
 - Для `convert` выводит direction из `format`, резолвит `source-set` из `v8project.yaml` и публикует generated output либо под default `workPath/convert/out`, либо под explicit `--output` root с mirror-layout.
-- Для `tools download` получает latest release metadata, скачивает выбранные sources/artifacts, обновляет `v8project.local.yaml` и при source-mode добавляет YAxUnit как project `source-set` `tests`.
+- Для `tools download <tool>` получает latest release metadata выбранного инструмента, скачивает sources/artifact, обновляет `v8project.local.yaml` для Vanessa/client MCP и при `yaxunit --sources` добавляет YAxUnit как project `source-set` `tests`.
 
 #### `mcp`
 

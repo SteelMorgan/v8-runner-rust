@@ -56,8 +56,9 @@ v8-runner config init
 v8-runner config init --connection "File=build/ib"
 v8-runner config init --format edt
 v8-runner config init --builder IBCMD
-v8-runner tools download
-v8-runner tools download --extensions artifacts
+v8-runner tools download yaxunit --sources
+v8-runner tools download vanessa
+v8-runner tools download client-mcp --sources
 v8-runner init
 ```
 
@@ -69,8 +70,9 @@ v8-runner init
 - Syntax check: inspect `format` and `builder`, then choose `syntax designer-modules`, `syntax designer-config`, or `syntax edt`.
 - Behavior validation: run the relevant `v8-runner test ...` command; tests build first.
 - Missing local YAxUnit, Vanessa Automation, or onec-client-mcp-devkit setup: run
-  `v8-runner tools download` for source-backed extensions, or
-  `v8-runner tools download --extensions artifacts` for `.cfe`-backed extensions when
+  `v8-runner tools download yaxunit --sources`, `v8-runner tools download vanessa`, and
+  `v8-runner tools download client-mcp --sources` for source-backed setup. Omit
+  `--sources` on `yaxunit` or `client-mcp` to download `.cfe` artifacts when
   `builder=DESIGNER`.
 - Vanessa Automation debugging or scenario authoring: use `v8-runner launch mcp va ...` to start the client MCP server with VA loaded.
 - Extension properties need synchronization: use `v8-runner extensions` or `extensions --name <SOURCE_SET>`.

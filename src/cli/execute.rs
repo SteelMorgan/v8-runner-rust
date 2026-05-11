@@ -9,7 +9,7 @@ use crate::cli::args::{
     ArtifactsArgs, BuildArgs, Command, ConvertArgs, DesignerConfigSyntaxArgs,
     DesignerModulesSyntaxArgs, DumpArgs, ExtensionsArgs, LaunchArgs, LaunchOptionsArgs, LoadArgs,
     SyntaxArgs, SyntaxTarget, TestArgs, TestRunner, TestScope, TestVaArgs, TestYaxunitArgs,
-    ToolsArgs, ToolsCommand, ToolsDownloadArgs,
+    ToolsArgs, ToolsCommand, ToolsDownloadArgs, ToolsDownloadCommand,
 };
 use crate::cli::output::{
     failure_envelope, pre_dispatch_error_envelope, print_command_use_case_error, with_cli_error,
@@ -40,7 +40,9 @@ use crate::domain::runner::{
 };
 use crate::domain::syntax::{SyntaxCheckResult, SyntaxCheckStatus};
 use crate::domain::test::{RetainedPaths, TestReport, TestRunResult, TestStatus, TestTarget};
-use crate::domain::tools_download::{ToolExtensionInstallMode, ToolsDownloadResult};
+use crate::domain::tools_download::{
+    ToolDownloadTarget, ToolExtensionInstallMode, ToolsDownloadResult,
+};
 use crate::output::presenter::Presenter;
 use crate::output::text::{TimelineItem, TimelineStatus};
 use crate::support::adapter_input::{
@@ -213,8 +215,9 @@ fn execute_tools_download(
 ) -> Result<(), UseCaseError> {
     let request = ToolsDownloadRequest {
         config_path: primary_config_path,
-        extensions: map_tool_extension_mode(&args.extensions),
-        force: args.force,
+        target: map_tools_download_target(args),
+        extensions: map_tool_extension_mode(args),
+        force: map_tools_download_force(args),
     };
     let context = cli_context(config, CommandName::ToolsDownload, cancellation);
     with_cli_workspace_lock(
@@ -813,10 +816,31 @@ fn map_extensions_request(args: &ExtensionsArgs) -> ConfigureExtensionsRequest {
     }
 }
 
-fn map_tool_extension_mode(value: &str) -> ToolExtensionInstallMode {
-    match value {
-        "artifacts" => ToolExtensionInstallMode::Artifacts,
-        _ => ToolExtensionInstallMode::Sources,
+fn map_tools_download_target(args: &ToolsDownloadArgs) -> ToolDownloadTarget {
+    match &args.command {
+        ToolsDownloadCommand::Yaxunit(_) => ToolDownloadTarget::Yaxunit,
+        ToolsDownloadCommand::Vanessa(_) => ToolDownloadTarget::VanessaAutomationSingle,
+        ToolsDownloadCommand::ClientMcp(_) => ToolDownloadTarget::ClientMcp,
+    }
+}
+
+fn map_tool_extension_mode(args: &ToolsDownloadArgs) -> ToolExtensionInstallMode {
+    match &args.command {
+        ToolsDownloadCommand::Yaxunit(args) | ToolsDownloadCommand::ClientMcp(args) => {
+            if args.sources {
+                ToolExtensionInstallMode::Sources
+            } else {
+                ToolExtensionInstallMode::Artifacts
+            }
+        }
+        ToolsDownloadCommand::Vanessa(_) => ToolExtensionInstallMode::Artifacts,
+    }
+}
+
+fn map_tools_download_force(args: &ToolsDownloadArgs) -> bool {
+    match &args.command {
+        ToolsDownloadCommand::Yaxunit(args) | ToolsDownloadCommand::ClientMcp(args) => args.force,
+        ToolsDownloadCommand::Vanessa(args) => args.force,
     }
 }
 
@@ -1582,6 +1606,7 @@ fn render_build_text(result: &BuildResult, presenter: &Presenter, succeeded: boo
 
 fn render_tools_download_text(result: &ToolsDownloadResult, presenter: &Presenter) {
     let mut details = vec![
+        format!("tool: {}", result.tool),
         format!("mode: {}", result.mode),
         format!("config: {}", result.config_path.display()),
         format!("local config: {}", result.local_config_path.display()),

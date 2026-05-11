@@ -80,17 +80,44 @@ pub struct ToolsArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum ToolsCommand {
-    /// Download supported test and MCP helper tools from latest GitHub releases
+    /// Download a supported test or MCP helper tool from its latest GitHub release
     Download(ToolsDownloadArgs),
 }
 
 #[derive(Args, Debug)]
 #[command(next_help_heading = "Command options")]
 pub struct ToolsDownloadArgs {
-    /// Installation mode for extension tools
-    #[arg(long, default_value = "sources", value_parser = ["sources", "artifacts"])]
-    pub extensions: String,
+    #[command(subcommand)]
+    pub command: ToolsDownloadCommand,
+}
 
+#[derive(Subcommand, Debug)]
+pub enum ToolsDownloadCommand {
+    /// Download YAxUnit extension assets or sources
+    Yaxunit(ToolsDownloadExtensionArgs),
+    /// Download Vanessa Automation Single external processor
+    #[command(visible_alias = "vanessa-automation-single")]
+    Vanessa(ToolsDownloadToolArgs),
+    /// Download onec-client-mcp-devkit extension assets or sources
+    #[command(name = "client-mcp", visible_alias = "client_mcp")]
+    ClientMcp(ToolsDownloadExtensionArgs),
+}
+
+#[derive(Args, Debug)]
+#[command(next_help_heading = "Command options")]
+pub struct ToolsDownloadExtensionArgs {
+    /// Download extension sources instead of the release artifact
+    #[arg(long)]
+    pub sources: bool,
+
+    /// Re-download managed targets created by tools download
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Args, Debug)]
+#[command(next_help_heading = "Command options")]
+pub struct ToolsDownloadToolArgs {
     /// Re-download managed targets created by tools download
     #[arg(long)]
     pub force: bool,

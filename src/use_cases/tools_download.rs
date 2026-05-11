@@ -1,15 +1,17 @@
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Cursor};
 use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
 use serde::Deserialize;
+use tracing::debug;
 use zip::ZipArchive;
 
 use crate::config::loader::LOCAL_CONFIG_FILE_NAME;
 use crate::config::model::{AppConfig, BuilderBackend};
 use crate::domain::tools_download::{
-    ToolDownloadDestination, ToolExtensionInstallMode, ToolsDownloadResult,
+    ToolDownloadDestination, ToolDownloadTarget, ToolExtensionInstallMode, ToolsDownloadResult,
 };
 use crate::platform::download;
 use crate::support::error::AppError;
@@ -50,15 +52,6 @@ fn tools_download(
     let local_config_path = config_dir.join(LOCAL_CONFIG_FILE_NAME);
     let tools_dir = config.base_path.join("build").join("tools");
 
-    if request.extensions == ToolExtensionInstallMode::Artifacts
-        && config.builder != BuilderBackend::Designer
-    {
-        return Err(AppError::Validation(
-            "`tools download --extensions artifacts` requires builder=DESIGNER because client_mcp.cfe is registered as a tool extension artifact; use --extensions sources for builder=IBCMD"
-                .to_owned(),
-        ));
-    }
-
     ensure_dir(&tools_dir).map_err(|error| {
         AppError::Runtime(format!(
             "failed to create tools directory '{}': {error}",
@@ -66,99 +59,40 @@ fn tools_download(
         ))
     })?;
 
-    let mut destinations = Vec::new();
-    if request.extensions == ToolExtensionInstallMode::Sources {
-        validate_yaxunit_source_set_config(&config_path)?;
-    }
-
-    let yaxunit_release = fetch_latest_release(context, YAXUNIT_REPO)?;
-    match request.extensions {
-        ToolExtensionInstallMode::Sources => {
-            let path = config.base_path.join("tests");
-            download_source_subdir(
-                context,
-                &yaxunit_release,
-                YAXUNIT_SOURCE_PREFIX,
-                &path,
-                request.force,
-            )?;
-            destinations.push(destination(
-                "yaxunit",
-                &yaxunit_release,
-                path,
-                "source-set tests",
-            ));
+    let destinations = match request.target {
+        ToolDownloadTarget::Yaxunit => download_yaxunit(
+            context,
+            config,
+            &tools_dir,
+            request.extensions,
+            request.force,
+            &config_path,
+        )?,
+        ToolDownloadTarget::VanessaAutomationSingle => {
+            download_vanessa(context, &tools_dir, request.force)?
         }
-        ToolExtensionInstallMode::Artifacts => {
-            let asset = yaxunit_release.required_asset("YAxUnit", ".cfe")?;
-            let path = tools_dir.join(&asset.name);
-            download_asset_file(context, asset, &path, request.force)?;
-            destinations.push(destination("yaxunit", &yaxunit_release, path, "artifact"));
-        }
-    }
+        ToolDownloadTarget::ClientMcp => download_client_mcp(
+            context,
+            config,
+            &tools_dir,
+            request.extensions,
+            request.force,
+        )?,
+    };
 
-    let vanessa_release = fetch_latest_release(context, VANESSA_REPO)?;
-    let vanessa_asset = vanessa_release.required_asset("vanessa-automation-single", ".zip")?;
-    let vanessa_path = tools_dir.join("vanessa-automation-single.epf");
-    download_single_file_from_zip(
-        context,
-        vanessa_asset,
-        "vanessa-automation-single.epf",
-        &vanessa_path,
-        request.force,
-    )?;
-    destinations.push(destination(
-        "vanessa-automation-single",
-        &vanessa_release,
-        vanessa_path.clone(),
-        "tools.va.epf_path",
-    ));
-
-    let client_mcp_release = fetch_latest_release(context, CLIENT_MCP_REPO)?;
-    match request.extensions {
-        ToolExtensionInstallMode::Sources => {
-            let path = tools_dir
-                .join("onec-client-mcp-devkit")
-                .join("exts")
-                .join("client-mcp");
-            download_source_subdir(
-                context,
-                &client_mcp_release,
-                CLIENT_MCP_SOURCE_PREFIX,
-                &path,
-                request.force,
-            )?;
-            destinations.push(destination(
-                "onec-client-mcp-devkit",
-                &client_mcp_release,
-                path,
-                "tools.client_mcp.extension.source",
-            ));
-        }
-        ToolExtensionInstallMode::Artifacts => {
-            let asset = client_mcp_release.required_asset("client_mcp", ".cfe")?;
-            let path = tools_dir.join(&asset.name);
-            download_asset_file(context, asset, &path, request.force)?;
-            destinations.push(destination(
-                "onec-client-mcp-devkit",
-                &client_mcp_release,
-                path,
-                "tools.client_mcp.extension.artifact",
-            ));
-        }
-    }
-
-    update_configs(
+    update_config_for_download(
         context,
         &config_path,
         &local_config_path,
+        request.target,
         request.extensions,
         &destinations,
     )?;
 
     Ok(ToolsDownloadResult {
         ok: true,
-        mode: mode_label(request.extensions).to_owned(),
+        tool: target_label(request.target).to_owned(),
+        mode: download_mode_label(request.target, request.extensions).to_owned(),
         destinations,
         config_path,
         local_config_path,
@@ -166,9 +100,106 @@ fn tools_download(
     })
 }
 
+fn download_yaxunit(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    tools_dir: &Path,
+    mode: ToolExtensionInstallMode,
+    force: bool,
+    config_path: &Path,
+) -> Result<Vec<ToolDownloadDestination>, AppError> {
+    let release = fetch_latest_release(context, YAXUNIT_REPO)?;
+    match mode {
+        ToolExtensionInstallMode::Sources => {
+            validate_yaxunit_source_set_config(config_path)?;
+            let path = config.base_path.join("tests");
+            download_source_subdir(context, &release, YAXUNIT_SOURCE_PREFIX, &path, force)?;
+            Ok(vec![destination(
+                "yaxunit",
+                &release,
+                path,
+                "source-set tests",
+            )])
+        }
+        ToolExtensionInstallMode::Artifacts => {
+            let asset = release.required_asset("YAxUnit", ".cfe")?;
+            let path = tools_dir.join(&asset.name);
+            download_asset_file(context, asset, &path, force)?;
+            Ok(vec![destination("yaxunit", &release, path, "artifact")])
+        }
+    }
+}
+
+fn download_vanessa(
+    context: &ExecutionContext,
+    tools_dir: &Path,
+    force: bool,
+) -> Result<Vec<ToolDownloadDestination>, AppError> {
+    let release = fetch_latest_release(context, VANESSA_REPO)?;
+    let asset = release.required_asset("vanessa-automation-single", ".zip")?;
+    let path = tools_dir.join("vanessa-automation-single.epf");
+    download_single_file_from_zip(
+        context,
+        asset,
+        "vanessa-automation-single.epf",
+        &path,
+        force,
+    )?;
+    Ok(vec![destination(
+        "vanessa-automation-single",
+        &release,
+        path,
+        "tools.va.epf_path",
+    )])
+}
+
+fn download_client_mcp(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    tools_dir: &Path,
+    mode: ToolExtensionInstallMode,
+    force: bool,
+) -> Result<Vec<ToolDownloadDestination>, AppError> {
+    if mode == ToolExtensionInstallMode::Artifacts && config.builder != BuilderBackend::Designer {
+        return Err(AppError::Validation(
+            "`tools download client-mcp` requires builder=DESIGNER because client_mcp.cfe is registered as a tool extension artifact; use `tools download client-mcp --sources` for builder=IBCMD"
+                .to_owned(),
+        ));
+    }
+
+    let release = fetch_latest_release(context, CLIENT_MCP_REPO)?;
+    match mode {
+        ToolExtensionInstallMode::Sources => {
+            let path = tools_dir
+                .join("onec-client-mcp-devkit")
+                .join("exts")
+                .join("client-mcp");
+            download_source_subdir(context, &release, CLIENT_MCP_SOURCE_PREFIX, &path, force)?;
+            Ok(vec![destination(
+                "onec-client-mcp-devkit",
+                &release,
+                path,
+                "tools.client_mcp.extension.source",
+            )])
+        }
+        ToolExtensionInstallMode::Artifacts => {
+            let asset = release.required_asset("client_mcp", ".cfe")?;
+            let path = tools_dir.join(&asset.name);
+            download_asset_file(context, asset, &path, force)?;
+            Ok(vec![destination(
+                "onec-client-mcp-devkit",
+                &release,
+                path,
+                "tools.client_mcp.extension.artifact",
+            )])
+        }
+    }
+}
+
 fn fetch_latest_release(context: &ExecutionContext, repo: &str) -> Result<GitHubRelease, AppError> {
     let base = release_base_url();
     let url = format!("{base}/repos/{repo}/releases/latest");
+    debug!(repo, url = %url, "fetching latest tool release");
     let cancellation = context.cancellation();
     let text =
         download::get_text(&url, context.remaining_budget(), &cancellation).map_err(|error| {
@@ -195,6 +226,12 @@ fn download_asset_file(
     if !should_download_file(target_path, force)? {
         return Ok(());
     }
+    debug!(
+        asset = %asset.name,
+        url = %asset.browser_download_url,
+        path = %target_path.display(),
+        "downloading tool asset"
+    );
     let cancellation = context.cancellation();
     let bytes = download::get_bytes(
         &asset.browser_download_url,
@@ -221,6 +258,13 @@ fn download_single_file_from_zip(
     if !should_download_file(target_path, force)? {
         return Ok(());
     }
+    debug!(
+        asset = %asset.name,
+        url = %asset.browser_download_url,
+        file_name,
+        path = %target_path.display(),
+        "downloading tool archive asset"
+    );
     let cancellation = context.cancellation();
     let bytes = download::get_bytes(
         &asset.browser_download_url,
@@ -248,18 +292,22 @@ fn download_source_subdir(
     if !should_download_source_dir(target_path, force)? {
         return Ok(());
     }
+    let archive_url = source_archive_url(release);
+    debug!(
+        tag = %release.tag_name,
+        url = %archive_url,
+        source_prefix,
+        path = %target_path.display(),
+        "downloading tool source archive"
+    );
     let cancellation = context.cancellation();
-    let bytes = download::get_bytes(
-        &release.zipball_url,
-        context.remaining_budget(),
-        &cancellation,
-    )
-    .map_err(|error| {
-        AppError::Runtime(format!(
-            "failed to download source archive '{}': {error}",
-            release.zipball_url
-        ))
-    })?;
+    let bytes = download::get_bytes(&archive_url, context.remaining_budget(), &cancellation)
+        .map_err(|error| {
+            AppError::Runtime(format!(
+                "failed to download source archive '{}': {error}",
+                archive_url
+            ))
+        })?;
     let staged = target_path.with_extension(format!(
         "download-{}",
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
@@ -271,7 +319,6 @@ fn download_source_subdir(
     extract_zip_subdir(&bytes, source_prefix, &staged).inspect_err(|_| {
         let _ = fs::remove_dir_all(&staged);
     })?;
-    write_source_download_marker(&staged)?;
 
     let publish_phase = context.run_no_process_critical_phase(|| {
         replace_dir_atomically(
@@ -286,7 +333,7 @@ fn download_source_subdir(
         )
     });
     match publish_phase {
-        Ok(_) => Ok(()),
+        Ok(_) => write_source_download_marker(target_path),
         Err(error) => {
             let _ = fs::remove_dir_all(&staged);
             Err(AppError::Runtime(format!(
@@ -488,10 +535,14 @@ fn write_file_download_marker(target_path: &Path) -> Result<(), AppError> {
 }
 
 fn source_download_marker_path(path: &Path) -> PathBuf {
-    path.join(DOWNLOAD_MARKER_FILE)
+    sidecar_download_marker_path(path)
 }
 
 fn file_download_marker_path(path: &Path) -> PathBuf {
+    sidecar_download_marker_path(path)
+}
+
+fn sidecar_download_marker_path(path: &Path) -> PathBuf {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let name = path
         .file_name()
@@ -500,19 +551,80 @@ fn file_download_marker_path(path: &Path) -> PathBuf {
     parent.join(format!(".{name}{DOWNLOAD_MARKER_FILE}"))
 }
 
-fn update_configs(
+fn relative_path(root: &Path, path: &Path) -> String {
+    if let Some(relative) = path
+        .strip_prefix(root)
+        .ok()
+        .filter(|relative| !relative.as_os_str().is_empty())
+    {
+        return relative.display().to_string();
+    }
+
+    let root_components = normalized_components(root);
+    let path_components = normalized_components(path);
+    let common_len = root_components
+        .iter()
+        .zip(path_components.iter())
+        .take_while(|(left, right)| left == right)
+        .count();
+
+    let mut relative = PathBuf::new();
+    for _ in common_len..root_components.len() {
+        relative.push("..");
+    }
+    for component in &path_components[common_len..] {
+        relative.push(component);
+    }
+
+    if relative.as_os_str().is_empty() {
+        ".".to_owned()
+    } else {
+        relative.display().to_string()
+    }
+}
+
+fn normalized_components(path: &Path) -> Vec<OsString> {
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => components.push(prefix.as_os_str().to_os_string()),
+            Component::RootDir | Component::CurDir => {}
+            Component::ParentDir => match components.last() {
+                Some(last) if last != ".." => {
+                    components.pop();
+                }
+                _ => components.push(OsString::from("..")),
+            },
+            Component::Normal(part) => components.push(part.to_os_string()),
+        }
+    }
+    components
+}
+
+fn update_config_for_download(
     context: &ExecutionContext,
     config_path: &Path,
     local_config_path: &Path,
+    target: ToolDownloadTarget,
     mode: ToolExtensionInstallMode,
     destinations: &[ToolDownloadDestination],
 ) -> Result<(), AppError> {
-    if mode == ToolExtensionInstallMode::Sources {
-        add_yaxunit_source_set(context, config_path)?;
+    match target {
+        ToolDownloadTarget::Yaxunit if mode == ToolExtensionInstallMode::Sources => {
+            add_yaxunit_source_set(context, config_path)?;
+        }
+        ToolDownloadTarget::Yaxunit => {}
+        ToolDownloadTarget::VanessaAutomationSingle => {
+            let local_overlay = render_vanessa_local_overlay(local_config_path, destinations)?;
+            publish_bytes(context, local_overlay.as_bytes(), local_config_path)?;
+        }
+        ToolDownloadTarget::ClientMcp => {
+            let local_overlay =
+                render_client_mcp_local_overlay(local_config_path, destinations, mode)?;
+            publish_bytes(context, local_overlay.as_bytes(), local_config_path)?;
+        }
     }
-
-    let local_overlay = render_local_overlay(local_config_path, destinations, mode)?;
-    publish_bytes(context, local_overlay.as_bytes(), local_config_path)
+    Ok(())
 }
 
 fn add_yaxunit_source_set(context: &ExecutionContext, config_path: &Path) -> Result<(), AppError> {
@@ -608,35 +720,19 @@ fn insert_yaxunit_source_set_text(content: &str) -> Result<String, AppError> {
     Ok(rendered)
 }
 
-fn render_local_overlay(
+fn render_vanessa_local_overlay(
     path: &Path,
     destinations: &[ToolDownloadDestination],
-    mode: ToolExtensionInstallMode,
 ) -> Result<String, AppError> {
-    let mut root = if path.exists() {
-        let content = fs::read_to_string(path).map_err(io_error("failed to read local config"))?;
-        serde_yaml::from_str::<serde_yaml::Value>(&content).map_err(|error| {
-            AppError::Runtime(format!("failed to parse local config YAML: {error}"))
-        })?
-    } else {
-        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
-    };
-    if root.is_null() {
-        root = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
-    }
-
+    let mut root = read_local_overlay(path)?;
     let vanessa_path = destinations
         .iter()
         .find(|destination| destination.tool == "vanessa-automation-single")
         .ok_or_else(|| AppError::Runtime("missing Vanessa download destination".to_owned()))?
         .path
         .clone();
-    let client_path = destinations
-        .iter()
-        .find(|destination| destination.tool == "onec-client-mcp-devkit")
-        .ok_or_else(|| AppError::Runtime("missing client MCP download destination".to_owned()))?
-        .path
-        .clone();
+    let config_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let vanessa_path = relative_path(config_dir, &vanessa_path);
 
     let root_mapping = root.as_mapping_mut().ok_or_else(|| {
         AppError::Validation("expected a YAML mapping at local config root".to_owned())
@@ -645,9 +741,30 @@ fn render_local_overlay(
     let va = ensure_mapping(tools, "va")?;
     va.insert(
         serde_yaml::Value::String("epf_path".to_owned()),
-        serde_yaml::Value::String(vanessa_path.display().to_string()),
+        serde_yaml::Value::String(vanessa_path),
     );
+    render_local_overlay(root)
+}
 
+fn render_client_mcp_local_overlay(
+    path: &Path,
+    destinations: &[ToolDownloadDestination],
+    mode: ToolExtensionInstallMode,
+) -> Result<String, AppError> {
+    let mut root = read_local_overlay(path)?;
+    let client_path = destinations
+        .iter()
+        .find(|destination| destination.tool == "onec-client-mcp-devkit")
+        .ok_or_else(|| AppError::Runtime("missing client MCP download destination".to_owned()))?
+        .path
+        .clone();
+    let config_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let client_path = relative_path(config_dir, &client_path);
+
+    let root_mapping = root.as_mapping_mut().ok_or_else(|| {
+        AppError::Validation("expected a YAML mapping at local config root".to_owned())
+    })?;
+    let tools = ensure_mapping(root_mapping, "tools")?;
     let client_mcp = ensure_mapping(tools, "client_mcp")?;
     let mut extension = serde_yaml::Mapping::new();
     extension.insert(
@@ -659,7 +776,7 @@ fn render_local_overlay(
             let mut source = serde_yaml::Mapping::new();
             source.insert(
                 serde_yaml::Value::String("path".to_owned()),
-                serde_yaml::Value::String(client_path.display().to_string()),
+                serde_yaml::Value::String(client_path.clone()),
             );
             source.insert(
                 serde_yaml::Value::String("format".to_owned()),
@@ -674,7 +791,7 @@ fn render_local_overlay(
             let mut artifact = serde_yaml::Mapping::new();
             artifact.insert(
                 serde_yaml::Value::String("path".to_owned()),
-                serde_yaml::Value::String(client_path.display().to_string()),
+                serde_yaml::Value::String(client_path),
             );
             extension.insert(
                 serde_yaml::Value::String("artifact".to_owned()),
@@ -687,6 +804,25 @@ fn render_local_overlay(
         serde_yaml::Value::Mapping(extension),
     );
 
+    render_local_overlay(root)
+}
+
+fn read_local_overlay(path: &Path) -> Result<serde_yaml::Value, AppError> {
+    let mut root = if path.exists() {
+        let content = fs::read_to_string(path).map_err(io_error("failed to read local config"))?;
+        serde_yaml::from_str::<serde_yaml::Value>(&content).map_err(|error| {
+            AppError::Runtime(format!("failed to parse local config YAML: {error}"))
+        })?
+    } else {
+        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
+    };
+    if root.is_null() {
+        root = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+    }
+    Ok(root)
+}
+
+fn render_local_overlay(root: serde_yaml::Value) -> Result<String, AppError> {
     let mut rendered = serde_yaml::to_string(&root).map_err(|error| {
         AppError::Runtime(format!("failed to render local config YAML: {error}"))
     })?;
@@ -760,6 +896,34 @@ fn mode_label(mode: ToolExtensionInstallMode) -> &'static str {
     }
 }
 
+fn download_mode_label(target: ToolDownloadTarget, mode: ToolExtensionInstallMode) -> &'static str {
+    match target {
+        ToolDownloadTarget::VanessaAutomationSingle => "epf",
+        ToolDownloadTarget::Yaxunit | ToolDownloadTarget::ClientMcp => mode_label(mode),
+    }
+}
+
+fn target_label(target: ToolDownloadTarget) -> &'static str {
+    match target {
+        ToolDownloadTarget::Yaxunit => "yaxunit",
+        ToolDownloadTarget::VanessaAutomationSingle => "vanessa",
+        ToolDownloadTarget::ClientMcp => "client-mcp",
+    }
+}
+
+fn source_archive_url(release: &GitHubRelease) -> String {
+    let Some(rest) = release
+        .zipball_url
+        .strip_prefix("https://api.github.com/repos/")
+    else {
+        return release.zipball_url.clone();
+    };
+    let Some((repo, tag)) = rest.split_once("/zipball/") else {
+        return release.zipball_url.clone();
+    };
+    format!("https://codeload.github.com/{repo}/zip/refs/tags/{tag}")
+}
+
 fn io_error(context: &'static str) -> impl FnOnce(io::Error) -> AppError {
     move |error| AppError::Runtime(format!("{context}: {error}"))
 }
@@ -824,6 +988,37 @@ mod tests {
         assert_eq!(
             zip_relative_path("repo/exts/yaxunit/C:\\temp\\pwned", YAXUNIT_SOURCE_PREFIX,),
             None
+        );
+    }
+
+    #[test]
+    fn source_archive_url_uses_codeload_for_github_zipball() {
+        let release = GitHubRelease {
+            tag_name: "25.12".to_owned(),
+            html_url: "https://github.com/bia-technologies/yaxunit/releases/tag/25.12".to_owned(),
+            assets: Vec::new(),
+            zipball_url: "https://api.github.com/repos/bia-technologies/yaxunit/zipball/25.12"
+                .to_owned(),
+        };
+
+        assert_eq!(
+            source_archive_url(&release),
+            "https://codeload.github.com/bia-technologies/yaxunit/zip/refs/tags/25.12"
+        );
+    }
+
+    #[test]
+    fn source_archive_url_keeps_test_or_custom_urls() {
+        let release = GitHubRelease {
+            tag_name: "test".to_owned(),
+            html_url: "https://example.invalid/test".to_owned(),
+            assets: Vec::new(),
+            zipball_url: "http://127.0.0.1:1234/archive.zip".to_owned(),
+        };
+
+        assert_eq!(
+            source_archive_url(&release),
+            "http://127.0.0.1:1234/archive.zip"
         );
     }
 }

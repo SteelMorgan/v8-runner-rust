@@ -75,17 +75,19 @@ sequenceDiagram
 
 - CLI adapter получает workspace lock, потому что команда меняет primary config, local overlay и
   локальные tool directories.
-- Use case последовательно читает latest release metadata для YAxUnit, Vanessa Automation single и
-  onec-client-mcp-devkit.
-- Для `--extensions sources` распаковываются source subtrees: YAxUnit в `tests`, client MCP в
-  `build/tools/onec-client-mcp-devkit/exts/client-mcp`; primary config получает `source-set`
-  `tests`, если его ещё нет.
-- Для `--extensions artifacts` команда требует `builder=DESIGNER`; `.cfe` расширений
-  скачиваются в `build/tools`, а primary `source-set` не меняется.
-- Vanessa Automation single всегда материализуется как `build/tools/vanessa-automation-single.epf`.
-- `v8project.local.yaml` обновляется machine-local настройками `tools.va.epf_path` и
-  `tools.client_mcp.extension`; загрузка не устанавливает расширения в ИБ, не подменяет `build`
-  и при `--force` заменяет только managed targets, созданные этой командой.
+- Use case читает latest release metadata для выбранной команды: `yaxunit`, `vanessa` или
+  `client-mcp`.
+- Для `yaxunit --sources` распаковывается source subtree в `tests`; primary config получает
+  `source-set` `tests`, если его ещё нет. Без `--sources` скачивается `.cfe` в `build/tools`.
+- Для `client-mcp --sources` распаковывается source subtree в
+  `build/tools/onec-client-mcp-devkit/exts/client-mcp`; без `--sources` команда требует
+  `builder=DESIGNER` и скачивает `.cfe` в `build/tools`.
+- Vanessa Automation single материализуется командой `vanessa` как
+  `build/tools/vanessa-automation-single.epf`.
+- `v8project.local.yaml` обновляется machine-local настройками `tools.va.epf_path` для
+  `vanessa` и `tools.client_mcp.extension` для `client-mcp`; загрузка не устанавливает
+  расширения в ИБ, не подменяет `build` и при `--force` заменяет только managed targets,
+  созданные этой командой.
 
 ### 6.5 Сценарий MCP EDT Syntax
 
