@@ -56,6 +56,8 @@ v8-runner config init
 v8-runner config init --connection "File=build/ib"
 v8-runner config init --format edt
 v8-runner config init --builder IBCMD
+v8-runner tools download
+v8-runner tools download --extensions artifacts
 v8-runner init
 ```
 
@@ -66,6 +68,10 @@ v8-runner init
 - Branch switch, rebase, large object moves, stale source-backed tool extension state, or suspicious incremental state: run `v8-runner build --full-rebuild`.
 - Syntax check: inspect `format` and `builder`, then choose `syntax designer-modules`, `syntax designer-config`, or `syntax edt`.
 - Behavior validation: run the relevant `v8-runner test ...` command; tests build first.
+- Missing local YAxUnit, Vanessa Automation, or onec-client-mcp-devkit setup: run
+  `v8-runner tools download` for source-backed extensions, or
+  `v8-runner tools download --extensions artifacts` for `.cfe`-backed extensions when
+  `builder=DESIGNER`.
 - Vanessa Automation debugging or scenario authoring: use `v8-runner launch mcp va ...` to start the client MCP server with VA loaded.
 - Extension properties need synchronization: use `v8-runner extensions` or `extensions --name <SOURCE_SET>`.
 - Infobase changes need to become Git-visible files: check `git status`, then run the relevant `v8-runner dump ...` command.

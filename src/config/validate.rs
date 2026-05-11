@@ -202,6 +202,23 @@ pub fn validate(config: &AppConfig) -> Result<(), ConfigValidationError> {
     Ok(())
 }
 
+/// Validate only the configuration parts required to bootstrap downloaded tools.
+///
+/// `tools download` may be invoked specifically to create Vanessa Automation and
+/// client MCP paths, so those tool-dependent checks must not block the command.
+pub fn validate_tools_download_bootstrap(config: &AppConfig) -> Result<(), ConfigValidationError> {
+    validate_base_path(&config.base_path)?;
+    validate_work_path(&config.work_path)?;
+    validate_matrix(config)?;
+    validate_connection(config)?;
+    validate_platform_version(config)?;
+    validate_build_config(config)?;
+    validate_execution_timeout(config)?;
+    validate_mcp_config(config)?;
+    validate_edt_cli_config(config)?;
+    Ok(())
+}
+
 fn validate_base_path(path: &Path) -> Result<(), ConfigValidationError> {
     if !path.exists() || !path.is_dir() {
         return Err(ConfigValidationError::BasePathInvalid(

@@ -71,7 +71,23 @@ sequenceDiagram
 - Используется как более узкий operational path по сравнению с `build`, когда нужно синхронизировать свойства расширений без полной загрузки исходников.
 - Так как операция мутирует ИБ, будущая общая execution policy должна помечать соответствующий platform step как critical DB phase.
 
-### 6.4 Сценарий MCP EDT Syntax
+### 6.4 Сценарий `tools download`
+
+- CLI adapter получает workspace lock, потому что команда меняет primary config, local overlay и
+  локальные tool directories.
+- Use case последовательно читает latest release metadata для YAxUnit, Vanessa Automation single и
+  onec-client-mcp-devkit.
+- Для `--extensions sources` распаковываются source subtrees: YAxUnit в `tests`, client MCP в
+  `build/tools/onec-client-mcp-devkit/exts/client-mcp`; primary config получает `source-set`
+  `tests`, если его ещё нет.
+- Для `--extensions artifacts` команда требует `builder=DESIGNER`; `.cfe` расширений
+  скачиваются в `build/tools`, а primary `source-set` не меняется.
+- Vanessa Automation single всегда материализуется как `build/tools/vanessa-automation-single.epf`.
+- `v8project.local.yaml` обновляется machine-local настройками `tools.va.epf_path` и
+  `tools.client_mcp.extension`; загрузка не устанавливает расширения в ИБ, не подменяет `build`
+  и при `--force` заменяет только managed targets, созданные этой командой.
+
+### 6.5 Сценарий MCP EDT Syntax
 
 - MCP-запрос приходит через stdio или HTTP.
 - Глобальный admission control ограничивает параллельные tool-вызовы.
@@ -79,7 +95,7 @@ sequenceDiagram
 - Ожидание в очереди, baseline reset/probe и выполнение команды используют один и тот же ограниченный бюджет таймаута.
 - Host policy различается: MCP может отпустить caller после running cancel/timeout и дождаться terminal state асинхронно внутри shared actor, а CLI blocking adapter ждёт terminal cleanup или завершает собственный short-lived manager принудительно перед возвратом.
 
-### 6.5 Full Replacement `dump` / `artifacts` Publication
+### 6.6 Full Replacement `dump` / `artifacts` Publication
 
 ```mermaid
 sequenceDiagram
@@ -117,7 +133,7 @@ sequenceDiagram
 - `dump incremental` и `dump partial` не получают full replacement guarantee и остаются non-atomic update modes.
 - Publication phase после переноса старого target в backup является filesystem critical phase.
 
-### 6.6 Command Boundary, Admission и Cancellation
+### 6.7 Command Boundary, Admission и Cancellation
 
 - CLI и MCP используют разные public surfaces, но сходятся в transport-neutral use case boundary.
 - MCP tool call сначала проходит execution admission; HTTP session capacity проверяется отдельно на transport lifecycle.

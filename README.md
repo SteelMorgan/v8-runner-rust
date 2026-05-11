@@ -45,6 +45,17 @@ overlay в `.gitignore`, если он еще не указан.
 Machine-local пути, credentials и настройки инструментов можно вынести в `v8project.local.yaml`
 рядом с основным конфигом. Этот файл применяется автоматически и должен оставаться вне Git.
 
+### Загрузите тестовые и MCP-инструменты:
+
+```bash
+v8-runner tools download
+```
+
+По умолчанию команда берёт latest releases YAxUnit, Vanessa Automation single и
+onec-client-mcp-devkit, добавляет YAxUnit sources как `source-set` `tests`, кладёт tool artifacts в
+`build/tools` и обновляет `v8project.local.yaml`. Для `.cfe`-режима расширений используйте
+`v8-runner tools download --extensions artifacts` в проектах с `builder=DESIGNER`.
+
 ### Подготовьте рабочую информационную базу:
 
 ```bash
@@ -107,7 +118,7 @@ v8-runner mcp serve stdio
 
 | Зона | Команды | Что делает |
 | --- | --- | --- |
-| Project setup (настройка проекта) | `config init`, `init`, `extensions`, `build` | Создает config, готовит ИБ, обновляет расширения и загружает исходники |
+| Project setup (настройка проекта) | `config init`, `tools download`, `init`, `extensions`, `build` | Создает config, скачивает инструменты, готовит ИБ, обновляет расширения и загружает исходники |
 | Verification (проверка) | `syntax`, `test` | Запускает syntax checks, YAxUnit и Vanessa Automation |
 | File materialization (материализация файлов) | `dump`, `convert`, `load`, `make`, `artifacts` | Выгружает, конвертирует, загружает и публикует `.cf`, `.cfe`, `.epf`, `.erf` |
 | Direct launch (прямой запуск) | `launch <designer|thin|thick|ordinary>`, `launch mcp [va]` | Запускает 1C clients (клиенты 1С), Designer и MCP/Vanessa сценарии |

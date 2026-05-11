@@ -51,6 +51,21 @@ fn build_help_exposes_source_set_selector() {
 }
 
 #[test]
+fn tools_download_help_exposes_extension_install_mode() {
+    let output = v8_runner_command()
+        .args(["tools", "download", "--help"])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Command options:"));
+    assert!(stdout.contains("Global options:"));
+    assert!(stdout.contains("--extensions <EXTENSIONS>"));
+    assert!(stdout.contains("--force"));
+}
+
+#[test]
 fn launch_help_uses_output_path_name_and_global_json_selector() {
     let output = v8_runner_command()
         .args(["launch", "--help"])

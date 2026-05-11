@@ -9,6 +9,7 @@ use crate::cli::args::{
     ArtifactsArgs, BuildArgs, Command, ConvertArgs, DesignerConfigSyntaxArgs,
     DesignerModulesSyntaxArgs, DumpArgs, ExtensionsArgs, LaunchArgs, LaunchOptionsArgs, LoadArgs,
     SyntaxArgs, SyntaxTarget, TestArgs, TestRunner, TestScope, TestVaArgs, TestYaxunitArgs,
+    ToolsArgs, ToolsCommand, ToolsDownloadArgs,
 };
 use crate::cli::output::{
     failure_envelope, pre_dispatch_error_envelope, print_command_use_case_error, with_cli_error,
@@ -39,6 +40,7 @@ use crate::domain::runner::{
 };
 use crate::domain::syntax::{SyntaxCheckResult, SyntaxCheckStatus};
 use crate::domain::test::{RetainedPaths, TestReport, TestRunResult, TestStatus, TestTarget};
+use crate::domain::tools_download::{ToolExtensionInstallMode, ToolsDownloadResult};
 use crate::output::presenter::Presenter;
 use crate::output::text::{TimelineItem, TimelineStatus};
 use crate::support::adapter_input::{
@@ -64,10 +66,11 @@ use crate::use_cases::request::{
     DesignerClientScope, DesignerClientScopes, DesignerConfigCheck, DesignerConfigChecks,
     DesignerConfigSyntaxRequest, DesignerModulesSyntaxRequest, DumpRequest, InitRequest,
     LaunchRequest, LoadRequest, SyntaxExtensionScope, SyntaxRequest, SyntaxTargetRequest,
-    TestRequest, TestScopeRequest,
+    TestRequest, TestScopeRequest, ToolsDownloadRequest,
 };
 use crate::use_cases::result::{UseCaseError, UseCaseErrorKind};
 use crate::use_cases::run_tests;
+use crate::use_cases::tools_download;
 use crate::use_cases::transport::dispatch_with_workspace_lock;
 
 /// Executes a parsed CLI command by mapping it into transport-neutral requests and
@@ -75,6 +78,7 @@ use crate::use_cases::transport::dispatch_with_workspace_lock;
 pub fn execute_command(
     config: &AppConfig,
     command: &Command,
+    primary_config_path: Option<PathBuf>,
     presenter: &Presenter,
     clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
@@ -82,6 +86,14 @@ pub fn execute_command(
     let _signal_guard = CliSignalGuard::install(cancellation.clone());
     match command {
         Command::Config(_) => unreachable!("config commands are handled outside cli::execute"),
+        Command::Tools(args) => execute_tools(
+            config,
+            args,
+            required_primary_config_path(primary_config_path)?,
+            presenter,
+            clean_before_execution,
+            cancellation,
+        ),
         Command::Init => execute_init(config, presenter, clean_before_execution, cancellation),
         Command::Extensions(args) => execute_extensions(
             config,
@@ -154,6 +166,9 @@ pub fn execute_command(
 pub fn command_name(command: &Command) -> CommandName {
     match command {
         Command::Config(_) => unreachable!("config commands do not map to execution use cases"),
+        Command::Tools(ToolsArgs {
+            command: ToolsCommand::Download(_),
+        }) => CommandName::ToolsDownload,
         Command::Init => CommandName::Init,
         Command::Extensions(_) => CommandName::Extensions,
         Command::Build(_) => CommandName::Build,
@@ -166,6 +181,93 @@ pub fn command_name(command: &Command) -> CommandName {
         Command::Launch(_) => CommandName::Launch,
         Command::Mcp(_) => unreachable!("mcp commands do not map to CLI command names"),
     }
+}
+
+fn execute_tools(
+    config: &AppConfig,
+    args: &ToolsArgs,
+    primary_config_path: PathBuf,
+    presenter: &Presenter,
+    clean_before_execution: bool,
+    cancellation: CancellationToken,
+) -> Result<(), UseCaseError> {
+    match &args.command {
+        ToolsCommand::Download(download) => execute_tools_download(
+            config,
+            download,
+            primary_config_path,
+            presenter,
+            clean_before_execution,
+            cancellation,
+        ),
+    }
+}
+
+fn execute_tools_download(
+    config: &AppConfig,
+    args: &ToolsDownloadArgs,
+    primary_config_path: PathBuf,
+    presenter: &Presenter,
+    clean_before_execution: bool,
+    cancellation: CancellationToken,
+) -> Result<(), UseCaseError> {
+    let request = ToolsDownloadRequest {
+        config_path: primary_config_path,
+        extensions: map_tool_extension_mode(&args.extensions),
+        force: args.force,
+    };
+    let context = cli_context(config, CommandName::ToolsDownload, cancellation);
+    with_cli_workspace_lock(
+        config,
+        presenter,
+        CommandName::ToolsDownload,
+        clean_before_execution,
+        || match tools_download::execute(&context, config, &request) {
+            Ok(result) => {
+                if presenter.is_json() {
+                    presenter.print_envelope(&Envelope::ok(
+                        CommandName::ToolsDownload.as_str(),
+                        result.duration_ms,
+                        result,
+                    ));
+                } else {
+                    render_tools_download_text(&result, presenter);
+                }
+                Ok(())
+            }
+            Err(failure) => {
+                let error = failure.error;
+                if presenter.is_json() {
+                    match failure.payload {
+                        Some(result) => presenter.print_envelope(&failure_envelope(
+                            CommandName::ToolsDownload.as_str(),
+                            result.duration_ms,
+                            result,
+                            &error,
+                        )),
+                        None => presenter.print_envelope(&pre_dispatch_error_envelope(
+                            CommandName::ToolsDownload.as_str(),
+                            &error,
+                        )),
+                    }
+                } else {
+                    presenter.print_error(&error.to_string());
+                }
+                Err(error)
+            }
+        },
+    )
+}
+
+fn required_primary_config_path(
+    primary_config_path: Option<PathBuf>,
+) -> Result<PathBuf, UseCaseError> {
+    primary_config_path.ok_or_else(|| {
+        UseCaseError::new(
+            UseCaseErrorKind::Validation,
+            "tools download requires a resolved primary config path",
+        )
+    })
 }
 
 fn execute_extensions(
@@ -708,6 +810,13 @@ fn map_build_request(args: &BuildArgs) -> BuildRequest {
 fn map_extensions_request(args: &ExtensionsArgs) -> ConfigureExtensionsRequest {
     ConfigureExtensionsRequest {
         names: args.names.clone(),
+    }
+}
+
+fn map_tool_extension_mode(value: &str) -> ToolExtensionInstallMode {
+    match value {
+        "artifacts" => ToolExtensionInstallMode::Artifacts,
+        _ => ToolExtensionInstallMode::Sources,
     }
 }
 
@@ -1469,6 +1578,30 @@ fn render_build_text(result: &BuildResult, presenter: &Presenter, succeeded: boo
         TimelineItem::new(TimelineStatus::Succeeded, "Build completed successfully")
     };
     presenter.print_timeline(&[summary]);
+}
+
+fn render_tools_download_text(result: &ToolsDownloadResult, presenter: &Presenter) {
+    let mut details = vec![
+        format!("mode: {}", result.mode),
+        format!("config: {}", result.config_path.display()),
+        format!("local config: {}", result.local_config_path.display()),
+    ];
+    for destination in &result.destinations {
+        details.push(format!(
+            "{} {} -> {} ({})",
+            destination.tool,
+            destination.tag,
+            destination.path.display(),
+            destination.config
+        ));
+    }
+
+    single_timeline(
+        presenter,
+        TimelineStatus::Succeeded,
+        "Tools downloaded successfully",
+        details,
+    );
 }
 
 fn timeline_status(ok: bool) -> TimelineStatus {
@@ -2742,6 +2875,7 @@ mod tests {
                 full_rebuild: true,
                 source_set: None,
             }),
+            None,
             &presenter,
             false,
         )
@@ -2773,6 +2907,7 @@ mod tests {
                     scope: TestScope::All,
                 }),
             }),
+            None,
             &presenter,
             false,
         )
@@ -2804,6 +2939,7 @@ mod tests {
                 mcp_config: None,
                 mcp_port: None,
             }),
+            None,
             &presenter,
             false,
         )
@@ -2836,6 +2972,7 @@ mod tests {
                     },
                 }),
             }),
+            None,
             &presenter,
             false,
         )
@@ -2866,6 +3003,7 @@ mod tests {
                 full_rebuild: true,
                 source_set: None,
             }),
+            None,
             &presenter,
             true,
         )

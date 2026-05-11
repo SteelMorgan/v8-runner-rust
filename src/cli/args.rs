@@ -45,6 +45,8 @@ pub struct Cli {
 pub enum Command {
     /// Generate project configuration and autodetect source-sets
     Config(ConfigArgs),
+    /// Download YaXUnit, Vanessa Automation, and client MCP tool assets
+    Tools(ToolsArgs),
     /// Initialize the infobase and EDT workspace
     Init,
     /// Update configured extension properties inside the infobase
@@ -68,6 +70,30 @@ pub enum Command {
     Launch(LaunchArgs),
     /// Serve Model Context Protocol transports
     Mcp(McpArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ToolsArgs {
+    #[command(subcommand)]
+    pub command: ToolsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ToolsCommand {
+    /// Download supported test and MCP helper tools from latest GitHub releases
+    Download(ToolsDownloadArgs),
+}
+
+#[derive(Args, Debug)]
+#[command(next_help_heading = "Command options")]
+pub struct ToolsDownloadArgs {
+    /// Installation mode for extension tools
+    #[arg(long, default_value = "sources", value_parser = ["sources", "artifacts"])]
+    pub extensions: String,
+
+    /// Re-download managed targets created by tools download
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Args, Debug)]

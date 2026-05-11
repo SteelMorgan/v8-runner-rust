@@ -5,11 +5,11 @@ use crate::config::model::AppConfig;
 use crate::config::schema::{
     validate_local_overlay_schema_boundary, validate_main_config_schema_boundary,
 };
-use crate::config::validate::{validate, ConfigValidationError};
+use crate::config::validate::{validate, validate_tools_download_bootstrap, ConfigValidationError};
 use crate::support::path::normalize_windows_verbatim_path;
 
-const DEFAULT_CONFIG_FILE_NAME: &str = "v8project.yaml";
-const LOCAL_CONFIG_FILE_NAME: &str = "v8project.local.yaml";
+pub const DEFAULT_CONFIG_FILE_NAME: &str = "v8project.yaml";
+pub const LOCAL_CONFIG_FILE_NAME: &str = "v8project.local.yaml";
 
 #[derive(Debug, Error)]
 pub enum ConfigLoadError {
@@ -45,6 +45,30 @@ pub fn load_config(
     config_path: Option<&str>,
     workdir_override: Option<&str>,
 ) -> Result<AppConfig, ConfigLoadError> {
+    load_config_with_mode(config_path, workdir_override, ConfigValidationMode::Full)
+}
+
+pub fn load_config_for_tools_download(
+    config_path: Option<&str>,
+    workdir_override: Option<&str>,
+) -> Result<AppConfig, ConfigLoadError> {
+    load_config_with_mode(
+        config_path,
+        workdir_override,
+        ConfigValidationMode::ToolsDownload,
+    )
+}
+
+enum ConfigValidationMode {
+    Full,
+    ToolsDownload,
+}
+
+fn load_config_with_mode(
+    config_path: Option<&str>,
+    workdir_override: Option<&str>,
+    validation_mode: ConfigValidationMode,
+) -> Result<AppConfig, ConfigLoadError> {
     let path = resolve_config_path(config_path)?;
     reject_local_overlay_as_primary_config(&path)?;
     let path = normalize_windows_verbatim_path(&std::fs::canonicalize(&path)?);
@@ -77,8 +101,19 @@ pub fn load_config(
         config.work_path = normalize_optional_path(Path::new(wd), config_dir);
     }
 
-    validate(&config)?;
+    match validation_mode {
+        ConfigValidationMode::Full => validate(&config)?,
+        ConfigValidationMode::ToolsDownload => validate_tools_download_bootstrap(&config)?,
+    }
     Ok(config)
+}
+
+pub fn resolve_primary_config_path(config_path: Option<&str>) -> Result<PathBuf, ConfigLoadError> {
+    let path = resolve_config_path(config_path)?;
+    reject_local_overlay_as_primary_config(&path)?;
+    Ok(normalize_windows_verbatim_path(&std::fs::canonicalize(
+        &path,
+    )?))
 }
 
 fn read_yaml_file(path: &Path) -> Result<serde_yaml::Value, ConfigLoadError> {
