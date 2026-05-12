@@ -59,6 +59,7 @@ where
         let use_case_request = BuildRequest {
             full_rebuild: request.full_rebuild.unwrap_or(false),
             source_set: request.source_set.clone(),
+            dynamic_update: request.dynamic_update,
         };
 
         match self
@@ -826,6 +827,7 @@ mod tests {
                 &McpBuildProjectRequest {
                     full_rebuild: Some(true),
                     source_set: Some("main".to_owned()),
+                    dynamic_update: None,
                 },
             )
             .expect("success");
