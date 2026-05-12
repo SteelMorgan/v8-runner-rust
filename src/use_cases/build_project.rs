@@ -122,6 +122,14 @@ fn run_build_ibcmd(
     Ok(result)
 }
 
+/// Resolves the effective `/UpdateDBCfg -Dynamic+` flag for a build invocation.
+///
+/// `args.dynamic_update` (CLI/MCP one-shot override) takes priority over
+/// `config.build.dynamic_update` (project-wide default). Default is `false`.
+pub(crate) fn resolve_dynamic_update(config: &AppConfig, args: &BuildArgs) -> bool {
+    args.dynamic_update.unwrap_or(config.build.dynamic_update)
+}
+
 fn validate_designer_supported_matrix(config: &AppConfig) -> Option<AppError> {
     if config.format == SourceFormat::Designer
         && matches!(
@@ -416,6 +424,11 @@ fn recreate_directory(path: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(path)
 }
 
+// Designer build step is intentionally wide: it threads the execution context, config, the
+// source set and its commit/load directories, the partial-load file list and the dynamic
+// flag. Refactoring into a builder is out of scope for TASK-124; the IBCMD sibling already
+// breaches the same limit (9/7) without an allow.
+#[allow(clippy::too_many_arguments)]
 fn execute_source_set_step(
     context: &ExecutionContext,
     config: &AppConfig,
@@ -427,6 +440,7 @@ fn execute_source_set_step(
     step_index: usize,
     partial_paths: Option<&[PathBuf]>,
     commit: &StepCommit,
+    dynamic_update_db_cfg: bool,
 ) -> Result<Vec<String>, AppError> {
     if let Some(error) = interruption_before_safe_point(
         context,
@@ -517,7 +531,7 @@ fn execute_source_set_step(
         "update",
         InterruptionSafetyClass::CriticalNonAbortable,
     )?
-    .update_db_cfg(extension_name(source_set))
+    .update_db_cfg(extension_name(source_set), dynamic_update_db_cfg)
     .map_err(AppError::from)?;
     ensure_platform_success("update_db_cfg", source_set, &update_result)?;
 
@@ -851,6 +865,7 @@ mod tests {
             ],
             build: BuildConfig {
                 partial_load_threshold: threshold,
+                dynamic_update: false,
             },
             tools: ToolsConfig {
                 platform: PlatformToolConfig {
@@ -891,6 +906,7 @@ mod tests {
             ],
             build: BuildConfig {
                 partial_load_threshold: 20,
+                dynamic_update: false,
             },
             tools: ToolsConfig {
                 platform: PlatformToolConfig {
@@ -914,6 +930,15 @@ mod tests {
         BuildArgs {
             full_rebuild,
             source_set: None,
+            dynamic_update: None,
+        }
+    }
+
+    fn build_args_dynamic(full_rebuild: bool, dynamic: bool) -> BuildArgs {
+        BuildArgs {
+            full_rebuild,
+            source_set: None,
+            dynamic_update: Some(dynamic),
         }
     }
 
@@ -2584,6 +2609,153 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn dynamic_cli_flag_emits_dynamic_marker_in_update_db_cfg() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let script = dir.path().join("1cv8");
+        let calls = dir.path().join("calls.log");
+        create_source_tree(&base);
+        write_designer_script(&script, &calls, None);
+        let config = build_config(
+            &base,
+            &work,
+            &script,
+            20,
+            SourceFormat::Designer,
+            BuilderBackend::Designer,
+        );
+        prime_snapshots(&config);
+
+        fs::write(
+            base.join("main")
+                .join("Catalogs.Items")
+                .join("ObjectModule.bsl"),
+            "procedure Test()\n  // changed\nendprocedure",
+        )
+        .expect("modify main");
+
+        // CLI `--dynamic` should reach DESIGNER as `/UpdateDBCfg -Dynamic+`.
+        let result = run_build(&config, &build_args_dynamic(false, true)).expect("dynamic build");
+        let calls_text = fs::read_to_string(&calls).expect("calls");
+
+        assert!(result.ok);
+        assert!(calls_text.contains("/UpdateDBCfg"));
+        assert!(calls_text.contains("-Dynamic+"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_dynamic_update_config_default_emits_dynamic_marker() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let script = dir.path().join("1cv8");
+        let calls = dir.path().join("calls.log");
+        create_source_tree(&base);
+        write_designer_script(&script, &calls, None);
+        let mut config = build_config(
+            &base,
+            &work,
+            &script,
+            20,
+            SourceFormat::Designer,
+            BuilderBackend::Designer,
+        );
+        config.build.dynamic_update = true;
+        prime_snapshots(&config);
+
+        fs::write(
+            base.join("main")
+                .join("Catalogs.Items")
+                .join("ObjectModule.bsl"),
+            "procedure Test()\n  // changed\nendprocedure",
+        )
+        .expect("modify main");
+
+        // `build.dynamicUpdate: true` in v8project.yaml is enough — no CLI flag needed.
+        let result = run_build(&config, &build_args(false)).expect("dynamic build");
+        let calls_text = fs::read_to_string(&calls).expect("calls");
+
+        assert!(result.ok);
+        assert!(calls_text.contains("-Dynamic+"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_without_dynamic_flag_emits_static_update_db_cfg() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let script = dir.path().join("1cv8");
+        let calls = dir.path().join("calls.log");
+        create_source_tree(&base);
+        write_designer_script(&script, &calls, None);
+        let config = build_config(
+            &base,
+            &work,
+            &script,
+            20,
+            SourceFormat::Designer,
+            BuilderBackend::Designer,
+        );
+        prime_snapshots(&config);
+
+        fs::write(
+            base.join("main")
+                .join("Catalogs.Items")
+                .join("ObjectModule.bsl"),
+            "procedure Test()\n  // changed\nendprocedure",
+        )
+        .expect("modify main");
+
+        // Regression guard: default behavior MUST NOT add `-Dynamic+`.
+        let _ = run_build(&config, &build_args(false)).expect("static build");
+        let calls_text = fs::read_to_string(&calls).expect("calls");
+
+        assert!(calls_text.contains("/UpdateDBCfg"));
+        assert!(!calls_text.contains("-Dynamic"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn infobase_unlock_code_propagates_to_designer_args() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let script = dir.path().join("1cv8");
+        let calls = dir.path().join("calls.log");
+        create_source_tree(&base);
+        write_designer_script(&script, &calls, None);
+        let mut config = build_config(
+            &base,
+            &work,
+            &script,
+            20,
+            SourceFormat::Designer,
+            BuilderBackend::Designer,
+        );
+        config.infobase.unlock_code = Some("seal-42".to_owned());
+        prime_snapshots(&config);
+
+        fs::write(
+            base.join("main")
+                .join("Catalogs.Items")
+                .join("ObjectModule.bsl"),
+            "procedure Test()\n  // changed\nendprocedure",
+        )
+        .expect("modify main");
+
+        let _ = run_build(&config, &build_args(false)).expect("build with /UC");
+        let calls_text = fs::read_to_string(&calls).expect("calls");
+
+        // `/UC` reaches DESIGNER as a separate token + value pair.
+        assert!(calls_text.contains("/UC"));
+        assert!(calls_text.contains("seal-42"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn changed_extension_only_loads_extension_and_preserves_other_storage() {
         let dir = tempdir().expect("tempdir");
         let base = dir.path().join("base");
@@ -2656,6 +2828,7 @@ mod tests {
             &BuildArgs {
                 full_rebuild: false,
                 source_set: Some("ext".to_owned()),
+                dynamic_update: None,
             },
         )
         .expect("build");
@@ -2707,6 +2880,7 @@ mod tests {
             &BuildArgs {
                 full_rebuild: false,
                 source_set: Some("ext".to_owned()),
+                dynamic_update: None,
             },
         )
         .expect("build");
@@ -2745,6 +2919,7 @@ mod tests {
             &BuildArgs {
                 full_rebuild: false,
                 source_set: Some("missing".to_owned()),
+                dynamic_update: None,
             },
         )
         .expect_err("unknown source-set must fail");
