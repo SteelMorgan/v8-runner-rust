@@ -559,7 +559,7 @@ mod tests {
         assert_eq!(result.mcp_port, Some(9874));
         let args = fs::read_to_string(args_log).expect("args log");
         assert!(args.contains("ENTERPRISE"));
-        assert!(args.contains("/C\"runMcp;mcpPort=9874\""));
+        assert!(args.contains("/C\nrunMcp;mcpPort=9874\n"));
         assert!(!args.contains("/LoadCfg"));
         assert!(!args.contains("-Extension"));
     }
