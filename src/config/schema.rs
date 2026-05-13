@@ -473,6 +473,10 @@ struct InfobaseSchema {
     /// Optional infobase password passed to platform utilities.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     password: Option<String>,
+    /// Optional unlock code. Non-empty value is propagated as `/UC <value>` to DESIGNER;
+    /// empty string means no unlock code and `/UC` is not passed. Masked in command logs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unlock_code: Option<String>,
     /// Optional DBMS settings for server-based infobases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     dbms: Option<InfobaseDbmsSchema>,
@@ -495,6 +499,10 @@ struct PartialInfobaseSchema {
     /// Optional local infobase password.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     password: Option<String>,
+    /// Optional local infobase unlock code. Non-empty value is propagated as `/UC <value>`;
+    /// empty string means no unlock code and `/UC` is not passed. Masked in command logs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unlock_code: Option<String>,
     /// Optional local DBMS settings override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     dbms: Option<PartialInfobaseDbmsSchema>,
@@ -554,6 +562,14 @@ struct BuildSchema {
     )]
     #[schemars(with = "usize")]
     partial_load_threshold: Option<usize>,
+    /// Default `/UpdateDBCfg -Dynamic+` toggle for `build`. CLI `--dynamic` overrides this.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_non_null_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "bool")]
+    dynamic_update: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
