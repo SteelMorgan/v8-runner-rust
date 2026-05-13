@@ -15,6 +15,36 @@ pub struct LaunchResult {
     pub binary: PathBuf,
     /// Human-readable launch summary.
     pub message: Option<String>,
+    /// MCP transport selected for this launch.
+    /// Present only for `launch mcp` and `test` flows.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub transport: Option<LaunchMcpTransport>,
+    /// Per-launch UUID announced to the session-manager
+    /// (`mcpMode=ws` only).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub client_uid: Option<String>,
+    /// Manager-side client kind announced to the session-manager
+    /// (`mcpMode=ws` only).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub kind: Option<String>,
+    /// Session-manager WS endpoint used for this launch (`mcpMode=ws` only).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub manager_url: Option<String>,
+    /// Correlation id for trace correlation in manager logs
+    /// (`mcpMode=ws` only).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub corr_id: Option<String>,
+    /// Local HTTP MCP port (`mcp` transport only).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub mcp_port: Option<u16>,
+}
+
+/// MCP client transport selected for a launch result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchMcpTransport {
+    Ws,
+    Mcp,
 }
 
 /// Supported application launch modes.

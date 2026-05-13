@@ -226,7 +226,27 @@ pub(super) fn run_tests(
     log_live_stage("test: enterprise run", "[Enterprise] running test runner");
     let run_started = Instant::now();
     let enterprise_runner = crate::platform::process::ProcessExecutor;
-    let platform_launch = build_platform_launch(&args.execution.launch, &prepared_run, &artifacts);
+    let mut platform_launch =
+        build_platform_launch(&args.execution.launch, &prepared_run, &artifacts);
+    if let Err(error) =
+        apply_test_mcp_ws_payload(config, &args.mcp_ws, &prepared_run, &mut platform_launch)
+    {
+        let outcome = ExecutionOutcome::new(ExecutionStatus::Failed)
+            .with_diagnostics(vec![error.to_string()])
+            .with_errors(vec![test_execution_error(
+                TestErrorKind::TestSetupFailed,
+                error.to_string(),
+            )]);
+        let result = make_test_result(
+            target,
+            mode,
+            outcome,
+            warnings,
+            steps,
+            started.elapsed().as_millis() as u64,
+        );
+        return Err(TestExecutionFailure::with_payload(error, result));
+    }
     let enterprise = match build_enterprise_dsl(
         context,
         config,

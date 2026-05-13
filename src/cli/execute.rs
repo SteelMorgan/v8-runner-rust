@@ -846,6 +846,7 @@ fn map_tools_download_force(args: &ToolsDownloadArgs) -> bool {
 
 fn map_test_request(config: &AppConfig, args: &TestArgs) -> Result<TestRequest, UseCaseError> {
     let client_mode = map_test_client_mode(args.client_mode.as_deref())?;
+    let mcp_ws = map_mcp_ws_args(&args.mcp_ws)?;
     match &args.runner {
         TestRunner::Yaxunit(TestYaxunitArgs { scope }) => {
             let scope = map_yaxunit_scope(scope)?;
@@ -853,12 +854,14 @@ fn map_test_request(config: &AppConfig, args: &TestArgs) -> Result<TestRequest, 
                 execution: build_yaxunit_execution(config, &args.launch, client_mode)?,
                 full: args.full,
                 scope,
+                mcp_ws,
             })
         }
         TestRunner::Va(_) => Ok(TestRequest {
             execution: build_vanessa_execution(config, &args.launch, client_mode)?,
             full: args.full,
             scope: TestScopeRequest::All,
+            mcp_ws,
         }),
     }
 }
@@ -1310,6 +1313,87 @@ fn map_launch_request(args: &LaunchArgs) -> Result<LaunchRequest, UseCaseError> 
         target,
         launch: map_direct_launch_options(target, &args.launch, client_mcp.is_some())?,
         client_mcp,
+        mcp_ws: map_mcp_ws_args(&args.mcp_ws)?,
+    })
+}
+
+fn map_mcp_ws_args(
+    args: &crate::cli::args::McpClientWsArgs,
+) -> Result<crate::use_cases::request::McpClientWsRequest, UseCaseError> {
+    use crate::use_cases::request::{McpClientTransportRequest, McpClientWsRequest};
+    let transport = match args.mcp_transport.as_deref() {
+        None => None,
+        Some(value) => match crate::use_cases::mcp_ws::McpClientTransport::from_str_value(value) {
+            Some(crate::use_cases::mcp_ws::McpClientTransport::Ws) => {
+                Some(McpClientTransportRequest::Ws)
+            }
+            Some(crate::use_cases::mcp_ws::McpClientTransport::Mcp) => {
+                Some(McpClientTransportRequest::Mcp)
+            }
+            Some(crate::use_cases::mcp_ws::McpClientTransport::Auto) => {
+                Some(McpClientTransportRequest::Auto)
+            }
+            None => {
+                return Err(UseCaseError::new(
+                    UseCaseErrorKind::Validation,
+                    format!("--mcp-transport must be one of: ws, mcp, auto (got: {value})"),
+                ));
+            }
+        },
+    };
+    if let Some(level) = args.mcp_log_level.as_deref() {
+        if !crate::use_cases::mcp_ws::is_supported_log_level(level) {
+            return Err(UseCaseError::new(
+                UseCaseErrorKind::Validation,
+                format!(
+                    "--mcp-log-level must be one of: off, error, warn, info, debug, trace (got: {level})"
+                ),
+            ));
+        }
+    }
+    if args.mcp_ws_timeout_ms == Some(0) {
+        return Err(UseCaseError::new(
+            UseCaseErrorKind::Validation,
+            "--mcp-ws-timeout-ms must be greater than or equal to 1",
+        ));
+    }
+    if let Some(url) = args.manager_url.as_deref() {
+        if !crate::use_cases::mcp_ws::is_payload_token_safe(url) {
+            return Err(UseCaseError::new(
+                UseCaseErrorKind::Validation,
+                "--manager-url must not contain ';' or '=' because the /C payload is semicolon-delimited",
+            ));
+        }
+        if let Err(error) = crate::use_cases::mcp_ws::parse_manager_addr(url) {
+            return Err(UseCaseError::new(
+                UseCaseErrorKind::Validation,
+                format!("--manager-url parse error: {error}"),
+            ));
+        }
+    }
+    if let Some(uid) = args.client_uid.as_deref() {
+        if !crate::use_cases::mcp_ws::is_payload_token_safe(uid) {
+            return Err(UseCaseError::new(
+                UseCaseErrorKind::Validation,
+                "--client-uid must not contain ';' or '=' because the /C payload is semicolon-delimited",
+            ));
+        }
+    }
+    if let Some(corr) = args.corr_id.as_deref() {
+        if !crate::use_cases::mcp_ws::is_payload_token_safe(corr) {
+            return Err(UseCaseError::new(
+                UseCaseErrorKind::Validation,
+                "--corr-id must not contain ';' or '=' because the /C payload is semicolon-delimited",
+            ));
+        }
+    }
+    Ok(McpClientWsRequest {
+        transport,
+        manager_url: args.manager_url.clone(),
+        client_uid: args.client_uid.clone(),
+        corr_id: args.corr_id.clone(),
+        log_level: args.mcp_log_level.clone(),
+        ws_timeout_ms: args.mcp_ws_timeout_ms,
     })
 }
 
@@ -2433,6 +2517,7 @@ mod tests {
                         name: "ModuleA".to_owned(),
                     },
                 }),
+                mcp_ws: crate::cli::args::McpClientWsArgs::default(),
             },
         )
         .expect("request");
@@ -2461,6 +2546,7 @@ mod tests {
                         name: "   ".to_owned(),
                     },
                 }),
+                mcp_ws: crate::cli::args::McpClientWsArgs::default(),
             },
         )
         .expect_err("blank module should be rejected");
@@ -2504,6 +2590,7 @@ mod tests {
                 client_mode: None,
                 launch: LaunchOptionsArgs::default(),
                 runner: TestRunner::Va(TestVaArgs::default()),
+                mcp_ws: crate::cli::args::McpClientWsArgs::default(),
             },
         )
         .expect("request");
@@ -2595,6 +2682,7 @@ mod tests {
                 },
                 mcp_config: None,
                 mcp_port: None,
+                mcp_ws: crate::cli::args::McpClientWsArgs::default(),
             })
             .expect("request"),
             LaunchRequest {
@@ -2608,6 +2696,7 @@ mod tests {
                     raw_args: vec!["/WA-".to_owned(), "/DisplayAllFunctions".to_owned()],
                 },
                 client_mcp: None,
+                mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
             }
         );
         assert_eq!(
@@ -2618,6 +2707,7 @@ mod tests {
                 launch: LaunchOptionsArgs::default(),
                 mcp_config: None,
                 mcp_port: None,
+                mcp_ws: crate::cli::args::McpClientWsArgs::default(),
             })
             .expect("request")
             .target,
@@ -2631,6 +2721,7 @@ mod tests {
                 launch: LaunchOptionsArgs::default(),
                 mcp_config: None,
                 mcp_port: None,
+                mcp_ws: crate::cli::args::McpClientWsArgs::default(),
             })
             .expect("request")
             .target,
@@ -2644,6 +2735,7 @@ mod tests {
                 launch: LaunchOptionsArgs::default(),
                 mcp_config: Some("C:\\tmp\\mcp-conf.json".to_owned()),
                 mcp_port: Some(123),
+                mcp_ws: crate::cli::args::McpClientWsArgs::default(),
             })
             .expect("request"),
             LaunchRequest {
@@ -2661,6 +2753,7 @@ mod tests {
                     port: Some(123),
                     addon: Some(ClientMcpAddonRequest::VanessaAutomation),
                 }),
+                mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
             }
         );
         let load = map_load_request(&LoadArgs {
@@ -2721,6 +2814,7 @@ mod tests {
             launch: LaunchOptionsArgs::default(),
             mcp_config: None,
             mcp_port: None,
+            mcp_ws: crate::cli::args::McpClientWsArgs::default(),
         })
         .expect_err("launch mode should be rejected");
 
@@ -2931,6 +3025,7 @@ mod tests {
                 runner: TestRunner::Yaxunit(TestYaxunitArgs {
                     scope: TestScope::All,
                 }),
+                mcp_ws: crate::cli::args::McpClientWsArgs::default(),
             }),
             None,
             &presenter,
@@ -2963,6 +3058,7 @@ mod tests {
                 launch: LaunchOptionsArgs::default(),
                 mcp_config: None,
                 mcp_port: None,
+                mcp_ws: crate::cli::args::McpClientWsArgs::default(),
             }),
             None,
             &presenter,
@@ -2996,6 +3092,7 @@ mod tests {
                         name: "   ".to_owned(),
                     },
                 }),
+                mcp_ws: crate::cli::args::McpClientWsArgs::default(),
             }),
             None,
             &presenter,
