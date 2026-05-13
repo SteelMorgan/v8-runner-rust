@@ -203,7 +203,7 @@
           ]
         },
         "unlock_code": {
-          "description": "Optional unlock code propagated as `/UC <value>` to DESIGNER. Masked in command logs.",
+          "description": "Optional unlock code. Non-empty value is propagated as `/UC <value>` to DESIGNER;\nempty string means no unlock code and `/UC` is not passed. Masked in command logs.",
           "type": [
             "string",
             "null"

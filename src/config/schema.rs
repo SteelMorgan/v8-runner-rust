@@ -441,7 +441,8 @@ struct InfobaseSchema {
     /// Optional infobase password passed to platform utilities.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     password: Option<String>,
-    /// Optional unlock code propagated as `/UC <value>` to DESIGNER. Masked in command logs.
+    /// Optional unlock code. Non-empty value is propagated as `/UC <value>` to DESIGNER;
+    /// empty string means no unlock code and `/UC` is not passed. Masked in command logs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     unlock_code: Option<String>,
     /// Optional DBMS settings for server-based infobases.
@@ -466,7 +467,8 @@ struct PartialInfobaseSchema {
     /// Optional local infobase password.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     password: Option<String>,
-    /// Optional local infobase unlock code propagated as `/UC <value>`. Masked in command logs.
+    /// Optional local infobase unlock code. Non-empty value is propagated as `/UC <value>`;
+    /// empty string means no unlock code and `/UC` is not passed. Masked in command logs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     unlock_code: Option<String>,
     /// Optional local DBMS settings override.

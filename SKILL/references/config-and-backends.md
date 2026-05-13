@@ -10,7 +10,7 @@ settings before CLI overrides.
 - `format`: `DESIGNER` or `EDT`.
 - `builder`: `DESIGNER` or `IBCMD`.
 - `infobase.connection`: often `File=build/ib` for local automation.
-- `infobase.unlock_code`: optional infobase locking code, propagated to DESIGNER as `/UC <value>`. Required when the configuration was sealed with "Установить пароль"; masked in logs. Place this in `v8project.local.yaml` together with `infobase.password`.
+- `infobase.unlock_code`: optional infobase locking code. Non-empty values are propagated to DESIGNER as `/UC <value>`; an empty string omits `/UC`. Required when the configuration was sealed with "Установить пароль"; masked in logs. Place this in `v8project.local.yaml` together with `infobase.password`.
 - `build.dynamicUpdate`: project-wide default for `/UpdateDBCfg -Dynamic+`. Off by default. CLI `build --dynamic` overrides it for a single invocation.
 - `source-set`: ordered configuration and extension sources.
 - `tools.platform.path` or `tools.platform.version`: 1C platform discovery hints.
