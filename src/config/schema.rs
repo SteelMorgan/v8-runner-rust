@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 pub const MAIN_CONFIG_SCHEMA_PATH: &str = "docs/schemas/v8project.schema.json";
 pub const LOCAL_CONFIG_SCHEMA_PATH: &str = "docs/schemas/v8project.local.schema.json";
 
-const REPOSITORY_RAW_TAG_BASE: &str =
-    "https://raw.githubusercontent.com/alkoleft/v8-runner-rust/refs/tags";
+const REPOSITORY_RAW_SCHEMA_BASE: &str =
+    "https://raw.githubusercontent.com/alkoleft/v8-runner-rust/master/docs/schemas";
 
 pub fn main_config_schema_url() -> String {
     schema_url("v8project.schema.json")
@@ -27,6 +27,7 @@ pub fn main_config_schema_json() -> Value {
     set_schema_id(&mut schema, &main_config_schema_url());
     add_tool_extension_schema_constraints(&mut schema);
     add_numeric_runtime_bounds(&mut schema);
+    add_mcp_transport_schema_constraints(&mut schema);
     schema
 }
 
@@ -36,6 +37,7 @@ pub fn local_config_schema_json() -> Value {
     set_schema_id(&mut schema, &local_config_schema_url());
     add_tool_extension_schema_constraints(&mut schema);
     add_numeric_runtime_bounds(&mut schema);
+    add_mcp_transport_schema_constraints(&mut schema);
     schema
 }
 
@@ -58,10 +60,7 @@ pub fn schema_json_pretty(schema: &Value) -> String {
 }
 
 fn schema_url(file_name: &str) -> String {
-    format!(
-        "{REPOSITORY_RAW_TAG_BASE}/v{}/docs/schemas/{file_name}",
-        env!("CARGO_PKG_VERSION")
-    )
+    format!("{REPOSITORY_RAW_SCHEMA_BASE}/{file_name}")
 }
 
 fn set_schema_id(schema: &mut Value, id: &str) {
@@ -233,6 +232,7 @@ fn add_numeric_runtime_bounds(schema: &mut Value) {
     );
     for def in ["ClientMcpToolSchema", "PartialClientMcpToolSchema"] {
         set_numeric_bounds(schema, &[def], "port", Some(1), None);
+        set_numeric_bounds(schema, &[def], "ws_timeout_ms", Some(1), None);
     }
     for name in ["max_sessions", "idle_ttl_secs"] {
         set_numeric_bounds(schema, &["McpHttpSchema"], name, Some(1), None);
@@ -279,6 +279,35 @@ fn set_numeric_bounds(
     }
 }
 
+fn add_mcp_transport_schema_constraints(schema: &mut Value) {
+    for def in ["ClientMcpToolSchema", "PartialClientMcpToolSchema"] {
+        set_string_enum(schema, &[def], "transport", &["ws", "mcp", "auto"]);
+    }
+}
+
+fn set_string_enum(schema: &mut Value, def_path: &[&str], property: &str, variants: &[&str]) {
+    let Some(object) = schema_object_mut(schema, def_path) else {
+        return;
+    };
+    let Some(property) = object
+        .get_mut("properties")
+        .and_then(Value::as_object_mut)
+        .and_then(|properties| properties.get_mut(property))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+
+    let mut variants = variants
+        .iter()
+        .map(|value| json!(value))
+        .collect::<Vec<_>>();
+    if matches!(property.get("type"), Some(Value::Array(_))) {
+        variants.push(Value::Null);
+    }
+    property.insert("enum".to_owned(), Value::Array(variants));
+}
+
 fn schema_object_mut<'a>(
     schema: &'a mut Value,
     def_path: &[&str],
@@ -307,14 +336,6 @@ where
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MainConfigSchema {
-    /// Root directory for project sources; defaults to the directory containing `v8project.yaml`.
-    #[serde(
-        default,
-        deserialize_with = "deserialize_non_null_optional",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[schemars(with = "PathBuf")]
-    base_path: Option<PathBuf>,
     /// Working directory for generated state, logs, temporary files, and hash storages.
     work_path: PathBuf,
     /// Global execution budget for public CLI and MCP commands in milliseconds.
@@ -452,6 +473,10 @@ struct InfobaseSchema {
     /// Optional infobase password passed to platform utilities.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     password: Option<String>,
+    /// Optional unlock code. Non-empty value is propagated as `/UC <value>` to DESIGNER;
+    /// empty string means no unlock code and `/UC` is not passed. Masked in command logs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unlock_code: Option<String>,
     /// Optional DBMS settings for server-based infobases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     dbms: Option<InfobaseDbmsSchema>,
@@ -474,6 +499,10 @@ struct PartialInfobaseSchema {
     /// Optional local infobase password.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     password: Option<String>,
+    /// Optional local infobase unlock code. Non-empty value is propagated as `/UC <value>`;
+    /// empty string means no unlock code and `/UC` is not passed. Masked in command logs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unlock_code: Option<String>,
     /// Optional local DBMS settings override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     dbms: Option<PartialInfobaseDbmsSchema>,
@@ -509,7 +538,7 @@ struct SourceSetSchema {
     /// Source-set type: configuration, extension, external data processors, or external reports.
     #[serde(rename = "type")]
     purpose: SourceSetPurposeSchema,
-    /// Source path relative to `basePath` or an EDT project path.
+    /// Source path relative to the primary config directory or an EDT project path.
     path: PathBuf,
 }
 
@@ -533,6 +562,14 @@ struct BuildSchema {
     )]
     #[schemars(with = "usize")]
     partial_load_threshold: Option<usize>,
+    /// Default `/UpdateDBCfg -Dynamic+` toggle for `build`. CLI `--dynamic` overrides this.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_non_null_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "bool")]
+    dynamic_update: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -705,10 +742,10 @@ struct ClientMcpToolSchema {
     /// Optional tool extension prepared by `build` for client MCP launches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     extension: Option<ToolExtensionSchema>,
-    /// Default transport for the MCP client side: `ws`, `legacy` or `auto`.
+    /// Default transport for the MCP client side: `ws`, `mcp` or `auto`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     transport: Option<String>,
-    /// Default WS endpoint for the session-manager.
+    /// Default WS endpoint with IP address and port for the session-manager.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     manager_url: Option<String>,
     /// Default `mcp_log_level` value forwarded into the `/C` payload.
@@ -1091,6 +1128,7 @@ mod tests {
     use std::path::Path;
 
     const REMOVED_SCHEMA_ALIAS_PROPERTIES: &[&str] = &[
+        "basePath",
         "executionTimeout",
         "execution_timeout_ms",
         "edt-cli",
@@ -1120,7 +1158,6 @@ mod tests {
     #[test]
     fn generated_schemas_include_user_facing_field_descriptions() {
         let main_schema = main_config_schema_json();
-        assert_property_description_contains(&main_schema, &[], "basePath", "Root directory");
         assert_property_description_contains(&main_schema, &[], "workPath", "Working directory");
         assert_property_description_contains(
             &main_schema,
@@ -1461,6 +1498,20 @@ mod tests {
     }
 
     #[test]
+    fn schemas_and_loader_reject_invalid_client_mcp_transport() {
+        let config = format!(
+            "{}tools:\n  client_mcp:\n    transport: legacy\n",
+            minimal_project_config_without_base_path()
+        );
+        assert_schema_invalid(&main_config_schema_json(), &config);
+        assert_config_loader_error_any(&config);
+
+        let overlay = "tools:\n  client_mcp:\n    transport: legacy\n";
+        assert_schema_invalid(&local_config_schema_json(), overlay);
+        assert_overlay_loader_error(overlay);
+    }
+
+    #[test]
     fn schemas_and_loader_accept_supported_runtime_sections() {
         let config = format!(
             "{}execution_timeout: 300000\nbuild:\n  partialLoadThreshold: 20\ntools:\n  client_mcp:\n    port: 9874\n  edt_cli:\n    startup_timeout_ms: 300000\n    command_timeout_ms: 300000\nmcp:\n  http:\n    bind_address: '127.0.0.1:3000'\n    path: /mcp\n    stateful_sessions: true\n    max_sessions: 64\n    idle_ttl_secs: 900\n  execution:\n    max_concurrent_calls: 1\n    shutdown_grace_period_secs: 30\ntests:\n  execution_timeout_seconds: 300\n  yaxunit:\n    timeouts:\n      startup_ms: 300000\n      run_ms: 300000\n      total_ms: 300000\n  va:\n    fail_fast: false\n    timeouts:\n      startup_ms: 300000\n      run_ms: 300000\n      total_ms: 300000\n",
@@ -1520,6 +1571,10 @@ mod tests {
         for config in [
             format!(
                 "{}toolz: {{}}\n",
+                minimal_project_config_without_base_path()
+            ),
+            format!(
+                "{}basePath: /tmp/project\n",
                 minimal_project_config_without_base_path()
             ),
             format!(

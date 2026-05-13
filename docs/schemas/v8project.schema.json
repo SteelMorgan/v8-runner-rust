@@ -3,6 +3,10 @@
     "BuildSchema": {
       "additionalProperties": false,
       "properties": {
+        "dynamicUpdate": {
+          "description": "Default `/UpdateDBCfg -Dynamic+` toggle for `build`. CLI `--dynamic` overrides this.",
+          "type": "boolean"
+        },
         "partialLoadThreshold": {
           "description": "Maximum changed-file count for partial Designer load before falling back to full load.",
           "format": "uint",
@@ -41,7 +45,7 @@
           ]
         },
         "manager_url": {
-          "description": "Default WS endpoint for the session-manager.",
+          "description": "Default WS endpoint with IP address and port for the session-manager.",
           "type": [
             "string",
             "null"
@@ -58,7 +62,13 @@
           ]
         },
         "transport": {
-          "description": "Default transport for the MCP client side: `ws`, `legacy` or `auto`.",
+          "description": "Default transport for the MCP client side: `ws`, `mcp` or `auto`.",
+          "enum": [
+            "ws",
+            "mcp",
+            "auto",
+            null
+          ],
           "type": [
             "string",
             "null"
@@ -67,7 +77,7 @@
         "ws_timeout_ms": {
           "description": "Default `mcp_ws_timeout_ms` value forwarded into the `/C` payload.",
           "format": "uint64",
-          "minimum": 0,
+          "minimum": 1,
           "type": [
             "integer",
             "null"
@@ -228,6 +238,13 @@
             "null"
           ]
         },
+        "unlock_code": {
+          "description": "Optional unlock code. Non-empty value is propagated as `/UC <value>` to DESIGNER;\nempty string means no unlock code and `/UC` is not passed. Masked in command logs.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "user": {
           "description": "Optional infobase user name passed to platform utilities.",
           "type": [
@@ -347,7 +364,7 @@
           "type": "string"
         },
         "path": {
-          "description": "Source path relative to `basePath` or an EDT project path.",
+          "description": "Source path relative to the primary config directory or an EDT project path.",
           "type": "string"
         },
         "type": {
@@ -623,14 +640,10 @@
       "type": "object"
     }
   },
-  "$id": "https://raw.githubusercontent.com/alkoleft/v8-runner-rust/refs/tags/v0.4.2/docs/schemas/v8project.schema.json",
+  "$id": "https://raw.githubusercontent.com/alkoleft/v8-runner-rust/master/docs/schemas/v8project.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "basePath": {
-      "description": "Root directory for project sources; defaults to the directory containing `v8project.yaml`.",
-      "type": "string"
-    },
     "build": {
       "$ref": "#/$defs/BuildSchema",
       "description": "Build pipeline settings."

@@ -17,7 +17,7 @@ pub enum ConfigValidationError {
     #[error("{0}")]
     InvalidYamlRoot(String),
 
-    #[error("basePath does not exist or is not a directory: {0}")]
+    #[error("project base path does not exist or is not a directory: {0}")]
     BasePathInvalid(String),
 
     #[error("workPath could not be created: {0}")]
@@ -163,7 +163,7 @@ pub enum ConfigValidationError {
     #[error("tools.client_mcp.port must be greater than or equal to 1")]
     InvalidMcpClientPort,
 
-    #[error("tools.client_mcp.transport must be one of: ws, legacy, auto (got: {0})")]
+    #[error("tools.client_mcp.transport must be one of: ws, mcp, auto (got: {0})")]
     InvalidMcpClientTransport(String),
 
     #[error(
@@ -212,6 +212,23 @@ pub fn validate(config: &AppConfig) -> Result<(), ConfigValidationError> {
     validate_test_config(config)?;
     validate_mcp_config(config)?;
     validate_client_mcp_tool_extension(config)?;
+    validate_edt_cli_config(config)?;
+    Ok(())
+}
+
+/// Validate only the configuration parts required to bootstrap downloaded tools.
+///
+/// `tools download` may be invoked specifically to create Vanessa Automation and
+/// client MCP paths, so those tool-dependent checks must not block the command.
+pub fn validate_tools_download_bootstrap(config: &AppConfig) -> Result<(), ConfigValidationError> {
+    validate_base_path(&config.base_path)?;
+    validate_work_path(&config.work_path)?;
+    validate_matrix(config)?;
+    validate_connection(config)?;
+    validate_platform_version(config)?;
+    validate_build_config(config)?;
+    validate_execution_timeout(config)?;
+    validate_mcp_config(config)?;
     validate_edt_cli_config(config)?;
     Ok(())
 }
@@ -850,6 +867,11 @@ fn validate_mcp_config(config: &AppConfig) -> Result<(), ConfigValidationError> 
     }
 
     if let Some(url) = config.tools.client_mcp.manager_url.as_deref() {
+        if !crate::use_cases::mcp_ws::is_payload_token_safe(url) {
+            return Err(ConfigValidationError::InvalidMcpClientManagerUrl(
+                url.to_owned(),
+            ));
+        }
         if crate::use_cases::mcp_ws::parse_manager_addr(url).is_err() {
             return Err(ConfigValidationError::InvalidMcpClientManagerUrl(
                 url.to_owned(),
@@ -1360,6 +1382,7 @@ mod tests {
             }],
             build: BuildConfig {
                 partial_load_threshold: 0,
+                dynamic_update: false,
             },
             tools: ToolsConfig::default(),
             mcp: Default::default(),
@@ -2175,6 +2198,7 @@ mod tests {
                 connection: "Srvr=localhost;Ref=ib".to_owned(),
                 user: None,
                 password: None,
+                unlock_code: None,
                 dbms: None,
             },
             source_sets: vec![SourceSetConfig {

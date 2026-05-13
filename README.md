@@ -38,11 +38,25 @@ cargo build --release
 v8-runner config init
 ```
 
-Команда анализирует структуру проекта, находит поддержанные `source-set` (наборы исходников) и
-создает `v8project.yaml`.
+Команда анализирует структуру проекта, находит поддержанные `source-set` (наборы исходников),
+создает `v8project.yaml`, пустой `v8project.local.yaml` со schema modeline и добавляет local
+overlay в `.gitignore`, если он еще не указан.
 
 Machine-local пути, credentials и настройки инструментов можно вынести в `v8project.local.yaml`
 рядом с основным конфигом. Этот файл применяется автоматически и должен оставаться вне Git.
+
+### Загрузите тестовые и MCP-инструменты:
+
+```bash
+v8-runner tools download yaxunit --sources
+v8-runner tools download vanessa
+v8-runner tools download client-mcp --sources
+```
+
+Команды берут latest releases выбранного инструмента. Для YAxUnit и onec-client-mcp-devkit
+`--sources` выбирает source install; без него скачивается `.cfe` artifact в `build/tools`.
+Vanessa Automation single всегда скачивается как EPF в `build/tools` и прописывается в
+`v8project.local.yaml`.
 
 ### Подготовьте рабочую информационную базу:
 
@@ -93,10 +107,10 @@ v8-runner launch mcp va
 ### Подключение к session-manager (WS-режим)
 
 `launch mcp`, `launch mcp va`, `test yaxunit ...` и `test va ...` поддерживают подключение
-1С-клиента к [`v8-client-session-manager`](../v8-client-session-manager/) вместо запуска
+1С-клиента к [`v8-client-session-manager`](https://github.com/SteelMorgan/v8-client-session-manager) вместо запуска
 локального HTTP MCP. По умолчанию — `auto`: TCP-probe адреса менеджера, при успехе
 собирается `/C"mcpMode=ws;manager_url=...;client_uid=...;kind=...;..."`, иначе используется
-legacy `/C"runMcp;..."`. Полный список ключей `/C` и CLI-флагов см. в
+MCP `/C"runMcp;..."`. Полный список ключей `/C` и CLI-флагов см. в
 [docs/CONFIGURATION.md](docs/CONFIGURATION.md#tools-client_mcp).
 
 ### Поднимите MCP transport (MCP-транспорт) для AI-агентов:
@@ -115,7 +129,7 @@ v8-runner mcp serve stdio
 
 | Зона | Команды | Что делает |
 | --- | --- | --- |
-| Project setup (настройка проекта) | `config init`, `init`, `extensions`, `build` | Создает config, готовит ИБ, обновляет расширения и загружает исходники |
+| Project setup (настройка проекта) | `config init`, `tools download`, `init`, `extensions`, `build` | Создает config, скачивает инструменты, готовит ИБ, обновляет расширения и загружает исходники |
 | Verification (проверка) | `syntax`, `test` | Запускает syntax checks, YAxUnit и Vanessa Automation |
 | File materialization (материализация файлов) | `dump`, `convert`, `load`, `make`, `artifacts` | Выгружает, конвертирует, загружает и публикует `.cf`, `.cfe`, `.epf`, `.erf` |
 | Direct launch (прямой запуск) | `launch <designer|thin|thick|ordinary>`, `launch mcp [va]` | Запускает 1C clients (клиенты 1С), Designer и MCP/Vanessa сценарии |

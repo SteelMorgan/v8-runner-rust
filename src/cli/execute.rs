@@ -9,6 +9,7 @@ use crate::cli::args::{
     ArtifactsArgs, BuildArgs, Command, ConvertArgs, DesignerConfigSyntaxArgs,
     DesignerModulesSyntaxArgs, DumpArgs, ExtensionsArgs, LaunchArgs, LaunchOptionsArgs, LoadArgs,
     SyntaxArgs, SyntaxTarget, TestArgs, TestRunner, TestScope, TestVaArgs, TestYaxunitArgs,
+    ToolsArgs, ToolsCommand, ToolsDownloadArgs, ToolsDownloadCommand,
 };
 use crate::cli::output::{
     failure_envelope, pre_dispatch_error_envelope, print_command_use_case_error, with_cli_error,
@@ -39,6 +40,9 @@ use crate::domain::runner::{
 };
 use crate::domain::syntax::{SyntaxCheckResult, SyntaxCheckStatus};
 use crate::domain::test::{RetainedPaths, TestReport, TestRunResult, TestStatus, TestTarget};
+use crate::domain::tools_download::{
+    ToolDownloadTarget, ToolExtensionInstallMode, ToolsDownloadResult,
+};
 use crate::output::presenter::Presenter;
 use crate::output::text::{TimelineItem, TimelineStatus};
 use crate::support::adapter_input::{
@@ -64,10 +68,11 @@ use crate::use_cases::request::{
     DesignerClientScope, DesignerClientScopes, DesignerConfigCheck, DesignerConfigChecks,
     DesignerConfigSyntaxRequest, DesignerModulesSyntaxRequest, DumpRequest, InitRequest,
     LaunchRequest, LoadRequest, SyntaxExtensionScope, SyntaxRequest, SyntaxTargetRequest,
-    TestRequest, TestScopeRequest,
+    TestRequest, TestScopeRequest, ToolsDownloadRequest,
 };
 use crate::use_cases::result::{UseCaseError, UseCaseErrorKind};
 use crate::use_cases::run_tests;
+use crate::use_cases::tools_download;
 use crate::use_cases::transport::dispatch_with_workspace_lock;
 
 /// Executes a parsed CLI command by mapping it into transport-neutral requests and
@@ -75,6 +80,7 @@ use crate::use_cases::transport::dispatch_with_workspace_lock;
 pub fn execute_command(
     config: &AppConfig,
     command: &Command,
+    primary_config_path: Option<PathBuf>,
     presenter: &Presenter,
     clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
@@ -82,6 +88,14 @@ pub fn execute_command(
     let _signal_guard = CliSignalGuard::install(cancellation.clone());
     match command {
         Command::Config(_) => unreachable!("config commands are handled outside cli::execute"),
+        Command::Tools(args) => execute_tools(
+            config,
+            args,
+            required_primary_config_path(primary_config_path)?,
+            presenter,
+            clean_before_execution,
+            cancellation,
+        ),
         Command::Init => execute_init(config, presenter, clean_before_execution, cancellation),
         Command::Extensions(args) => execute_extensions(
             config,
@@ -154,6 +168,9 @@ pub fn execute_command(
 pub fn command_name(command: &Command) -> CommandName {
     match command {
         Command::Config(_) => unreachable!("config commands do not map to execution use cases"),
+        Command::Tools(ToolsArgs {
+            command: ToolsCommand::Download(_),
+        }) => CommandName::ToolsDownload,
         Command::Init => CommandName::Init,
         Command::Extensions(_) => CommandName::Extensions,
         Command::Build(_) => CommandName::Build,
@@ -166,6 +183,94 @@ pub fn command_name(command: &Command) -> CommandName {
         Command::Launch(_) => CommandName::Launch,
         Command::Mcp(_) => unreachable!("mcp commands do not map to CLI command names"),
     }
+}
+
+fn execute_tools(
+    config: &AppConfig,
+    args: &ToolsArgs,
+    primary_config_path: PathBuf,
+    presenter: &Presenter,
+    clean_before_execution: bool,
+    cancellation: CancellationToken,
+) -> Result<(), UseCaseError> {
+    match &args.command {
+        ToolsCommand::Download(download) => execute_tools_download(
+            config,
+            download,
+            primary_config_path,
+            presenter,
+            clean_before_execution,
+            cancellation,
+        ),
+    }
+}
+
+fn execute_tools_download(
+    config: &AppConfig,
+    args: &ToolsDownloadArgs,
+    primary_config_path: PathBuf,
+    presenter: &Presenter,
+    clean_before_execution: bool,
+    cancellation: CancellationToken,
+) -> Result<(), UseCaseError> {
+    let request = ToolsDownloadRequest {
+        config_path: primary_config_path,
+        target: map_tools_download_target(args),
+        extensions: map_tool_extension_mode(args),
+        force: map_tools_download_force(args),
+    };
+    let context = cli_context(config, CommandName::ToolsDownload, cancellation);
+    with_cli_workspace_lock(
+        config,
+        presenter,
+        CommandName::ToolsDownload,
+        clean_before_execution,
+        || match tools_download::execute(&context, config, &request) {
+            Ok(result) => {
+                if presenter.is_json() {
+                    presenter.print_envelope(&Envelope::ok(
+                        CommandName::ToolsDownload.as_str(),
+                        result.duration_ms,
+                        result,
+                    ));
+                } else {
+                    render_tools_download_text(&result, presenter);
+                }
+                Ok(())
+            }
+            Err(failure) => {
+                let error = failure.error;
+                if presenter.is_json() {
+                    match failure.payload {
+                        Some(result) => presenter.print_envelope(&failure_envelope(
+                            CommandName::ToolsDownload.as_str(),
+                            result.duration_ms,
+                            result,
+                            &error,
+                        )),
+                        None => presenter.print_envelope(&pre_dispatch_error_envelope(
+                            CommandName::ToolsDownload.as_str(),
+                            &error,
+                        )),
+                    }
+                } else {
+                    presenter.print_error(&error.to_string());
+                }
+                Err(error)
+            }
+        },
+    )
+}
+
+fn required_primary_config_path(
+    primary_config_path: Option<PathBuf>,
+) -> Result<PathBuf, UseCaseError> {
+    primary_config_path.ok_or_else(|| {
+        UseCaseError::new(
+            UseCaseErrorKind::Validation,
+            "tools download requires a resolved primary config path",
+        )
+    })
 }
 
 fn execute_extensions(
@@ -702,12 +807,42 @@ fn map_build_request(args: &BuildArgs) -> BuildRequest {
     BuildRequest {
         full_rebuild: args.full_rebuild,
         source_set: args.source_set.clone(),
+        // CLI flag is a one-shot override; absence means "fall back to project config".
+        dynamic_update: if args.dynamic { Some(true) } else { None },
     }
 }
 
 fn map_extensions_request(args: &ExtensionsArgs) -> ConfigureExtensionsRequest {
     ConfigureExtensionsRequest {
         names: args.names.clone(),
+    }
+}
+
+fn map_tools_download_target(args: &ToolsDownloadArgs) -> ToolDownloadTarget {
+    match &args.command {
+        ToolsDownloadCommand::Yaxunit(_) => ToolDownloadTarget::Yaxunit,
+        ToolsDownloadCommand::Vanessa(_) => ToolDownloadTarget::VanessaAutomationSingle,
+        ToolsDownloadCommand::ClientMcp(_) => ToolDownloadTarget::ClientMcp,
+    }
+}
+
+fn map_tool_extension_mode(args: &ToolsDownloadArgs) -> ToolExtensionInstallMode {
+    match &args.command {
+        ToolsDownloadCommand::Yaxunit(args) | ToolsDownloadCommand::ClientMcp(args) => {
+            if args.sources {
+                ToolExtensionInstallMode::Sources
+            } else {
+                ToolExtensionInstallMode::Artifacts
+            }
+        }
+        ToolsDownloadCommand::Vanessa(_) => ToolExtensionInstallMode::Artifacts,
+    }
+}
+
+fn map_tools_download_force(args: &ToolsDownloadArgs) -> bool {
+    match &args.command {
+        ToolsDownloadCommand::Yaxunit(args) | ToolsDownloadCommand::ClientMcp(args) => args.force,
+        ToolsDownloadCommand::Vanessa(args) => args.force,
     }
 }
 
@@ -1194,8 +1329,8 @@ fn map_mcp_ws_args(
             Some(crate::use_cases::mcp_ws::McpClientTransport::Ws) => {
                 Some(McpClientTransportRequest::Ws)
             }
-            Some(crate::use_cases::mcp_ws::McpClientTransport::Legacy) => {
-                Some(McpClientTransportRequest::Legacy)
+            Some(crate::use_cases::mcp_ws::McpClientTransport::Mcp) => {
+                Some(McpClientTransportRequest::Mcp)
             }
             Some(crate::use_cases::mcp_ws::McpClientTransport::Auto) => {
                 Some(McpClientTransportRequest::Auto)
@@ -1203,7 +1338,7 @@ fn map_mcp_ws_args(
             None => {
                 return Err(UseCaseError::new(
                     UseCaseErrorKind::Validation,
-                    format!("--mcp-transport must be one of: ws, legacy, auto (got: {value})"),
+                    format!("--mcp-transport must be one of: ws, mcp, auto (got: {value})"),
                 ));
             }
         },
@@ -1225,26 +1360,32 @@ fn map_mcp_ws_args(
         ));
     }
     if let Some(url) = args.manager_url.as_deref() {
-        if crate::use_cases::mcp_ws::parse_manager_addr(url).is_err() {
+        if !crate::use_cases::mcp_ws::is_payload_token_safe(url) {
             return Err(UseCaseError::new(
                 UseCaseErrorKind::Validation,
-                format!("--manager-url must include host:port (got: {url})"),
+                "--manager-url must not contain ';' or '=' because the /C payload is semicolon-delimited",
+            ));
+        }
+        if let Err(error) = crate::use_cases::mcp_ws::parse_manager_addr(url) {
+            return Err(UseCaseError::new(
+                UseCaseErrorKind::Validation,
+                format!("--manager-url parse error: {error}"),
             ));
         }
     }
     if let Some(uid) = args.client_uid.as_deref() {
-        if uid.contains(';') {
+        if !crate::use_cases::mcp_ws::is_payload_token_safe(uid) {
             return Err(UseCaseError::new(
                 UseCaseErrorKind::Validation,
-                "--client-uid must not contain ';' because the /C payload is semicolon-delimited",
+                "--client-uid must not contain ';' or '=' because the /C payload is semicolon-delimited",
             ));
         }
     }
     if let Some(corr) = args.corr_id.as_deref() {
-        if corr.contains(';') {
+        if !crate::use_cases::mcp_ws::is_payload_token_safe(corr) {
             return Err(UseCaseError::new(
                 UseCaseErrorKind::Validation,
-                "--corr-id must not contain ';' because the /C payload is semicolon-delimited",
+                "--corr-id must not contain ';' or '=' because the /C payload is semicolon-delimited",
             ));
         }
     }
@@ -1547,6 +1688,31 @@ fn render_build_text(result: &BuildResult, presenter: &Presenter, succeeded: boo
         TimelineItem::new(TimelineStatus::Succeeded, "Build completed successfully")
     };
     presenter.print_timeline(&[summary]);
+}
+
+fn render_tools_download_text(result: &ToolsDownloadResult, presenter: &Presenter) {
+    let mut details = vec![
+        format!("tool: {}", result.tool),
+        format!("mode: {}", result.mode),
+        format!("config: {}", result.config_path.display()),
+        format!("local config: {}", result.local_config_path.display()),
+    ];
+    for destination in &result.destinations {
+        details.push(format!(
+            "{} {} -> {} ({})",
+            destination.tool,
+            destination.tag,
+            destination.path.display(),
+            destination.config
+        ));
+    }
+
+    single_timeline(
+        presenter,
+        TimelineStatus::Succeeded,
+        "Tools downloaded successfully",
+        details,
+    );
 }
 
 fn timeline_status(ok: bool) -> TimelineStatus {
@@ -2471,6 +2637,7 @@ mod tests {
             map_build_request(&BuildArgs {
                 full_rebuild: true,
                 source_set: None,
+                dynamic: false,
             })
             .full_rebuild
         );
@@ -2759,6 +2926,7 @@ mod tests {
             command_name(&Command::Build(BuildArgs {
                 full_rebuild: false,
                 source_set: None,
+                dynamic: false,
             })),
             CommandName::Build
         );
@@ -2829,7 +2997,9 @@ mod tests {
             &Command::Build(BuildArgs {
                 full_rebuild: true,
                 source_set: None,
+                dynamic: false,
             }),
+            None,
             &presenter,
             false,
         )
@@ -2862,6 +3032,7 @@ mod tests {
                 }),
                 mcp_ws: crate::cli::args::McpClientWsArgs::default(),
             }),
+            None,
             &presenter,
             false,
         )
@@ -2894,6 +3065,7 @@ mod tests {
                 mcp_port: None,
                 mcp_ws: crate::cli::args::McpClientWsArgs::default(),
             }),
+            None,
             &presenter,
             false,
         )
@@ -2927,6 +3099,7 @@ mod tests {
                 }),
                 mcp_ws: crate::cli::args::McpClientWsArgs::default(),
             }),
+            None,
             &presenter,
             false,
         )
@@ -2956,7 +3129,9 @@ mod tests {
             &Command::Build(BuildArgs {
                 full_rebuild: true,
                 source_set: None,
+                dynamic: false,
             }),
+            None,
             &presenter,
             true,
         )

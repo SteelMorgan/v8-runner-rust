@@ -66,7 +66,9 @@ runtime snapshot commit только указанным source-set.
 `test` и `syntax` проектируются как часть того же локального цикла, а не как отдельная
 эксплуатационная подсистема.
 
-- `test` всегда сначала делает `build`, затем запускает YaXUnit или Vanessa Automation.
+- `test` всегда сначала делает `build` со статическим `/UpdateDBCfg`, затем запускает YaXUnit или
+  Vanessa Automation. Динамическая подготовка перед тестами выполняется отдельным
+  `build --dynamic`.
 - `syntax designer-*` работает только для `DESIGNER` source format.
 - `syntax edt` использует EDT `validate` и привязан к `format=EDT`.
 - Таймауты и interruption metadata должны проходить через общий command-level contract, а не
@@ -116,7 +118,7 @@ execution model для CLI и MCP.
 
 `workPath` является корнем runtime state.
 
-- Логи, temp files, generated outputs и persisted snapshots не должны расползаться по `basePath`.
+- Логи, temp files, generated outputs и persisted snapshots не должны расползаться по каталогу primary config.
 - Public CLI/MCP команды, работающие с runtime state под `workPath`, должны брать workspace lock.
 - Workspace lock сериализует доступ к конкретному runtime root, но не заменяет admission limits и
   не делает multi-step orchestration fully atomic.

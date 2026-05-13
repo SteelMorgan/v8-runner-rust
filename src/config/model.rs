@@ -66,6 +66,14 @@ pub struct InfobaseConfig {
     /// Optional infobase password passed to platform utilities.
     pub password: Option<String>,
 
+    /// Optional infobase unlock code propagated to DESIGNER calls as `/UC <value>`.
+    ///
+    /// Required by configurations sealed with `Конфигурация → Установить пароль`; without the
+    /// matching code the platform refuses every administrative operation. The value is treated
+    /// as a secret and masked in command logs.
+    #[serde(default)]
+    pub unlock_code: Option<String>,
+
     /// Optional DBMS contract for server-based infobases.
     #[serde(default)]
     pub dbms: Option<InfobaseDbmsConfig>,
@@ -79,6 +87,7 @@ impl InfobaseConfig {
             connection: connection.into(),
             user: None,
             password: None,
+            unlock_code: None,
             dbms: None,
         }
     }
@@ -98,6 +107,7 @@ impl InfobaseConfig {
             connection: connection.into(),
             user: None,
             password: None,
+            unlock_code: None,
             dbms: Some(dbms),
         }
     }
@@ -159,6 +169,7 @@ impl AppConfig {
         let mut conn = V8Connection::from_connection_string(&self.infobase.connection);
         conn.user = self.infobase.user.clone();
         conn.password = self.infobase.password.clone();
+        conn.unlock_code = self.infobase.unlock_code.clone();
         conn
     }
 
@@ -202,7 +213,7 @@ pub struct SourceSetConfig {
     #[serde(rename = "type")]
     pub purpose: SourceSetPurpose,
 
-    /// Path relative to basePath (for DESIGNER) or EDT project path
+    /// Path relative to the project base path (for DESIGNER) or EDT project path.
     pub path: PathBuf,
 }
 
@@ -226,12 +237,23 @@ impl SourceSetPurpose {
 pub struct BuildConfig {
     #[serde(default = "default_partial_load_threshold")]
     pub partial_load_threshold: usize,
+
+    /// Default mode for `/UpdateDBCfg` during `build`.
+    ///
+    /// When `true`, DESIGNER is invoked with `-Dynamic+`, which lets the platform apply
+    /// metadata changes without taking an exclusive infobase lock (useful when HTTP services
+    /// or background jobs are live). If the change set is incompatible with dynamic update
+    /// (e.g. restructuring), DESIGNER returns an error — the runner does NOT silently fall
+    /// back to a static update. CLI `--dynamic` overrides this field for a single invocation.
+    #[serde(default)]
+    pub dynamic_update: bool,
 }
 
 impl Default for BuildConfig {
     fn default() -> Self {
         Self {
             partial_load_threshold: default_partial_load_threshold(),
+            dynamic_update: false,
         }
     }
 }
@@ -287,12 +309,12 @@ pub struct ClientMcpToolConfig {
     /// Optional tool extension prepared by `build` for client MCP launches.
     pub extension: Option<ToolExtensionConfig>,
 
-    /// Default transport for the MCP client side: `ws`, `legacy` or `auto`.
+    /// Default transport for the MCP client side: `ws`, `mcp` or `auto`.
     /// When omitted, runtime treats it as `auto` (probe manager, fall back
-    /// to legacy local HTTP MCP).
+    /// to local HTTP MCP).
     pub transport: Option<String>,
 
-    /// Default WS endpoint for the session-manager
+    /// Default WS endpoint with IP address and port for the session-manager
     /// (e.g. `ws://127.0.0.1:4000/sessions`).
     pub manager_url: Option<String>,
 

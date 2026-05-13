@@ -45,6 +45,8 @@ pub struct Cli {
 pub enum Command {
     /// Generate project configuration and autodetect source-sets
     Config(ConfigArgs),
+    /// Download YaXUnit, Vanessa Automation, and client MCP tool assets
+    Tools(ToolsArgs),
     /// Initialize the infobase and EDT workspace
     Init,
     /// Update configured extension properties inside the infobase
@@ -68,6 +70,57 @@ pub enum Command {
     Launch(LaunchArgs),
     /// Serve Model Context Protocol transports
     Mcp(McpArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ToolsArgs {
+    #[command(subcommand)]
+    pub command: ToolsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ToolsCommand {
+    /// Download a supported test or MCP helper tool from its latest GitHub release
+    Download(ToolsDownloadArgs),
+}
+
+#[derive(Args, Debug)]
+#[command(next_help_heading = "Command options")]
+pub struct ToolsDownloadArgs {
+    #[command(subcommand)]
+    pub command: ToolsDownloadCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ToolsDownloadCommand {
+    /// Download YAxUnit extension assets or sources
+    Yaxunit(ToolsDownloadExtensionArgs),
+    /// Download Vanessa Automation Single external processor
+    #[command(visible_alias = "vanessa-automation-single")]
+    Vanessa(ToolsDownloadToolArgs),
+    /// Download onec-client-mcp-devkit extension assets or sources
+    #[command(name = "client-mcp", visible_alias = "client_mcp")]
+    ClientMcp(ToolsDownloadExtensionArgs),
+}
+
+#[derive(Args, Debug)]
+#[command(next_help_heading = "Command options")]
+pub struct ToolsDownloadExtensionArgs {
+    /// Download extension sources instead of the release artifact
+    #[arg(long)]
+    pub sources: bool,
+
+    /// Re-download managed targets created by tools download
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Args, Debug)]
+#[command(next_help_heading = "Command options")]
+pub struct ToolsDownloadToolArgs {
+    /// Re-download managed targets created by tools download
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Args, Debug)]
@@ -116,6 +169,14 @@ pub struct BuildArgs {
     /// Limit build to one source-set from v8project.yaml
     #[arg(long)]
     pub source_set: Option<String>,
+
+    /// Apply changes via `/UpdateDBCfg -Dynamic+` (no exclusive lock).
+    ///
+    /// Overrides `build.dynamicUpdate` from v8project.yaml for this run. The platform itself
+    /// refuses dynamic mode when restructuring is required; the runner surfaces that error
+    /// instead of falling back to a static update.
+    #[arg(long)]
+    pub dynamic: bool,
 }
 
 #[derive(Args, Debug)]
@@ -325,9 +386,9 @@ pub struct LaunchArgs {
 #[derive(Args, Debug, Clone, Default, PartialEq, Eq)]
 #[command(next_help_heading = "MCP client WS options")]
 pub struct McpClientWsArgs {
-    /// Override the transport selection: `ws` forces WS, `legacy` forces local
-    /// HTTP MCP, `auto` probes the manager and falls back to legacy.
-    #[arg(long = "mcp-transport", value_parser = ["ws", "legacy", "auto"])]
+    /// Override the transport selection: `ws` forces WS, `mcp` forces local
+    /// HTTP MCP, `auto` probes the manager and falls back to MCP.
+    #[arg(long = "mcp-transport", value_parser = ["ws", "mcp", "auto"])]
     pub mcp_transport: Option<String>,
 
     /// Override the session-manager WS endpoint
@@ -345,7 +406,7 @@ pub struct McpClientWsArgs {
     pub corr_id: Option<String>,
 
     /// Override the `mcp_log_level` value passed to the BSL devkit.
-    #[arg(long = "mcp-log-level", value_parser = ["off", "error", "warn", "info", "debug", "trace"])]
+    #[arg(long = "mcp-log-level")]
     pub mcp_log_level: Option<String>,
 
     /// Override the `mcp_ws_timeout_ms` value passed to the BSL devkit

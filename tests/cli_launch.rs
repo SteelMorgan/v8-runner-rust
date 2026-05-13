@@ -22,14 +22,13 @@ fn write_logging_script(path: &Path, args_log: &Path) {
 
 fn write_config(
     path: &Path,
-    base_path: &Path,
+    _base_path: &Path,
     work_path: &Path,
     platform_path: &Path,
     platform_version: Option<&str>,
 ) {
     let mut config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\ntools:\n  platform:\n    path: '{}'\n",
-        base_path.display(),
+        "workPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: project\ntools:\n  platform:\n    path: '{}'\n",
         work_path.display(),
         platform_path.display(),
     );
@@ -126,8 +125,7 @@ fn setup_mcp_va_project_with_options(
         )
     };
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\ntests:\n  va:\n    params_path: '{}'\n    profile: smoke\n    profiles:\n      smoke:\n        feature_path: '{}'\n        features_to_run:\n          - login\n        filter_tags:\n          - '@smoke'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\ntools:\n  client_mcp:\n    port: 9874\n  va:\n    epf_path: '{}'\n  platform:\n    path: '{}'\n{}",
-        base_path.display(),
+        "workPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\ntests:\n  va:\n    params_path: '{}'\n    profile: smoke\n    profiles:\n      smoke:\n        feature_path: '{}'\n        features_to_run:\n          - login\n        filter_tags:\n          - '@smoke'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: project\ntools:\n  client_mcp:\n    port: 9874\n  va:\n    epf_path: '{}'\n  platform:\n    path: '{}'\n{}",
         work_path.display(),
         va_params.display(),
         features_dir.display(),
@@ -384,7 +382,7 @@ fn launch_mcp_va_builds_payload_from_configured_port_and_ordinary_mode() {
             "--mcp-config",
             "/tmp/mcp conf.json",
             "--mcp-transport",
-            "legacy",
+            "mcp",
             "--raw-key",
             "/WA-",
         ])
@@ -400,7 +398,7 @@ fn launch_mcp_va_builds_payload_from_configured_port_and_ordinary_mode() {
     );
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
     assert_eq!(payload["data"]["mode"], "mcp");
-    assert_eq!(payload["data"]["transport"], "legacy");
+    assert_eq!(payload["data"]["transport"], "mcp");
     assert_eq!(payload["data"]["mcp_port"], 9874);
     assert_eq!(
         payload["data"]["binary"].as_str().expect("binary"),
@@ -432,7 +430,14 @@ fn launch_mcp_va_builds_payload_from_configured_port_and_ordinary_mode() {
     assert!(params_json["WorkspaceRoot"]
         .as_str()
         .expect("WorkspaceRoot")
-        .contains("/project"));
+        .contains(
+            config_path
+                .parent()
+                .expect("config dir")
+                .display()
+                .to_string()
+                .as_str()
+        ));
     assert_eq!(params_json["ОстановкаПриВозникновенииОшибки"], false);
     assert_eq!(params_json["СписокФичДляВыполнения"][0], "login");
     assert_eq!(params_json["СписокТеговОтбор"][0], "smoke");
@@ -709,7 +714,7 @@ fn setup_mcp_project_with_logging_thin() -> (tempfile::TempDir, PathBuf, PathBuf
 }
 
 #[test]
-fn launch_mcp_legacy_transport_emits_runmcp_payload_and_legacy_envelope() {
+fn launch_mcp_transport_emits_runmcp_payload_and_mcp_envelope() {
     let (_dir, config_path, args_log) = setup_mcp_project_with_logging_thin();
     let output = v8_runner_command()
         .args([
@@ -719,7 +724,7 @@ fn launch_mcp_legacy_transport_emits_runmcp_payload_and_legacy_envelope() {
             "launch",
             "mcp",
             "--mcp-transport",
-            "legacy",
+            "mcp",
             "--mcp-port",
             "9999",
         ])
@@ -731,7 +736,7 @@ fn launch_mcp_legacy_transport_emits_runmcp_payload_and_legacy_envelope() {
         String::from_utf8_lossy(&output.stderr)
     );
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
-    assert_eq!(payload["data"]["transport"], "legacy");
+    assert_eq!(payload["data"]["transport"], "mcp");
     assert_eq!(payload["data"]["mcp_port"], 9999);
     assert!(payload["data"]["client_uid"].is_null());
 
@@ -832,7 +837,7 @@ fn launch_mcp_ws_required_fails_when_manager_unreachable() {
 }
 
 #[test]
-fn launch_mcp_auto_falls_back_to_legacy_when_manager_unreachable() {
+fn launch_mcp_auto_falls_back_to_mcp_when_manager_unreachable() {
     let (_dir, config_path, args_log) = setup_mcp_project_with_logging_thin();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
@@ -854,7 +859,7 @@ fn launch_mcp_auto_falls_back_to_legacy_when_manager_unreachable() {
         .expect("run command");
     assert!(output.status.success());
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
-    assert_eq!(payload["data"]["transport"], "legacy");
+    assert_eq!(payload["data"]["transport"], "mcp");
     let args = fs::read_to_string(args_log).expect("args log");
     assert!(args.contains("/C\"runMcp\""));
     assert!(!args.contains("mcpMode=ws"));
