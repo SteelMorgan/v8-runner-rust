@@ -361,7 +361,7 @@ fn launch_ordinary_supports_typed_keys_and_filters_reserved_raw_duplicates() {
     assert!(args.contains("/UsePrivilegedMode"));
     assert!(args.contains("/Execute"));
     assert!(args.contains("/tmp/tool.epf"));
-    assert!(args.contains("/C\"DoWork\""));
+    assert!(args.contains("/C\nDoWork\n"));
     assert!(args.contains("DoWork"));
     assert!(args.contains("/WA-"));
     assert!(args.contains("/tmp/user.out.log"));
@@ -413,7 +413,7 @@ fn launch_mcp_va_builds_payload_from_configured_port_and_ordinary_mode() {
     assert!(args.contains("/RunModeOrdinaryApplication"));
     assert!(args.contains("/Execute"));
     assert!(args.contains("vanessa-automation.epf"));
-    assert!(args.contains("/C\"runMcp=/tmp/mcp conf.json;mcpPort=9874;VAParams="));
+    assert!(args.contains("/C\nrunMcp=/tmp/mcp conf.json;mcpPort=9874;VAParams="));
     assert!(!args.contains("StartFeaturePlayer"));
     assert!(args.contains("/TESTMANAGER"));
     assert!(args.contains("/WA-"));
@@ -736,7 +736,7 @@ fn launch_mcp_transport_emits_runmcp_payload_and_mcp_envelope() {
     assert!(payload["data"]["client_uid"].is_null());
 
     let args = fs::read_to_string(args_log).expect("args log");
-    assert!(args.contains("/C\"runMcp;mcpPort=9999\""));
+    assert!(args.contains("/C\nrunMcp;mcpPort=9999\n"));
     assert!(!args.contains("mcpMode=ws"));
 }
 
@@ -856,7 +856,7 @@ fn launch_mcp_auto_falls_back_to_mcp_when_manager_unreachable() {
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
     assert_eq!(payload["data"]["transport"], "mcp");
     let args = fs::read_to_string(args_log).expect("args log");
-    assert!(args.contains("/C\"runMcp\""));
+    assert!(args.contains("/C\nrunMcp\n"));
     assert!(!args.contains("mcpMode=ws"));
 }
 
