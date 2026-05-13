@@ -1360,6 +1360,7 @@ mod tests {
             }],
             build: BuildConfig {
                 partial_load_threshold: 0,
+                dynamic_update: false,
             },
             tools: ToolsConfig::default(),
             mcp: Default::default(),
@@ -2175,6 +2176,7 @@ mod tests {
                 connection: "Srvr=localhost;Ref=ib".to_owned(),
                 user: None,
                 password: None,
+                unlock_code: None,
                 dbms: None,
             },
             source_sets: vec![SourceSetConfig {

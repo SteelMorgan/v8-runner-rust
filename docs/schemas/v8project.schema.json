@@ -3,6 +3,10 @@
     "BuildSchema": {
       "additionalProperties": false,
       "properties": {
+        "dynamicUpdate": {
+          "description": "Default `/UpdateDBCfg -Dynamic+` toggle for `build`. CLI `--dynamic` overrides this.",
+          "type": "boolean"
+        },
         "partialLoadThreshold": {
           "description": "Maximum changed-file count for partial Designer load before falling back to full load.",
           "format": "uint",
@@ -223,6 +227,13 @@
         },
         "password": {
           "description": "Optional infobase password passed to platform utilities.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unlock_code": {
+          "description": "Optional unlock code propagated as `/UC <value>` to DESIGNER. Masked in command logs.",
           "type": [
             "string",
             "null"
@@ -623,7 +634,7 @@
       "type": "object"
     }
   },
-  "$id": "https://raw.githubusercontent.com/alkoleft/v8-runner-rust/refs/tags/v0.4.2/docs/schemas/v8project.schema.json",
+  "$id": "https://raw.githubusercontent.com/alkoleft/v8-runner-rust/refs/tags/v0.5.0/docs/schemas/v8project.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {

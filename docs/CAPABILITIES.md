@@ -109,10 +109,14 @@ v8-runner extensions [--name <SOURCE_SET>...]
 ### `build`
 
 ```bash
-v8-runner build [--source-set <NAME>] [--full-rebuild]
+v8-runner build [--source-set <NAME>] [--full-rebuild] [--dynamic]
 ```
 
 - Без `--source-set` обрабатывает все configured `source-set` в canonical order.
+- `--dynamic` (или `build.dynamicUpdate: true` в `v8project.yaml`) добавляет к
+  `/UpdateDBCfg` флаг `-Dynamic+`. Платформа применяет изменения без захвата
+  исключительной блокировки; на изменениях, требующих реструктуризации, DESIGNER возвращает
+  ошибку — fallback на статический режим не выполняется.
 - С `--source-set` project stage анализирует и строит только указанный `source-set`; неизвестное
   имя отклоняется как validation error.
 - Для `DESIGNER` выбирает incremental, partial или full path по изменённым файлам выбранного scope.
@@ -278,7 +282,7 @@ v8-runner mcp serve http
 
 | Инструмент | Основные поля запроса | Примечания |
 | --- | --- | --- |
-| `build_project` | `fullRebuild`, `sourceSet` | `fullRebuild=false`; `sourceSet` omitted значит все source-set |
+| `build_project` | `fullRebuild`, `sourceSet`, `dynamicUpdate` | `fullRebuild=false`; `sourceSet` omitted значит все source-set; `dynamicUpdate` (опц.) переопределяет `build.dynamicUpdate` для одного вызова |
 | `run_all_tests` | `full` | Компактный вывод по умолчанию |
 | `run_module_tests` | `moduleName`, `full` | Отклоняет пустой `moduleName` |
 | `dump_config` | `mode`, `extension`, `objects` | Пустой `mode` нормализуется в `INCREMENTAL` |
