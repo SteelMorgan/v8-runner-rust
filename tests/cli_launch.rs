@@ -800,6 +800,102 @@ fn launch_mcp_ws_transport_with_listener_emits_ws_payload_and_ws_envelope() {
 }
 
 #[test]
+fn launch_thin_ws_transport_emits_ws_payload_and_ws_envelope() {
+    let (_dir, config_path, args_log) = setup_mcp_project_with_logging_thin();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let manager_url = format!(
+        "ws://127.0.0.1:{}/sessions",
+        listener.local_addr().expect("addr").port()
+    );
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--json-message",
+            "launch",
+            "thin",
+            "--mcp-transport",
+            "ws",
+            "--manager-url",
+            &manager_url,
+            "--mcp-log-level",
+            "debug",
+            "--mcp-ws-timeout-ms",
+            "2500",
+            "--client-uid",
+            "00000000-0000-0000-0000-000000000def",
+            "--corr-id",
+            "vr-thin",
+        ])
+        .output()
+        .expect("run command");
+    drop(listener);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["data"]["mode"], "thin");
+    assert_eq!(payload["data"]["transport"], "ws");
+    assert_eq!(
+        payload["data"]["client_uid"],
+        "00000000-0000-0000-0000-000000000def"
+    );
+    assert!(payload["data"]["kind"].is_null());
+    assert_eq!(payload["data"]["manager_url"], manager_url);
+    assert_eq!(payload["data"]["corr_id"], "vr-thin");
+
+    let args = fs::read_to_string(args_log).expect("args log");
+    assert!(args.contains("/C\nmcpMode=ws;"));
+    assert!(args.contains("client_uid=00000000-0000-0000-0000-000000000def"));
+    assert!(!args.contains("kind="));
+    assert!(args.contains(&format!("manager_url={manager_url}")));
+    assert!(args.contains("corr_id=vr-thin"));
+    assert!(args.contains("mcp_log_level=debug"));
+    assert!(args.contains("mcp_ws_timeout_ms=2500"));
+    assert!(!args.contains("runMcp"));
+}
+
+#[test]
+fn launch_thin_ws_transport_appends_to_existing_c_payload() {
+    let (_dir, config_path, args_log) = setup_mcp_project_with_logging_thin();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let manager_url = format!(
+        "ws://127.0.0.1:{}/sessions",
+        listener.local_addr().expect("addr").port()
+    );
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "launch",
+            "thin",
+            "--c",
+            "DoWork=1",
+            "--mcp-transport",
+            "ws",
+            "--manager-url",
+            &manager_url,
+            "--client-uid",
+            "00000000-0000-0000-0000-000000000123",
+        ])
+        .output()
+        .expect("run command");
+    drop(listener);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let args = fs::read_to_string(args_log).expect("args log");
+    assert!(args.contains("/C\nDoWork=1;mcpMode=ws;"));
+    assert!(args.contains("client_uid=00000000-0000-0000-0000-000000000123"));
+    assert!(!args.contains("kind="));
+}
+
+#[test]
 fn launch_mcp_ws_required_fails_when_manager_unreachable() {
     let (_dir, config_path, _args_log) = setup_mcp_project_with_logging_thin();
     // Bind & immediately drop to grab a guaranteed-free port.
