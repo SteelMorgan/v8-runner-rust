@@ -129,12 +129,19 @@ fn apply_mcp_resolution_to_result(result: &mut LaunchResult, meta: McpResolution
             result.transport = Some(LaunchMcpTransport::Mcp);
             result.mcp_port = port;
         }
+        McpResolutionMeta::DirectWs(params) => {
+            result.transport = Some(LaunchMcpTransport::Ws);
+            result.client_uid = Some(params.client_uid);
+            result.manager_url = Some(params.manager_url);
+            result.corr_id = Some(params.corr_id);
+        }
     }
 }
 
 #[derive(Debug, Clone)]
 enum McpResolutionMeta {
     Ws(WsLaunchParams),
+    DirectWs(WsLaunchParams),
     Mcp { port: Option<u16> },
 }
 
@@ -230,6 +237,8 @@ fn effective_launch_options(
             Err(AppError::Validation(
                 "launch mcp requires client_mcp options".to_owned(),
             ))
+        } else if direct_mcp_ws_requested(&args.mcp_ws) {
+            apply_direct_mcp_ws_launch(config, args)
         } else {
             Ok((args.launch.clone(), None))
         };
@@ -272,6 +281,58 @@ fn effective_launch_options(
     }
     launch.c = Some(payload);
     Ok((launch, Some(meta)))
+}
+
+fn direct_mcp_ws_requested(cli: &McpClientWsRequest) -> bool {
+    cli.transport.is_some()
+        || cli.manager_url.is_some()
+        || cli.client_uid.is_some()
+        || cli.corr_id.is_some()
+        || cli.log_level.is_some()
+        || cli.ws_timeout_ms.is_some()
+}
+
+fn apply_direct_mcp_ws_launch(
+    config: &AppConfig,
+    args: &LaunchArgs,
+) -> Result<(LaunchOptions, Option<McpResolutionMeta>), AppError> {
+    match args.target {
+        LaunchTargetRequest::Enterprise(EnterpriseLaunchTarget::ThinClient)
+        | LaunchTargetRequest::Enterprise(EnterpriseLaunchTarget::ThickClient)
+        | LaunchTargetRequest::Enterprise(EnterpriseLaunchTarget::OrdinaryApplication) => {}
+        LaunchTargetRequest::Designer
+        | LaunchTargetRequest::Enterprise(EnterpriseLaunchTarget::ClientMcp { .. }) => {
+            return Err(AppError::Validation(
+                "MCP WS launch options are supported only for enterprise client launches or launch mcp"
+                    .to_owned(),
+            ));
+        }
+    }
+
+    let decision = decide_mcp_transport(config, &args.mcp_ws)?;
+    match decision {
+        TransportDecision::Ws => {
+            let params = resolve_ws_launch_params(config, &args.mcp_ws, ClientKind::V8RunnerClient);
+            let mut launch = args.launch.clone();
+            append_launch_payload(&mut launch, &params.payload_snippet_without_kind());
+            Ok((launch, Some(McpResolutionMeta::DirectWs(params))))
+        }
+        TransportDecision::Mcp => Err(AppError::Validation(
+            "--mcp-transport=mcp is supported only for launch mcp".to_owned(),
+        )),
+    }
+}
+
+fn append_launch_payload(launch: &mut LaunchOptions, snippet: &str) {
+    match &mut launch.c {
+        Some(payload) if !payload.is_empty() => {
+            payload.push(';');
+            payload.push_str(snippet);
+        }
+        _ => {
+            launch.c = Some(snippet.to_owned());
+        }
+    }
 }
 
 fn launch_mcp_client_kind(client_mcp: &ClientMcpOptionsRequest) -> ClientKind {

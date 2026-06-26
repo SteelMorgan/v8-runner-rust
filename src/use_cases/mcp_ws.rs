@@ -111,6 +111,19 @@ impl WsLaunchParams {
             self.ws_timeout_ms
         )
     }
+
+    /// Builds a WS snippet for a plain 1C client launch. In this mode the
+    /// client-side extension announces its own kind during `session.register`.
+    pub fn payload_snippet_without_kind(&self) -> String {
+        format!(
+            "mcpMode=ws;manager_url={};client_uid={};corr_id={};mcp_log_level={};mcp_ws_timeout_ms={}",
+            encode_payload_token(&self.manager_url),
+            encode_payload_token(&self.client_uid),
+            encode_payload_token(&self.corr_id),
+            encode_payload_token(&self.log_level),
+            self.ws_timeout_ms
+        )
+    }
 }
 
 fn encode_payload_token(value: &str) -> String {
