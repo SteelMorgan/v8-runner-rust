@@ -91,6 +91,7 @@ pub(crate) fn prepare_client_mcp_launch(config: &AppConfig) -> Result<VanessaLau
         .ok_or_else(|| AppError::Runtime("Vanessa params JSON must be an object".to_owned()))?;
     apply_workspace_root_overlay(object, &config.base_path);
     apply_profile_overlay(object, profile, va.fail_fast);
+    apply_manager_overlay(object);
     apply_logging_overlay(
         object,
         &run_dir.join("va-text.log"),
@@ -227,15 +228,25 @@ fn apply_test_overlay(object: &mut Map<String, Value>, artifacts: VanessaTestArt
     );
     object.insert("ДелатьОтчетВФорматеjUnit".to_owned(), Value::Bool(true));
     let junit_dir = Value::String(artifacts.junit_dir.display().to_string());
-    object.insert(
-        "КаталогВыгрузкиJUnit".to_owned(),
-        junit_dir.clone(),
-    );
+    object.insert("КаталогВыгрузкиJUnit".to_owned(), junit_dir.clone());
     ensure_object(object, "ОтчетJUnit").insert("КаталогВыгрузкиJUnit".to_owned(), junit_dir);
     apply_logging_overlay(
         object,
         artifacts.runner_log,
         &artifacts.run_dir.join("va-status.log"),
+    );
+}
+
+fn apply_manager_overlay(object: &mut Map<String, Value>) {
+    object.insert("ВыполнитьСценарии".to_owned(), Value::Bool(false));
+    object.insert("ЗавершитьРаботуСистемы".to_owned(), Value::Bool(false));
+    object.insert(
+        "ЗакрытьTestClientПослеЗапускаСценариев".to_owned(),
+        Value::Bool(false),
+    );
+    object.insert(
+        "ЗакрыватьКлиентТестированияПринудительно".to_owned(),
+        Value::Bool(false),
     );
 }
 

@@ -506,6 +506,17 @@ v8-runner собирает `/C` так:
 | `test yaxunit ...`      | `yaxunit_runner`      |
 | `test va ...`           | `vanessa_test_client` |
 
+`launch mcp va` использует `kind=vanessa_test_client`: это режим менеджера Vanessa
+для обследования/authoring. Runner добавляет `/TESTMANAGER`,
+`/DisableUnsafeActionProtection` и `/Execute <vanessa-automation.epf>`.
+В WS-режиме `/C` должен повторять проверенную строку
+`mcpMode=ws;...;VAParams=<runtime params>`.
+При `mcp`/fallback используется локальный HTTP MCP payload `runMcp...;VAParams=...`;
+для него runner генерирует runtime `VAParams` и принудительно выставляет
+`ВыполнитьСценарии=false`, `ЗавершитьРаботуСистемы=false`,
+`ЗакрытьTestClientПослеЗапускаСценариев=false`,
+`ЗакрыватьКлиентТестированияПринудительно=false`.
+
 Для тестовых запусков (`test yaxunit`, `test va`) WS-фрагмент **дописывается** к существующему
 `/C` (`RunUnitTests=...` или Vanessa-плеер) через `;`. На стороне платформы все ключи
 парсятся как `key=value` пары.
