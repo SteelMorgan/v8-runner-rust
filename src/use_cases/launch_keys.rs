@@ -1,18 +1,28 @@
 use crate::domain::runner::LaunchOptions;
 
 pub(crate) const VANESSA_TEST_MANAGER_ARG: &str = "/TESTMANAGER";
+pub(crate) const DISABLE_UNSAFE_ACTION_PROTECTION_ARG: &str = "/DisableUnsafeActionProtection";
 
 pub(crate) fn vanessa_enterprise_launch_keys(
     config_keys: &[String],
     launch: &LaunchOptions,
 ) -> Vec<String> {
     let mut keys = config_keys.to_vec();
-    if has_launch_key(&launch.raw_args, VANESSA_TEST_MANAGER_ARG) {
-        remove_launch_key(&mut keys, VANESSA_TEST_MANAGER_ARG);
-    } else {
-        ensure_launch_key(&mut keys, VANESSA_TEST_MANAGER_ARG);
-    }
+    ensure_vanessa_launch_key(&mut keys, &launch.raw_args, VANESSA_TEST_MANAGER_ARG);
+    ensure_vanessa_launch_key(
+        &mut keys,
+        &launch.raw_args,
+        DISABLE_UNSAFE_ACTION_PROTECTION_ARG,
+    );
     keys
+}
+
+fn ensure_vanessa_launch_key(keys: &mut Vec<String>, raw_args: &[String], key: &str) {
+    if has_launch_key(raw_args, key) {
+        remove_launch_key(keys, key);
+    } else {
+        ensure_launch_key(keys, key);
+    }
 }
 
 fn ensure_launch_key(keys: &mut Vec<String>, key: &str) {

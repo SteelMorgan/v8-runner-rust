@@ -144,6 +144,9 @@ pub fn build_launch_args(
         }
     }
     .to_owned()];
+    if !matches!(mode, LaunchClientMode::Designer) {
+        args.extend(filtered_raw_launch_args(additional_launch_keys));
+    }
     args.push("/DisableStartupDialogs".to_owned());
     args.extend(connection.args());
     if matches!(mode, LaunchClientMode::Ordinary) {
@@ -168,9 +171,6 @@ pub fn build_launch_args(
     }
 
     let mut extra_args = Vec::new();
-    if !matches!(mode, LaunchClientMode::Designer) {
-        extra_args.extend(filtered_raw_launch_args(additional_launch_keys));
-    }
     extra_args.extend(filtered_raw_launch_args(&launch.raw_args));
     args.extend(extra_args);
 
@@ -262,8 +262,13 @@ mod tests {
         );
 
         assert_eq!(args[0], "ENTERPRISE");
-        assert_eq!(args[1], "/DisableStartupDialogs");
         assert!(args.iter().any(|arg| arg == "/TESTMANAGER"));
+        let position = |needle: &str| {
+            args.iter()
+                .position(|arg| arg == needle)
+                .unwrap_or_else(|| panic!("{needle} argument"))
+        };
+        assert!(position("/TESTMANAGER") < position("/DisableStartupDialogs"));
         assert!(args
             .windows(2)
             .any(|pair| pair == ["/C", "RunUnitTests=/tmp/path with space/тест config.json"]));
@@ -290,11 +295,9 @@ mod tests {
             .iter()
             .any(|arg| arg == "/tmp/va/vanessa automation.epf"));
         assert!(args.iter().any(|arg| arg == "/TESTMANAGER"));
-        assert!(args.windows(2).any(|pair| pair
-            == [
-                "/C",
-                "StartFeaturePlayer;VAParams=/tmp/va/va-params.json",
-            ]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["/C", "StartFeaturePlayer;VAParams=/tmp/va/va-params.json",]));
     }
 
     #[test]

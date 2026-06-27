@@ -108,7 +108,11 @@ fn setup_mcp_va_project_with_options(
     fs::create_dir_all(va_params.parent().expect("cfg dir")).expect("cfg dir");
     fs::create_dir_all(&features_dir).expect("features");
     fs::write(&va_epf, "epf").expect("epf");
-    fs::write(&va_params, "{\n  \"existing\": true\n}\n").expect("params");
+    fs::write(
+        &va_params,
+        "{\n  \"existing\": true,\n  \"ВыполнитьСценарии\": true,\n  \"ЗавершитьРаботуСистемы\": true,\n  \"ЗакрытьTestClientПослеЗапускаСценариев\": true,\n  \"ЗакрыватьКлиентТестированияПринудительно\": true\n}\n",
+    )
+    .expect("params");
     fs::write(features_dir.join("login.feature"), "Feature: Login\n").expect("feature");
     write_script(&install_dir.join("bin").join("1cv8c"));
     write_logging_script(&install_dir.join("bin").join("1cv8"), &args_log);
@@ -414,6 +418,7 @@ fn launch_mcp_va_builds_payload_from_configured_port_and_ordinary_mode() {
     assert!(args.contains("/C\nrunMcp=/tmp/mcp conf.json;mcpPort=9874;VAParams="));
     assert!(!args.contains("StartFeaturePlayer"));
     assert!(args.contains("/TESTMANAGER"));
+    assert!(args.contains("/DisableUnsafeActionProtection"));
     assert!(args.contains("/WA-"));
     let params_arg = args
         .lines()
@@ -441,6 +446,13 @@ fn launch_mcp_va_builds_payload_from_configured_port_and_ordinary_mode() {
     assert_eq!(params_json["ОстановкаПриВозникновенииОшибки"], false);
     assert_eq!(params_json["СписокФичДляВыполнения"][0], "login");
     assert_eq!(params_json["СписокТеговОтбор"][0], "smoke");
+    assert_eq!(params_json["ВыполнитьСценарии"], false);
+    assert_eq!(params_json["ЗавершитьРаботуСистемы"], false);
+    assert_eq!(params_json["ЗакрытьTestClientПослеЗапускаСценариев"], false);
+    assert_eq!(
+        params_json["ЗакрыватьКлиентТестированияПринудительно"],
+        false
+    );
     assert_eq!(
         params_json["ДелатьЛогВыполненияСценариевВТекстовыйФайл"],
         true
@@ -478,9 +490,175 @@ fn launch_mcp_va_builds_payload_from_configured_port_and_ordinary_mode() {
 }
 
 #[test]
-fn launch_mcp_va_does_not_duplicate_explicit_testmanager_raw_key() {
-    let (_dir, config_path, _install_dir, args_log) =
-        setup_mcp_va_project_with_options("work", &["/TESTMANAGER"]);
+fn launch_mcp_va_ws_transport_emits_vanessa_test_client_payload() {
+    let (_dir, config_path, _install_dir, args_log) = setup_mcp_va_project();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let manager_url = format!(
+        "ws://127.0.0.1:{}/sessions",
+        listener.local_addr().expect("addr").port()
+    );
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--json-message",
+            "launch",
+            "mcp",
+            "va",
+            "--mode",
+            "ordinary",
+            "--mcp-transport",
+            "ws",
+            "--manager-url",
+            &manager_url,
+            "--mcp-log-level",
+            "debug",
+            "--mcp-ws-timeout-ms",
+            "2500",
+            "--client-uid",
+            "00000000-0000-0000-0000-000000000c0d",
+            "--corr-id",
+            "va-manager",
+        ])
+        .output()
+        .expect("run command");
+    drop(listener);
+
+    assert!(
+        output.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["data"]["mode"], "mcp");
+    assert_eq!(payload["data"]["transport"], "ws");
+    assert_eq!(payload["data"]["kind"], "vanessa_test_client");
+    assert_eq!(payload["data"]["manager_url"], manager_url);
+    assert_eq!(payload["data"]["corr_id"], "va-manager");
+
+    let args = fs::read_to_string(args_log).expect("args log");
+    assert!(args.contains("/Execute"));
+    assert!(args.contains("vanessa-automation.epf"));
+    assert!(args.contains("/TESTMANAGER"));
+    assert!(args.contains("/DisableUnsafeActionProtection"));
+    assert!(args.contains("/C\nmcpMode=ws;"));
+    assert!(args.contains("kind=vanessa_test_client"));
+    assert!(args.contains("client_uid=00000000-0000-0000-0000-000000000c0d"));
+    assert!(args.contains(&format!("manager_url={manager_url}")));
+    assert!(args.contains("corr_id=va-manager"));
+    assert!(args.contains("mcp_log_level=debug"));
+    assert!(args.contains("mcp_ws_timeout_ms=2500"));
+    assert!(args.contains(";VAParams="));
+    assert!(!args.contains("runMcp"));
+    assert!(!args.contains("StartFeaturePlayer"));
+    let lines: Vec<&str> = args.lines().collect();
+    let pos = |needle: &str| {
+        lines
+            .iter()
+            .position(|line| *line == needle)
+            .unwrap_or_else(|| panic!("{needle} argument"))
+    };
+    assert!(pos("/TESTMANAGER") < pos("/DisableStartupDialogs"));
+    assert!(pos("/DisableUnsafeActionProtection") < pos("/IBConnectionString"));
+    assert!(pos("/TESTMANAGER") < pos("/Execute"));
+    assert!(pos("/DisableUnsafeActionProtection") < pos("/C"));
+
+    let params_arg = args
+        .lines()
+        .find(|line| line.contains("VAParams="))
+        .expect("VAParams argument");
+    let params_path = params_arg
+        .split("VAParams=")
+        .nth(1)
+        .expect("VAParams path")
+        .trim_end_matches('"');
+    let params_json: Value =
+        serde_json::from_str(&fs::read_to_string(params_path).expect("runtime params"))
+            .expect("runtime params JSON");
+    assert_eq!(params_json["ВыполнитьСценарии"], false);
+    assert_eq!(params_json["ЗавершитьРаботуСистемы"], false);
+    assert_eq!(params_json["ЗакрытьTestClientПослеЗапускаСценариев"], false);
+    assert_eq!(
+        params_json["ЗакрыватьКлиентТестированияПринудительно"],
+        false
+    );
+}
+
+#[test]
+fn launch_mcp_va_auto_transport_falls_back_to_manager_mcp_payload() {
+    let (_dir, config_path, _install_dir, args_log) = setup_mcp_va_project();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    drop(listener);
+    let manager_url = format!("ws://127.0.0.1:{port}/sessions");
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--json-message",
+            "launch",
+            "mcp",
+            "va",
+            "--mode",
+            "ordinary",
+            "--mcp-transport",
+            "auto",
+            "--manager-url",
+            &manager_url,
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(
+        output.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["data"]["mode"], "mcp");
+    assert_eq!(payload["data"]["transport"], "mcp");
+
+    let args = fs::read_to_string(args_log).expect("args log");
+    assert!(args.contains("/Execute"));
+    assert!(args.contains("vanessa-automation.epf"));
+    assert!(args.contains("/TESTMANAGER"));
+    assert!(args.contains("/DisableUnsafeActionProtection"));
+    assert!(args.contains("/C\nrunMcp"));
+    assert!(args.contains(";VAParams="));
+    assert!(!args.contains("mcpMode=ws"));
+    assert!(!args.contains("StartFeaturePlayer"));
+
+    let params_arg = args
+        .lines()
+        .find(|line| line.contains("VAParams="))
+        .expect("VAParams argument");
+    let params_path = params_arg
+        .split("VAParams=")
+        .nth(1)
+        .expect("VAParams path")
+        .trim_end_matches('"');
+    let params_json: Value =
+        serde_json::from_str(&fs::read_to_string(params_path).expect("runtime params"))
+            .expect("runtime params JSON");
+    assert_eq!(params_json["ВыполнитьСценарии"], false);
+    assert_eq!(params_json["ЗавершитьРаботуСистемы"], false);
+    assert_eq!(params_json["ЗакрытьTestClientПослеЗапускаСценариев"], false);
+    assert_eq!(
+        params_json["ЗакрыватьКлиентТестированияПринудительно"],
+        false
+    );
+}
+
+#[test]
+fn launch_mcp_va_does_not_duplicate_explicit_vanessa_raw_keys() {
+    let (_dir, config_path, _install_dir, args_log) = setup_mcp_va_project_with_options(
+        "work",
+        &["/TESTMANAGER", "/DisableUnsafeActionProtection"],
+    );
     let output = v8_runner_command()
         .args([
             "--config",
@@ -492,6 +670,8 @@ fn launch_mcp_va_does_not_duplicate_explicit_testmanager_raw_key() {
             "ordinary",
             "--raw-key",
             "/TESTMANAGER",
+            "--raw-key",
+            "/DisableUnsafeActionProtection",
         ])
         .output()
         .expect("run command");
@@ -510,6 +690,11 @@ fn launch_mcp_va_does_not_duplicate_explicit_testmanager_raw_key() {
         .filter(|arg| arg.eq_ignore_ascii_case("/TESTMANAGER"))
         .count();
     assert_eq!(test_manager_count, 1);
+    let unsafe_action_protection_count = args
+        .split_whitespace()
+        .filter(|arg| arg.eq_ignore_ascii_case("/DisableUnsafeActionProtection"))
+        .count();
+    assert_eq!(unsafe_action_protection_count, 1);
 }
 
 #[test]
