@@ -302,7 +302,7 @@ fn setup_va_project_with_work_name(
         )
     };
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\n  password: secret\ntests:\n  execution_timeout_seconds: 5\n  va:\n    params_path: '{}'\n    profile: smoke\n    profiles:\n      smoke:\n        feature_path: '{}'\n        features_to_run:\n          - login\n        filter_tags:\n          - '@smoke'\n        ignore_tags:\n          - '@draft'\n        scenario_filter:\n          - Проверка логина\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  va:\n    epf_path: '{}'\n  platform:\n    path: '{}'\n{}",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\n  password: secret\ntests:\n  execution_timeout_seconds: 5\n  va:\n    params_path: '{}'\n    profile: smoke\n    profiles:\n      smoke:\n        feature_path: '{}'\n        features_to_run:\n          - login\n        filter_tags:\n          - '@smoke'\n        ignore_tags:\n          - '@draft'\n        scenario_filter:\n          - Проверка логина\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  va:\n    epf_path: '{}'\n  client_mcp:\n    transport: mcp\n  platform:\n    path: '{}'\n{}",
         base_path.display(),
         work_path.display(),
         va_params.display(),
@@ -757,6 +757,7 @@ fn test_va_builds_vanessa_command_and_overlay() {
     assert!(calls.contains("vanessa-automation.epf"));
     assert!(calls.contains("StartFeaturePlayer;VAParams="));
     assert!(calls.contains("/TESTMANAGER"));
+    assert!(calls.contains("/DisableUnsafeActionProtection"));
     assert!(calls.contains("/VAUSER"));
     assert!(calls.contains("ci-user"));
 
@@ -899,9 +900,11 @@ fn test_va_rejects_semicolon_in_generated_params_path() {
 }
 
 #[test]
-fn test_va_does_not_duplicate_explicit_testmanager_raw_key() {
-    let (_dir, config_path, _build_calls, test_calls, _captured_params) =
-        setup_va_project(JUNIT_SMOKE_REPORT_FIXTURE, &["/TESTMANAGER"]);
+fn test_va_does_not_duplicate_explicit_vanessa_raw_keys() {
+    let (_dir, config_path, _build_calls, test_calls, _captured_params) = setup_va_project(
+        JUNIT_SMOKE_REPORT_FIXTURE,
+        &["/TESTMANAGER", "/DisableUnsafeActionProtection"],
+    );
 
     let output = v8_runner_command()
         .args([
@@ -910,6 +913,8 @@ fn test_va_does_not_duplicate_explicit_testmanager_raw_key() {
             "test",
             "--raw-key",
             "/TESTMANAGER",
+            "--raw-key",
+            "/DisableUnsafeActionProtection",
             "va",
         ])
         .output()
@@ -929,6 +934,11 @@ fn test_va_does_not_duplicate_explicit_testmanager_raw_key() {
         .filter(|arg| arg.eq_ignore_ascii_case("/TESTMANAGER"))
         .count();
     assert_eq!(test_manager_count, 1);
+    let unsafe_action_protection_count = calls
+        .split_whitespace()
+        .filter(|arg| arg.eq_ignore_ascii_case("/DisableUnsafeActionProtection"))
+        .count();
+    assert_eq!(unsafe_action_protection_count, 1);
 }
 
 #[test]
@@ -961,6 +971,7 @@ fn test_va_adds_testmanager_when_raw_value_matches_name() {
     let calls = fs::read_to_string(test_calls).expect("test calls");
     assert!(calls.contains("/VAUser"));
     assert!(calls.contains("TESTMANAGER"));
+    assert!(calls.contains("/DisableUnsafeActionProtection"));
     assert!(calls
         .split_whitespace()
         .any(|arg| arg.eq_ignore_ascii_case("/TESTMANAGER")));

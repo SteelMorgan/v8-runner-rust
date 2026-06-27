@@ -67,7 +67,13 @@ v8-runner init
 - Branch switch, rebase, large object moves, stale source-backed tool extension state, or suspicious incremental state: run `v8-runner build --full-rebuild`.
 - Syntax check: inspect `format` and `builder`, then choose `syntax designer-modules`, `syntax designer-config`, or `syntax edt`.
 - Behavior validation: run the relevant `v8-runner test ...` command; tests build first.
-- Vanessa Automation debugging or scenario authoring: use `v8-runner launch mcp va ...` to start the client MCP server with VA loaded.
+- Vanessa Automation debugging or scenario authoring: use `v8-runner launch mcp va ...`
+  to start the VA test-manager for MCP tools. The runner adds `/TESTMANAGER` and
+  `/DisableUnsafeActionProtection`; WS mode passes `mcpMode=ws;...;VAParams=<runtime params>`
+  in `/C`, while local HTTP MCP fallback passes `runMcp...;VAParams=<runtime params>`
+  without `StartFeaturePlayer`. Transport defaults to `auto`: WS is selected when the
+  session-manager is reachable, while local HTTP MCP is selected only with
+  `--mcp-transport=mcp` or as the `auto` fallback.
 - Extension properties need synchronization: use `v8-runner extensions` or `extensions --name <SOURCE_SET>`.
 - Infobase changes need to become Git-visible files: check `git status`, then run the relevant `v8-runner dump ...` command.
 - Source files need conversion between Designer and EDT: use `v8-runner convert`; this is CLI-only and does not use the infobase.
@@ -76,6 +82,25 @@ v8-runner init
 - Need a 1C UI session: use `v8-runner launch designer`, `launch thin`, `launch thick`, or `launch ordinary`.
 - Need onec-client-mcp-devkit launched inside 1C without VA authoring: use `v8-runner launch mcp ...`.
 - Pair the launched 1С-client with a running [v8-client-session-manager](https://github.com/SteelMorgan/v8-client-session-manager) over WebSocket: rely on `--mcp-transport=auto` (default — TCP-probes `manager_url` for 200 ms). Force WS with `--mcp-transport=ws` (fails if manager is down) or use local HTTP MCP with `--mcp-transport=mcp`. WS-only flags: `--manager-url`, `--client-uid`, `--corr-id`, `--mcp-log-level`, `--mcp-ws-timeout-ms`. The internal `kind` mapping (`v8_runner_client` / `vanessa_test_client` / `yaxunit_runner` / `vanessa_test_client`) is fixed by entry-point and **not** overridable from CLI. Read `references/project-workflows.md` (section «WS-режим к session-manager») for the full payload, defaults, and `--json-message` shape.
+
+## Launch Modes
+
+| Mode | Purpose | MCP/VA behavior |
+|---|---|---|
+| `launch designer` | Open Designer. | No client MCP tools; enterprise additional keys are not applied. |
+| `launch thin`, `launch thick`, `launch ordinary` | Open a regular 1C UI client. | Optional WS base client tools; no VA tools by itself. |
+| `launch mcp` | Start onec-client-mcp-devkit inside 1C without Vanessa. | `kind=v8_runner_client` in WS, or local HTTP MCP with `--mcp-transport=mcp` / `auto` fallback. |
+| `launch mcp va` | Start the Vanessa test-manager for research, authoring, and VA client MCP tools. | `kind=vanessa_test_client`; runner adds `/TESTMANAGER`, `/DisableUnsafeActionProtection`, `/Execute <vanessa-automation.epf>`; WS mode uses `mcpMode=ws;...;VAParams=<runtime params>` in `/C`, local MCP fallback uses `runMcp...;VAParams=<runtime params>`, and neither mode uses `StartFeaturePlayer`. |
+| `test yaxunit ...` | Run YAxUnit tests. | `kind=yaxunit_runner` in WS; not an interactive UI session. |
+| `test va` | Run Vanessa feature scenarios. | `kind=vanessa_test_client`, but payload is `StartFeaturePlayer;VAParams=...`; this is scenario execution, not the manager research mode. |
+
+For `launch mcp va --mcp-transport=ws`, wait for the `kind=vanessa_test_client`
+session in `v8-client-session-manager`: normal startup/tool registration takes 10-90 seconds.
+Poll `session_list` every 5-10 seconds and use 120 seconds as a diagnostic limit. After the
+VA tools appear, call `connect_test_client` with the required `profileName` argument; then the VA
+client MCP tools become available. After the investigation or on error, call `close_test_client`
+with the same `profileName` (or without it to close the current connected profile) so extra 1C
+test-client sessions are not kept alive.
 
 ## Guardrails
 

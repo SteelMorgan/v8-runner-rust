@@ -344,6 +344,18 @@ fn build_command(request: &ProcessRequest, io_mode: ProcessIoMode) -> Command {
         ProcessIoMode::Detached => {
             cmd.stdout(Stdio::null());
             cmd.stderr(Stdio::null());
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                unsafe {
+                    cmd.pre_exec(|| {
+                        if libc::setsid() == -1 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        Ok(())
+                    });
+                }
+            }
         }
         ProcessIoMode::Captured => {
             cmd.stdout(Stdio::piped());
@@ -758,6 +770,48 @@ mod tests {
 
         assert!(result.pid > 0);
         assert_eq!(result.binary, script);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_detached_starts_new_session_and_process_group() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("identity.sh");
+        let identity_log = dir.path().join("identity.log");
+        write_script(
+            &script,
+            "pid=$$\nsid=$(ps -o sid= -p \"$pid\" | tr -d ' ')\npgid=$(ps -o pgid= -p \"$pid\" | tr -d ' ')\nprintf '%s %s %s\\n' \"$pid\" \"$sid\" \"$pgid\" > \"$1\"\nsleep 0.2",
+        );
+
+        let runner = ProcessExecutor;
+        let result = runner
+            .spawn(&ProcessRequest {
+                program: script,
+                args: vec![identity_log.display().to_string()],
+                workdir: None,
+                stdout_log_path: None,
+                stderr_log_path: None,
+                startup_probe: Some(Duration::from_millis(50)),
+            })
+            .expect("spawn");
+
+        let mut identity = String::new();
+        for _ in 0..40 {
+            match fs::read_to_string(&identity_log) {
+                Ok(value) => {
+                    identity = value;
+                    break;
+                }
+                Err(_) => thread::sleep(Duration::from_millis(25)),
+            }
+        }
+        assert!(!identity.is_empty(), "identity log was not written");
+        let parts: Vec<u32> = identity
+            .split_whitespace()
+            .map(|part| part.parse::<u32>().expect("numeric identity"))
+            .collect();
+
+        assert_eq!(parts, vec![result.pid, result.pid, result.pid]);
     }
 
     #[cfg(unix)]
